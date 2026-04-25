@@ -9,8 +9,20 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('data_sources', function (Blueprint $table) {
-            $table->dropForeign(['organ_id']);
-            $table->dropColumn(['source_type', 'access_type', 'organ_id']);
+            // Drop foreign key only if it exists
+            $foreignKeys = array_column(
+                \Illuminate\Support\Facades\DB::select("SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'data_sources' AND CONSTRAINT_NAME = 'data_sources_organ_id_foreign'"),
+                'CONSTRAINT_NAME'
+            );
+            if (!empty($foreignKeys)) {
+                $table->dropForeign(['organ_id']);
+            }
+
+            foreach (['source_type', 'access_type', 'organ_id'] as $col) {
+                if (Schema::hasColumn('data_sources', $col)) {
+                    $table->dropColumn($col);
+                }
+            }
         });
     }
 
