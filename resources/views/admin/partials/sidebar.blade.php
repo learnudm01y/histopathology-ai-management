@@ -1,6 +1,7 @@
 @php
     $routeName = Route::currentRouteName();
     $inSettings = str_starts_with($routeName ?? '', 'admin.settings');
+    $inStains = str_starts_with($routeName ?? '', 'admin.settings.stains');
 @endphp
 <nav class="sidebar sidebar-offcanvas" id="sidebar">
     <ul class="nav">
@@ -63,6 +64,12 @@
                         <a class="nav-link {{ str_starts_with($routeName ?? '', 'admin.settings.data-sources') ? 'active' : '' }}"
                            href="{{ route('admin.settings.data-sources.index') }}">
                             Data Sources
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {{ $inStains ? 'active' : '' }}"
+                           href="{{ route('admin.settings.stains.index') }}">
+                            Stains
                         </a>
                     </li>
                 </ul>

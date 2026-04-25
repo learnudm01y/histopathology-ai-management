@@ -6,6 +6,7 @@ use App\Http\Controllers\Admin\Settings\CategoriesController;
 use App\Http\Controllers\Admin\Settings\DataSourcesController;
 use App\Http\Controllers\Admin\Settings\DiseaseSubtypesController;
 use App\Http\Controllers\Admin\Settings\OrgansController;
+use App\Http\Controllers\Admin\Settings\StainsController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -42,6 +43,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
                 ->parameters(['subtypes' => 'subtype']);
             Route::resource('organs', OrgansController::class)->except(['show']);
             Route::resource('data-sources', DataSourcesController::class)->except(['show']);
+            Route::resource('stains', StainsController::class)->except(['show']);
         });
     });
 });

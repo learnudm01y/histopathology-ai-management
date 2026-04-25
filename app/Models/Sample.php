@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use App\Models\Stain;
 
 class Sample extends Model
 {
@@ -13,7 +14,7 @@ class Sample extends Model
         'file_size_bytes', 'file_size_gb',
         'data_format', 'data_type', 'access_level', 'gdc_state',
         'entity_submitter_id', 'entity_id', 'entity_type',
-        'category_id', 'disease_subtype', 'tissue_name', 'training_phase',
+        'category_id', 'stain_id', 'stain_marker', 'disease_subtype', 'tissue_name', 'training_phase',
         'storage_link', 'storage_path', 'wsi_remote_path', 'upload_type', 'bulk_folder_original_path',
         'storage_status',
         'download_started_at', 'download_completed_at', 'md5_verified',
@@ -48,6 +49,11 @@ class Sample extends Model
     public function patientCase(): BelongsTo
     {
         return $this->belongsTo(PatientCase::class, 'case_id');
+    }
+
+    public function stain(): BelongsTo
+    {
+        return $this->belongsTo(Stain::class);
     }
 
     // ── Helpers ─────────────────────────────────────────────

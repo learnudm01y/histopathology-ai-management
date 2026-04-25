@@ -48,9 +48,10 @@ var lightColor = getComputedStyle(document.body).getPropertyValue('--light');
       })
     }
 
-    //Close other submenu in sidebar on opening any
+    //Close other submenu in sidebar on opening any (excluding the one being toggled)
     $("#sidebar > .nav > .nav-item > a[data-toggle='collapse']").on("click", function () {
-      $("#sidebar > .nav > .nav-item").find('.collapse.show').collapse('hide');
+      var target = $(this).attr('href');
+      $("#sidebar > .nav > .nav-item").find('.collapse.show').not(target).collapse('hide');
     });
 
 
