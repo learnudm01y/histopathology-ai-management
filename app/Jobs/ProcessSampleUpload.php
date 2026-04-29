@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Sample;
+use App\Services\CaseLinker;
 use App\Services\GoogleDriveService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -157,6 +158,7 @@ class ProcessSampleUpload implements ShouldQueue
 
                 $wsiFileName = $primaryFile['name'] ?? 'Unknown WSI File';
                 $wsiPath     = $bulkRemotePath . '/' . ($primaryFile['path'] ?? '');
+                $driveFileId = $primaryFile['id'] ?? null;
 
                 Log::info("[ProcessSampleUpload] 📄 Primary WSI: {$wsiFileName}");
 
@@ -167,24 +169,42 @@ class ProcessSampleUpload implements ShouldQueue
                     $shareLink = null;
                 }
 
-                $sample->update([
-                    'file_id'       => $primaryFile['id'] ?? null,
-                    'file_name'     => $wsiFileName,
-                    'data_format'   => strtoupper(pathinfo($wsiFileName, PATHINFO_EXTENSION)) ?: 'SVS',
-                    'file_size_bytes' => $primaryFile['size'] ?? null,
-                    'file_size_gb'  => isset($primaryFile['size']) ? round($primaryFile['size'] / 1_073_741_824, 3) : null,
-                    'storage_path'  => $bulkRemotePath,
-                    'wsi_remote_path' => $wsiPath,
-                    'upload_type'   => 'bulk',
+                // Preserve the GDC file UUID in file_id if already set by manifest/bulk-upload init.
+                // Store the actual Google Drive file ID in gdrive_source_id.
+                $uuidPattern = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i';
+                $hasGdcUuid  = $sample->file_id && preg_match($uuidPattern, $sample->file_id);
+
+                $updates = [
+                    'gdrive_source_id'          => $driveFileId,
+                    'file_name'                 => $wsiFileName,
+                    'data_format'               => strtoupper(pathinfo($wsiFileName, PATHINFO_EXTENSION)) ?: 'SVS',
+                    'file_size_bytes'            => $primaryFile['size'] ?? null,
+                    'file_size_gb'              => isset($primaryFile['size']) ? round($primaryFile['size'] / 1_073_741_824, 3) : null,
+                    'storage_path'              => $bulkRemotePath,
+                    'wsi_remote_path'           => $wsiPath,
+                    'upload_type'               => 'bulk',
                     'bulk_folder_original_path' => $this->bulkFolderName,
-                    'storage_link'  => $shareLink,
-                    'storage_status' => 'available',
-                    'download_completed_at' => now(),
-                ]);
+                    'storage_link'              => $shareLink,
+                    'storage_status'            => 'available',
+                    'download_completed_at'     => now(),
+                ];
+
+                // Only write Google Drive ID to file_id if we do not already have a GDC UUID there.
+                // This ensures manifest/metadata-linked samples keep their GDC file_id for querying.
+                if (!$hasGdcUuid) {
+                    $updates['file_id'] = $driveFileId;
+                }
+
+                $sample->update($updates);
 
                 // Do NOT delete the bulk folder — it's the user's original local folder
                 Log::info("[ProcessSampleUpload] ✅ Sample #{$this->sampleId} (bulk) uploaded → {$wsiPath}");
             }
+
+            // ── Force-link slide → clinical case (TCGA submitter matching) ─────────
+            // file_name may have just changed for single/gdrive uploads, so do this
+            // AFTER the metadata writes above. Idempotent — noop if already linked.
+            app(CaseLinker::class)->linkSampleToCase($sample->fresh());
 
         } catch (\Throwable $e) {
             // Clean up only temp files (Method 1 single upload temp)

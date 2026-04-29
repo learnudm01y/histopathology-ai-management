@@ -8,22 +8,14 @@ return new class extends Migration
 {
     public function up(): void
     {
-        // Drop name_ar, tcga_project_id, icd_site_code from organs (if they exist)
+        // Drop name_ar, tcga_project_id, icd_site_code from organs
         Schema::table('organs', function (Blueprint $table) {
-            foreach (['name_ar', 'tcga_project_id', 'icd_site_code'] as $col) {
-                if (Schema::hasColumn('organs', $col)) {
-                    $table->dropColumn($col);
-                }
-            }
+            $table->dropColumn(['name_ar', 'tcga_project_id', 'icd_site_code']);
         });
 
-        // Drop name (slug), label_ar, badge_class from categories (if they exist)
+        // Drop name (slug), label_ar, badge_class from categories
         Schema::table('categories', function (Blueprint $table) {
-            foreach (['name', 'label_ar', 'badge_class'] as $col) {
-                if (Schema::hasColumn('categories', $col)) {
-                    $table->dropColumn($col);
-                }
-            }
+            $table->dropColumn(['name', 'label_ar', 'badge_class']);
         });
     }
 

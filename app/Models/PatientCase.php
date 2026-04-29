@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class PatientCase extends Model
 {
@@ -29,5 +30,10 @@ class PatientCase extends Model
     public function samples(): HasMany
     {
         return $this->hasMany(Sample::class, 'case_id');
+    }
+
+    public function clinicalInfo(): HasOne
+    {
+        return $this->hasOne(ClinicalCaseInformation::class, 'case_id', 'case_id');
     }
 }

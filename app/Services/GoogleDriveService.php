@@ -290,6 +290,68 @@ class GoogleDriveService
         return null;
     }
 
+    // ── Download to Local ────────────────────────────────────────────────────
+
+    /**
+     * Download a single file from Google Drive to a local directory.
+     *
+     * Resolves the remote path using (in order of preference):
+     *   1. $remotePath  — if provided, used directly (e.g. from wsi_remote_path or storage_path + file_name)
+     *   2. $fileId      — uses --drive-root-folder-id to download by Drive file ID
+     *
+     * Returns the absolute path of the downloaded local file.
+     *
+     * @throws \RuntimeException if rclone fails or the file cannot be found after download.
+     */
+    public function downloadToLocal(
+        string $localDir,
+        ?string $remotePath = null,
+        ?string $fileId     = null,
+        ?string $fileName   = null,
+        int     $timeout    = 7200,
+    ): string {
+        if (!is_dir($localDir)) {
+            mkdir($localDir, 0755, true);
+        }
+
+        if ($remotePath !== null) {
+            // Direct path download — rclone copies the file into $localDir
+            $this->rclone([
+                'copy',
+                "{$this->remoteName}:{$remotePath}",
+                $localDir,
+                '--drive-acknowledge-abuse',
+            ], timeout: $timeout);
+
+            // The local filename equals the basename of the remote path
+            $downloaded = $localDir . DIRECTORY_SEPARATOR . basename($remotePath);
+        } elseif ($fileId !== null) {
+            // File-ID download — treats the Drive file as a virtual "root folder"
+            $this->rclone([
+                'copy',
+                "{$this->remoteName}:",
+                $localDir,
+                "--drive-root-folder-id={$fileId}",
+                '--drive-acknowledge-abuse',
+            ], timeout: $timeout);
+
+            // Filename comes from the resolved Drive metadata
+            $resolvedName = $fileName ?? $this->getFileNameFromDriveId($fileId);
+            if (!$resolvedName) {
+                throw new \RuntimeException("Could not determine filename for Drive file ID: {$fileId}");
+            }
+            $downloaded = $localDir . DIRECTORY_SEPARATOR . $resolvedName;
+        } else {
+            throw new \InvalidArgumentException('Either $remotePath or $fileId must be provided.');
+        }
+
+        if (!is_file($downloaded)) {
+            throw new \RuntimeException("Expected downloaded file not found at: {$downloaded}");
+        }
+
+        return $downloaded;
+    }
+
     // ── Internal ─────────────────────────────────────────────────────────────
 
     /**

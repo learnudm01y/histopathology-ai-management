@@ -2,9 +2,11 @@
 
 namespace App\Models;
 
+use App\Models\SlideVerification;
+use App\Models\Stain;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use App\Models\Stain;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Sample extends Model
 {
@@ -54,6 +56,11 @@ class Sample extends Model
     public function stain(): BelongsTo
     {
         return $this->belongsTo(Stain::class);
+    }
+
+    public function slideVerification(): HasOne
+    {
+        return $this->hasOne(SlideVerification::class);
     }
 
     // ── Helpers ─────────────────────────────────────────────

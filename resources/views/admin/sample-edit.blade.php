@@ -102,6 +102,32 @@
                             </div>
                         </div>
 
+                        <div class="col-md-4">
+                            <div class="form-group">
+                                <label>Stain</label>
+                                <select name="stain_id" class="form-control @error('stain_id') is-invalid @enderror">
+                                    <option value="">— None —</option>
+                                    @foreach($stains as $stain)
+                                        <option value="{{ $stain->id }}"
+                                            @selected(old('stain_id', $sample->stain_id) == $stain->id)>
+                                            {{ $stain->name }}{{ $stain->abbreviation ? ' (' . $stain->abbreviation . ')' : '' }}
+                                        </option>
+                                    @endforeach
+                                </select>
+                                @error('stain_id')<div class="invalid-feedback">{{ $message }}</div>@enderror
+                            </div>
+                        </div>
+
+                        <div class="col-md-4">
+                            <div class="form-group">
+                                <label>Stain Marker</label>
+                                <input type="text" name="stain_marker" class="form-control @error('stain_marker') is-invalid @enderror"
+                                       placeholder="e.g. ER, PR, HER2, Ki67"
+                                       value="{{ old('stain_marker', $sample->stain_marker) }}">
+                                @error('stain_marker')<div class="invalid-feedback">{{ $message }}</div>@enderror
+                            </div>
+                        </div>
+
                         {{-- ── File Info ── --}}
                         <div class="col-12 mb-2 mt-3">
                             <h6 class="text-muted text-uppercase" style="font-size:.7rem;letter-spacing:.08em;">

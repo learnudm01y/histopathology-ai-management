@@ -1,7 +1,10 @@
 <?php
 
 use App\Http\Controllers\Admin\AuthController;
+use App\Http\Controllers\Admin\CasesController;
 use App\Http\Controllers\Admin\DashboardController;
+use App\Http\Controllers\Admin\ImportsController;
+use App\Http\Controllers\Admin\WsiPreviewController;
 use App\Http\Controllers\Admin\Settings\CategoriesController;
 use App\Http\Controllers\Admin\Settings\DataSourcesController;
 use App\Http\Controllers\Admin\Settings\DiseaseSubtypesController;
@@ -32,8 +35,24 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::put('samples/{sample}', [DashboardController::class, 'updateSample'])->name('samples.update');
         Route::delete('samples/{sample}', [DashboardController::class, 'destroySample'])->name('samples.destroy');
         Route::post('samples/{sample}/retry', [DashboardController::class, 'retrySample'])->name('samples.retry');
+        Route::post('samples/{sample}/verify', [DashboardController::class, 'verifySample'])->name('samples.verify');
+        Route::patch('samples/{sample}/verification', [DashboardController::class, 'updateVerification'])->name('samples.verification.update');
+
+        // WSI on-demand preview (download from Drive → OpenSlide inspection → thumbnail)
+        Route::post('samples/{sample}/wsi-preview/start',     [WsiPreviewController::class, 'start'])->name('samples.wsi-preview.start');
+        Route::get('samples/{sample}/wsi-preview/status',     [WsiPreviewController::class, 'status'])->name('samples.wsi-preview.status');
+        Route::get('samples/{sample}/wsi-preview/thumbnail',  [WsiPreviewController::class, 'thumbnail'])->name('samples.wsi-preview.thumbnail');
+        Route::post('samples/{sample}/wsi-preview/cleanup',   [WsiPreviewController::class, 'cleanup'])->name('samples.wsi-preview.cleanup');
+
         Route::get('workflow', [DashboardController::class, 'workflow'])->name('workflow');
         Route::get('output', [DashboardController::class, 'output'])->name('output');
+
+        // Cases (patients) — clinical case browser
+        Route::get('cases',          [CasesController::class, 'index'])->name('cases.index');
+        Route::get('cases/{case}',   [CasesController::class, 'show'])->name('cases.show');
+
+        // Imports — manifest / metadata / clinical JSON files
+        Route::post('imports', [ImportsController::class, 'store'])->name('imports.store');
 
         // Settings
         Route::prefix('settings')->name('settings.')->group(function () {

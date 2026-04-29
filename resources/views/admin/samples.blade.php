@@ -175,74 +175,74 @@
                     </div>
                 @else
                 <div class="table-responsive">
-                    <table class="table table-hover table-sm">
+                    <table class="table table-hover table-sm" style="table-layout:fixed; width:100%;">
+                        <colgroup>
+                            <col style="width:40px;">
+                            <col style="width:260px;">{{-- File Name --}}
+                            <col style="width:82px;">
+                            <col style="width:74px;">
+                            <col style="width:62px;">
+                            <col style="width:100px;">
+                            <col style="width:78px;">
+                            <col style="width:62px;">
+                            <col style="width:62px;">
+                            <col style="width:80px;">
+                        </colgroup>
                         <thead class="thead-light">
                             <tr>
-                                <th>#</th>
-                                <th>Slide ID</th>
-                                <th>File Name</th>
-                                <th>Organ</th>
-                                <th>Source</th>
-                                <th>Category</th>
-                                <th>Subtype</th>
-                                <th>Storage</th>
-                                <th>Tiling</th>
-                                <th>Quality</th>
-                                <th class="text-right">Actions</th>
+                                <th style="padding:6px 8px;">#</th>
+                                <th style="padding:6px 8px;">File Name</th>
+                                <th style="padding:6px 4px;">Organ</th>
+                                <th style="padding:6px 4px;">Source</th>
+                                <th style="padding:6px 4px;">Category</th>
+                                <th style="padding:6px 4px;">Subtype</th>
+                                <th style="padding:6px 4px;">Storage</th>
+                                <th style="padding:6px 4px;">Tiling</th>
+                                <th style="padding:6px 4px;">Quality</th>
+                                <th style="padding:6px 4px; text-align:right;">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
                             @foreach($samples as $sample)
                             <tr>
-                                <td class="text-muted small">{{ $sample->id }}</td>
+                                <td style="padding:6px 8px;" class="text-muted small align-middle">{{ $sample->id }}</td>
 
-                                {{-- Slide submitter ID --}}
-                                <td>
-                                    <span class="font-weight-medium small" style="font-family:monospace;">
-                                        {{ $sample->entity_submitter_id ?? ($sample->file_id ? substr($sample->file_id,0,8).'…' : '—') }}
-                                    </span>
-                                </td>
-
-                                {{-- File name (truncated) --}}
-                                <td>
-                                    <span title="{{ $sample->file_name }}" class="small d-inline-block text-truncate" style="max-width:200px;">
+                                {{-- File name --}}
+                                <td style="padding:6px 8px; overflow:hidden;" class="align-middle">
+                                    <span title="{{ $sample->file_name }}" class="small d-block text-truncate">
                                         {{ $sample->file_name ?? '—' }}
                                     </span>
                                 </td>
 
                                 {{-- Organ --}}
-                                <td>
-                                    <span class="badge badge-light border">
+                                <td style="padding:6px 4px; overflow:hidden;" class="align-middle">
+                                    <span class="badge badge-light border d-block text-truncate" style="max-width:100%;">
                                         {{ $sample->organ->name ?? '—' }}
                                     </span>
                                 </td>
 
                                 {{-- Data Source --}}
-                                <td class="small text-muted">{{ $sample->dataSource->name ?? '—' }}</td>
+                                <td style="padding:6px 4px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;" class="small text-muted align-middle">{{ $sample->dataSource->name ?? '—' }}</td>
 
                                 {{-- Category --}}
-                                <td>
-                                    @if($sample->category)
-                                        <span class="badge badge-secondary">
-                                            {{ $sample->category->label_en }}
-                                        </span>
-                                    @else
-                                        <span class="badge badge-secondary">—</span>
-                                    @endif
+                                <td style="padding:6px 4px;" class="align-middle">
+                                    <span class="badge badge-secondary">
+                                        {{ $sample->category->label_en ?? '—' }}
+                                    </span>
                                 </td>
 
                                 {{-- Disease Subtype --}}
-                                <td class="small">{{ $sample->disease_subtype ?? '—' }}</td>
+                                <td style="padding:6px 4px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;" class="small align-middle" title="{{ $sample->disease_subtype }}">{{ $sample->disease_subtype ?? '—' }}</td>
 
                                 {{-- Storage Status --}}
-                                <td>
+                                <td style="padding:6px 4px;" class="align-middle">
                                     <span class="badge badge-{{ $sample->storage_status_badge }}">
                                         {{ str_replace('_', ' ', $sample->storage_status) }}
                                     </span>
                                 </td>
 
                                 {{-- Tiling Status --}}
-                                <td>
+                                <td style="padding:6px 4px;" class="align-middle">
                                     <span class="badge badge-{{ $sample->tiling_status_badge }}">
                                         {{ $sample->tiling_status }}
                                         @if($sample->tiling_status === 'done' && $sample->tile_count)
@@ -252,34 +252,39 @@
                                 </td>
 
                                 {{-- Quality Status --}}
-                                <td>
+                                <td style="padding:6px 4px;" class="align-middle">
                                     <span class="badge badge-{{ $sample->quality_status_badge }}">
                                         {{ str_replace('_', ' ', $sample->quality_status) }}
                                     </span>
                                 </td>
 
                                 {{-- Actions --}}
-                                <td class="text-right text-nowrap">
-                                    <a href="{{ route('admin.samples.show', $sample) }}"
-                                       class="btn btn-outline-info btn-sm"
-                                       title="View details">
-                                        <i class="mdi mdi-eye"></i>
-                                    </a>
-                                    <a href="{{ route('admin.samples.edit', $sample) }}"
-                                       class="btn btn-outline-primary btn-sm"
-                                       title="Edit">
-                                        <i class="mdi mdi-pencil"></i>
-                                    </a>
-                                    <form action="{{ route('admin.samples.destroy', $sample) }}"
-                                          method="POST" class="d-inline"
-                                          onsubmit="return confirm('Delete sample #{{ $sample->id }}?')">
-                                        @csrf @method('DELETE')
-                                        <button type="submit"
-                                                class="btn btn-outline-danger btn-sm"
-                                                title="Delete">
-                                            <i class="mdi mdi-delete"></i>
-                                        </button>
-                                    </form>
+                                <td style="padding:4px 4px; text-align:right;" class="align-middle">
+                                    <div style="display:inline-flex; align-items:center; gap:2px;">
+                                        <a href="{{ route('admin.samples.show', $sample) }}"
+                                           class="btn btn-outline-info btn-sm p-0"
+                                           style="width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center;"
+                                           title="View details">
+                                            <i class="mdi mdi-eye" style="font-size:.85rem; line-height:1;"></i>
+                                        </a>
+                                        <a href="{{ route('admin.samples.edit', $sample) }}"
+                                           class="btn btn-outline-primary btn-sm p-0"
+                                           style="width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center;"
+                                           title="Edit">
+                                            <i class="mdi mdi-pencil" style="font-size:.85rem; line-height:1;"></i>
+                                        </a>
+                                        <form action="{{ route('admin.samples.destroy', $sample) }}"
+                                              method="POST" style="display:contents;"
+                                              onsubmit="return confirm('Delete sample #{{ $sample->id }}?')">
+                                            @csrf @method('DELETE')
+                                            <button type="submit"
+                                                    class="btn btn-outline-danger btn-sm p-0"
+                                                    style="width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center;"
+                                                    title="Delete">
+                                                <i class="mdi mdi-delete" style="font-size:.85rem; line-height:1;"></i>
+                                            </button>
+                                        </form>
+                                    </div>
                                 </td>
                             </tr>
                             @endforeach
@@ -305,14 +310,38 @@
     <div class="modal-dialog modal-xl" role="document">
         <div class="modal-content">
 
-            <div class="modal-header">
-                <h5 class="modal-title" id="addSampleModalLabel">
-                    <i class="mdi mdi-flask-plus-outline mr-1"></i> Add New Sample
-                </h5>
-                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                    <span aria-hidden="true">&times;</span>
-                </button>
+            {{-- ── Modal header with top-level tabs ── --}}
+            <div class="modal-header pb-0" style="align-items:flex-start;">
+                <div class="w-100">
+                    <div class="d-flex align-items-center mb-2">
+                        <h5 class="modal-title mb-0" id="addSampleModalLabel">
+                            <i class="mdi mdi-flask-plus-outline mr-1"></i> Add New Sample
+                        </h5>
+                        <button type="button" class="close ml-auto" data-dismiss="modal" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                    <ul class="nav nav-tabs border-bottom-0" id="modalMainTab" role="tablist">
+                        <li class="nav-item">
+                            <a class="nav-link active" id="tab-main-sample-link"
+                               data-toggle="tab" href="#pane-main-sample" role="tab">
+                                <i class="mdi mdi-flask-plus-outline mr-1"></i> Add Sample
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" id="tab-main-gdc-link"
+                               data-toggle="tab" href="#pane-main-gdc" role="tab">
+                                <i class="mdi mdi-cloud-upload-outline mr-1"></i> Import GDC Files
+                            </a>
+                        </li>
+                    </ul>
+                </div>
             </div>
+
+            <div class="tab-content border-top">
+
+                {{-- ── Tab 1: Add Sample ── --}}
+                <div class="tab-pane fade show active" id="pane-main-sample" role="tabpanel">
 
             <form method="POST" action="{{ route('admin.samples.store') }}" id="addSampleForm"
                   enctype="multipart/form-data">
@@ -495,6 +524,30 @@
                                 </select>
                             </div>
                         </div>
+                        <div class="col-md-4">
+                            <div class="form-group">
+                                <label>Stain</label>
+                                <select name="stain_id" class="form-control @error('stain_id') is-invalid @enderror">
+                                    <option value="">— None —</option>
+                                    @foreach($stains as $stain)
+                                        <option value="{{ $stain->id }}" @selected(old('stain_id') == $stain->id)>
+                                            {{ $stain->name }}{{ $stain->abbreviation ? ' (' . $stain->abbreviation . ')' : '' }}
+                                        </option>
+                                    @endforeach
+                                </select>
+                                @error('stain_id')<div class="invalid-feedback">{{ $message }}</div>@enderror
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-group">
+                                <label>Stain Marker</label>
+                                <input type="text" name="stain_marker"
+                                       class="form-control @error('stain_marker') is-invalid @enderror"
+                                       placeholder="e.g. ER, PR, HER2, Ki67"
+                                       value="{{ old('stain_marker') }}">
+                                @error('stain_marker')<div class="invalid-feedback">{{ $message }}</div>@enderror
+                            </div>
+                        </div>
                         <div class="col-md-12">
                             <div class="form-group">
                                 <label>
@@ -518,7 +571,8 @@
                                     — generated upon save —
                                 </div>
                             </div>
-                        </div>
+                        </div>{{-- /col-md-12 --}}
+                    </div>{{-- /row --}}
                 </div>{{-- /modal-body --}}
 
                 <div class="modal-footer">
@@ -529,16 +583,196 @@
                 </div>
             </form>
 
+                </div>{{-- /tab-pane #pane-main-sample --}}
+
+                {{-- ── Tab 2: Import GDC Files ── --}}
+                <div class="tab-pane fade" id="pane-main-gdc" role="tabpanel">
+            <div class="modal-body bg-light">
+                <div class="alert alert-info py-2 small">
+                    <i class="mdi mdi-information-outline mr-1"></i>
+                    Upload one or more files. Each file is auto-detected:
+                    <ul class="mb-0 mt-1 pl-3">
+                        <li><strong>Manifest TSV</strong> (<code>.txt</code> with columns
+                            <code>id, filename, md5, size, state</code>) → creates / updates samples.</li>
+                        <li><strong>metadata.cart.*.json</strong> → creates samples + cases and links them.</li>
+                        <li><strong>clinical.cart.*.json</strong> → creates / updates the full clinical record per case.</li>
+                    </ul>
+                    <small class="d-block mt-2">
+                        Order doesn't matter — linkage happens automatically by GDC <code>case_id</code> and <code>file_id</code>.
+                    </small>
+                </div>
+
+                @if(session('import_summary'))
+                    @php $s = session('import_summary'); @endphp
+                    <div class="alert alert-success small">
+                        <strong>Last import:</strong>
+                        <ul class="mb-0 mt-1 pl-3">
+                            @if($s['manifest']['files'])<li>Manifest — {{ $s['manifest']['rows'] }} rows ({{ $s['manifest']['samples_created'] }} new, {{ $s['manifest']['samples_updated'] }} updated)</li>@endif
+                            @if($s['metadata']['files'])<li>Metadata — {{ $s['metadata']['rows'] }} rows; cases +{{ $s['metadata']['cases_created'] }}/✎{{ $s['metadata']['cases_updated'] }}; samples +{{ $s['metadata']['samples_created'] }}/✎{{ $s['metadata']['samples_updated'] }}</li>@endif
+                            @if($s['clinical']['files'])<li>Clinical — {{ $s['clinical']['rows'] }} cases; clinical +{{ $s['clinical']['clinical_created'] }}/✎{{ $s['clinical']['clinical_updated'] }}</li>@endif
+                            @if($s['clinical']['samples_linked'])<li>Linked {{ $s['clinical']['samples_linked'] }} sample(s) to cases</li>@endif
+                            @foreach($s['errors'] as $err)<li class="text-danger">{{ $err }}</li>@endforeach
+                        </ul>
+                    </div>
+                @endif
+
+                <form method="POST" action="{{ route('admin.imports.store') }}" enctype="multipart/form-data" id="gdcImportForm">
+                    @csrf
+                    <div class="row">
+                        <div class="col-md-7">
+                            <div class="form-group mb-2">
+                                <label class="small">Files <span class="text-danger">*</span></label>
+                                <div class="custom-file">
+                                    <input type="file"
+                                           class="custom-file-input @error('import_files') is-invalid @enderror @error('import_files.*') is-invalid @enderror"
+                                           name="import_files[]" id="importFilesInput"
+                                           accept=".txt,.json,.tsv" multiple required>
+                                    <label class="custom-file-label" for="importFilesInput">Choose files…</label>
+                                </div>
+                                <small class="form-text text-muted">
+                                    Multiple files supported (Ctrl/Cmd + click). Max 50 MB per file.
+                                </small>
+                                @error('import_files')<div class="text-danger small mt-1">{{ $message }}</div>@enderror
+                                @error('import_files.*')<div class="text-danger small mt-1">{{ $message }}</div>@enderror
+                            </div>
+                        </div>
+                        <div class="col-md-5">
+                            <div class="form-group mb-2">
+                                <label class="small">Default Data Source <span class="text-muted">(optional)</span></label>
+                                <select name="data_source_id" class="form-control form-control-sm">
+                                    <option value="">— Auto-detect (TCGA) —</option>
+                                    @foreach($dataSources as $ds)
+                                        <option value="{{ $ds->id }}">{{ $ds->name }}</option>
+                                    @endforeach
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <button type="submit" class="btn btn-info btn-sm">
+                            <i class="mdi mdi-cloud-upload-outline mr-1"></i> Import GDC Files
+                        </button>
+                    </div>
+                </form>
+            </div>
+                </div>{{-- /tab-pane #pane-main-gdc --}}
+
+            </div>{{-- /tab-content --}}
+
         </div>
     </div>
 </div>
+
+{{-- ── Upload Report Modal ────────────────────────────────────────────── --}}
+<div class="modal fade" id="uploadReportModal" tabindex="-1" role="dialog" aria-labelledby="uploadReportModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="uploadReportModalLabel">
+                    <i class="mdi mdi-clipboard-list-outline mr-1"></i> Upload Report
+                </h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+
+                @php
+                    $report  = session('upload_report', []);
+                    $queued  = $report['queued']  ?? [];
+                    $skipped = $report['skipped'] ?? [];
+                @endphp
+
+                {{-- Summary badges --}}
+                <div class="d-flex mb-4" style="gap:.75rem;">
+                    <span class="badge badge-success px-3 py-2" style="font-size:.9rem;">
+                        <i class="mdi mdi-check-circle-outline mr-1"></i>
+                        {{ count($queued) }} Queued
+                    </span>
+                    <span class="badge badge-warning px-3 py-2" style="font-size:.9rem;">
+                        <i class="mdi mdi-skip-next-circle-outline mr-1"></i>
+                        {{ count($skipped) }} Skipped
+                    </span>
+                </div>
+
+                {{-- Queued list --}}
+                @if(!empty($queued))
+                <div class="mb-4">
+                    <h6 class="font-weight-bold text-success border-bottom pb-1 mb-2">
+                        <i class="mdi mdi-check-circle-outline mr-1"></i>
+                        Successfully Queued ({{ count($queued) }})
+                    </h6>
+                    <p class="text-muted small mb-2">These files are new and have been queued for upload to Google Drive.</p>
+                    <ul class="list-group list-group-flush">
+                        @foreach($queued as $item)
+                        <li class="list-group-item py-2 d-flex align-items-center" style="border-color:#d4edda;">
+                            <i class="mdi mdi-file-upload-outline text-success mr-2" style="font-size:1.1rem;"></i>
+                            <div>
+                                <span class="font-weight-medium small">{{ $item['name'] }}</span>
+                                @if(!empty($item['folder']) && $item['folder'] !== $item['name'])
+                                    <br><small class="text-muted">Folder: {{ $item['folder'] }}</small>
+                                @endif
+                            </div>
+                        </li>
+                        @endforeach
+                    </ul>
+                </div>
+                @endif
+
+                {{-- Skipped list --}}
+                @if(!empty($skipped))
+                <div class="mb-2">
+                    <h6 class="font-weight-bold text-warning border-bottom pb-1 mb-2">
+                        <i class="mdi mdi-skip-next-circle-outline mr-1"></i>
+                        Skipped — Already Exists ({{ count($skipped) }})
+                    </h6>
+                    <p class="text-muted small mb-2">These files were ignored because a matching record already exists in the database.</p>
+                    <ul class="list-group list-group-flush">
+                        @foreach($skipped as $item)
+                        <li class="list-group-item py-2 d-flex align-items-center" style="border-color:#ffeeba;">
+                            <i class="mdi mdi-file-remove-outline text-warning mr-2" style="font-size:1.1rem;"></i>
+                            <div>
+                                <span class="font-weight-medium small">{{ $item['name'] }}</span>
+                                @if(!empty($item['folder']) && $item['folder'] !== $item['name'])
+                                    <br><small class="text-muted">Folder: {{ $item['folder'] }}</small>
+                                @endif
+                                <br><small class="text-danger">{{ $item['reason'] }}</small>
+                            </div>
+                        </li>
+                        @endforeach
+                    </ul>
+                </div>
+                @endif
+
+                @if(empty($queued) && empty($skipped))
+                    <p class="text-muted text-center py-3">No upload data available.</p>
+                @endif
+
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" data-dismiss="modal">OK</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{{-- ── Import GDC Files Modal ────────────────────────────────────────────── --}}
+{{--
+    NOTE: The standalone `importFilesModal` was removed.
+    Its functionality has been merged into `addSampleModal` as the last
+    section "Import GDC Files (Manifest / Metadata / Clinical)".
+--}}
 @endpush
 
 @push('scripts')
 <script>
 (function () {
     'use strict';
-
+    @if(session('upload_report'))
+    $(document).ready(function () {
+        $('#uploadReportModal').modal('show');
+    });
+    @endif
     // ── Disease subtypes data (keyed by category_id) ─────────────────────────
     var diseaseSubtypesByCategory = @json($diseaseSubtypesByCategory);
 
@@ -572,6 +806,20 @@
             var pathEl   = document.getElementById('bulkFolderPathInput');
             if (gdriveEl) gdriveEl.value = '';
             if (pathEl)   pathEl.value   = '';
+        });
+    }
+
+    // ── Import files label ───────────────────────────────────────────────────
+    var importFilesEl = document.getElementById('importFilesInput');
+    if (importFilesEl) {
+        importFilesEl.addEventListener('change', function () {
+            var lbl = this.nextElementSibling;
+            if (!lbl) return;
+            lbl.textContent = this.files.length === 0
+                ? 'Choose files…'
+                : this.files.length === 1
+                    ? this.files[0].name
+                    : this.files.length + ' files selected';
         });
     }
 

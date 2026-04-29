@@ -21,6 +21,13 @@
             </a>
         </li>
 
+        <li class="nav-item {{ str_starts_with($routeName ?? '', 'admin.cases') ? 'active' : '' }}">
+            <a class="nav-link" href="{{ route('admin.cases.index') }}">
+                <i class="menu-icon mdi mdi-account-multiple-outline"></i>
+                <span class="menu-title">Cases</span>
+            </a>
+        </li>
+
         <li class="nav-item {{ $routeName === 'admin.workflow' ? 'active' : '' }}">
             <a class="nav-link" href="{{ route('admin.workflow') }}">
                 <i class="menu-icon typcn typcn-flow-merge"></i>
@@ -78,3 +85,12 @@
 
     </ul>
 </nav>
+@push('scripts')
+<script>
+$(function () {
+    // Pre-initialize all sidebar collapse menus with toggle:false to prevent
+    // Bootstrap's window.load handler from auto-toggling them on every page.
+    $('#sidebar .collapse').collapse({ toggle: false });
+});
+</script>
+@endpush
