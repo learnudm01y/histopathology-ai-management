@@ -115,12 +115,33 @@ class WsiPreviewJob implements ShouldQueue
         $process->run();
 
         $stdout = trim($process->getOutput());
+        $stderr = trim($process->getErrorOutput());
         $pyData = json_decode($stdout, true);
 
+        if ($stderr !== '') {
+            Log::warning("[WsiPreviewJob] Python stderr for sample #{$this->sampleId}: {$stderr}");
+        }
+
         if (!is_array($pyData)) {
-            Log::error("[WsiPreviewJob] Could not parse Python output: {$stdout}");
-            $this->_cacheError($cacheKey, 'WSI inspection script returned unexpected output.');
-            return;
+            // If 'python' binary failed (not found), retry with 'python3'
+            if ($stdout === '' && $pythonBin === 'python') {
+                Log::warning("[WsiPreviewJob] Retrying with python3 binary for sample #{$this->sampleId}");
+                $process2 = new Process(['python3', $scriptPath, $wsiPath, $outputDir]);
+                $process2->setTimeout(3600);
+                $process2->run();
+                $stdout = trim($process2->getOutput());
+                $stderr2 = trim($process2->getErrorOutput());
+                if ($stderr2 !== '') {
+                    Log::warning("[WsiPreviewJob] python3 stderr for sample #{$this->sampleId}: {$stderr2}");
+                }
+                $pyData = json_decode($stdout, true);
+            }
+
+            if (!is_array($pyData)) {
+                Log::error("[WsiPreviewJob] Could not parse Python output for sample #{$this->sampleId}. stdout=[{$stdout}] stderr=[{$stderr}]");
+                $this->_cacheError($cacheKey, 'WSI inspection script returned unexpected output.');
+                return;
+            }
         }
 
         // ── Update verification record ────────────────────────────────────────
