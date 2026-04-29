@@ -196,6 +196,7 @@
                                 <th style="padding:6px 4px;">Source</th>
                                 <th style="padding:6px 4px;">Category</th>
                                 <th style="padding:6px 4px;">Subtype</th>
+                                <th style="padding:6px 4px;">Size</th>
                                 <th style="padding:6px 4px;">Storage</th>
                                 <th style="padding:6px 4px;">Tiling</th>
                                 <th style="padding:6px 4px;">Quality</th>
@@ -233,6 +234,11 @@
 
                                 {{-- Disease Subtype --}}
                                 <td style="padding:6px 4px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;" class="small align-middle" title="{{ $sample->disease_subtype }}">{{ $sample->disease_subtype ?? '—' }}</td>
+
+                                {{-- File Size --}}
+                                <td style="padding:6px 4px; white-space:nowrap;" class="small text-muted align-middle">
+                                    {{ $sample->file_size_human }}
+                                </td>
 
                                 {{-- Storage Status --}}
                                 <td style="padding:6px 4px;" class="align-middle">

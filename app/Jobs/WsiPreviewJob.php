@@ -144,6 +144,13 @@ class WsiPreviewJob implements ShouldQueue
             }
         }
 
+        // Detect silent Python failures (e.g. missing openslide library)
+        if (!empty($pyData['error'])) {
+            Log::error("[WsiPreviewJob] Python script error for sample #{$this->sampleId}: {$pyData['error']}");
+            $this->_cacheError($cacheKey, $pyData['error']);
+            return;
+        }
+
         // ── Update verification record ────────────────────────────────────────
         $verificationData = array_filter([
             'open_slide_status'     => $pyData['open_slide_status']     ?? null,
