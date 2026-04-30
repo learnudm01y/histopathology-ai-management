@@ -66,17 +66,36 @@ class DashboardController extends Controller
             ->orderByDesc('id')
             ->get();
 
-        // Disease type distribution: unique disease names + slide count per disease
-        $diseaseSlideStats = PatientCase::query()
-            ->select('cases.disease_type', \Illuminate\Support\Facades\DB::raw('COUNT(samples.id) as slide_count'))
-            ->leftJoin('samples', 'cases.id', '=', 'samples.case_id')
+        // Precise disease chart: disease_type × category (Tumor / Normal / …) breakdown
+        $rawDiseaseStats = \Illuminate\Support\Facades\DB::table('cases')
+            ->select(
+                'cases.disease_type',
+                \Illuminate\Support\Facades\DB::raw("COALESCE(categories.label_en, 'Uncategorized') as category_label"),
+                \Illuminate\Support\Facades\DB::raw('COUNT(samples.id) as slide_count')
+            )
+            ->join('samples', 'cases.id', '=', 'samples.case_id')
+            ->leftJoin('categories', 'samples.category_id', '=', 'categories.id')
             ->whereNotNull('cases.disease_type')
             ->where('cases.disease_type', '!=', '')
-            ->groupBy('cases.disease_type')
-            ->orderByDesc('slide_count')
+            ->groupBy('cases.disease_type', 'categories.label_en')
             ->get();
 
-        return view('admin.dashboard', compact('sampleStats', 'caseStats', 'verifStats', 'failedVerifications', 'rejectedSamples', 'diseaseSlideStats'));
+        // Order diseases by total slides descending
+        $diseaseTotals = $rawDiseaseStats
+            ->groupBy('disease_type')
+            ->map(fn ($g) => $g->sum('slide_count'))
+            ->sortDesc();
+
+        $diseaseChartData = [
+            'labels'     => $diseaseTotals->keys()->values()->toArray(),
+            'categories' => $rawDiseaseStats->pluck('category_label')->unique()->sort()->values()->toArray(),
+            'matrix'     => $rawDiseaseStats->groupBy('disease_type')
+                                ->map(fn ($g) => $g->pluck('slide_count', 'category_label')->toArray())
+                                ->toArray(),
+            'totals'     => $diseaseTotals->toArray(),
+        ];
+
+        return view('admin.dashboard', compact('sampleStats', 'caseStats', 'verifStats', 'failedVerifications', 'rejectedSamples', 'diseaseChartData'));
     }
 
     public function samples(Request $request): View
