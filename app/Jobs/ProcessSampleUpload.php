@@ -17,6 +17,13 @@ class ProcessSampleUpload implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     /**
+     * Dedicated queue — runs on the 'uploads' worker, kept separate from
+     * 'previews' so preview downloads never compete for the same worker
+     * (and therefore never saturate the same network connection).
+     */
+
+
+    /**
      * Max time (seconds) allowed for a single upload — 4 hours for large WSI files.
      */
     public int $timeout = 14400;
@@ -46,7 +53,9 @@ class ProcessSampleUpload implements ShouldQueue
         public readonly ?string $gdriveFileName  = null,
         public readonly ?string $bulkFolderPath  = null,
         public readonly ?string $bulkFolderName  = null,
-    ) {}
+    ) {
+        $this->onQueue('uploads');
+    }
 
     public function handle(GoogleDriveService $drive): void
     {

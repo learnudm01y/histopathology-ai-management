@@ -100,7 +100,12 @@ class WsiPreviewController extends Controller
             $payload['duplicate_of']  = $data['duplicate_of'] ?? null;
             $payload['error']         = $data['error']        ?? null;
             $payload['thumbnail_url'] = $data['thumb_rel']
-                ? route('admin.samples.wsi-preview.thumbnail', $sample)
+                ? route('admin.samples.wsi-preview.thumbnail', $sample, false)
+                : null;
+            // Use the standard slide.dzi URL so OSD's native DZI parser handles
+            // tile URL generation automatically (most reliable approach).
+            $payload['dzi_url']       = !empty($data['dzi_available'])
+                ? "/admin/samples/{$sample->id}/wsi-preview/slide.dzi"
                 : null;
         }
 
@@ -138,6 +143,97 @@ class WsiPreviewController extends Controller
             'Content-Type'   => 'image/jpeg',
             'Content-Length' => (string) strlen($jpeg),
             'Cache-Control'  => 'no-store, no-cache, must-revalidate',
+        ]);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // GET  /admin/samples/{sample}/wsi-preview/dzi
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Serve the DeepZoom (DZI) descriptor — the OpenSeadragon entry point.
+     * The descriptor declares tile size / overlap / image dimensions; OSD then
+     * fetches individual tiles via the dziTile() endpoint.
+     */
+    public function dzi(Sample $sample): Response
+    {
+        $absolutePath = storage_path("app/wsi_previews/{$sample->id}/preview_output/dzi/slide.dzi");
+
+        if (!file_exists($absolutePath)) {
+            abort(404, 'DeepZoom descriptor not available. Re-run the preview.');
+        }
+
+        return response(file_get_contents($absolutePath), 200, [
+            'Content-Type'  => 'application/xml',
+            'Cache-Control' => 'no-store, no-cache, must-revalidate',
+        ]);
+    }
+
+    /**
+     * Serve an individual DeepZoom tile using OSD's standard URL scheme:
+     *   slide_files/{level}/{col}_{row}.jpeg
+     * This route is used by OSD's native DZI parser (tileSources: 'slide.dzi').
+     */
+    public function dziTileStandard(Sample $sample, int $level, string $tileFile): Response
+    {
+        $level = max(0, min($level, 32));
+
+        // tileFile = "0_0.jpeg" or "0_0.jpg" — extract col/row safely
+        if (!preg_match('/^(\d+)_(\d+)\.(jpe?g|png)$/i', $tileFile, $m)) {
+            abort(404);
+        }
+        $col = (int) $m[1];
+        $row = (int) $m[2];
+
+        $absolutePath = storage_path(
+            "app/wsi_previews/{$sample->id}/preview_output/dzi/slide_files/{$level}/{$col}_{$row}.jpg"
+        );
+
+        if (!file_exists($absolutePath)) {
+            abort(404);
+        }
+
+        $bytes = file_get_contents($absolutePath);
+
+        return response($bytes, 200, [
+            'Content-Type'   => 'image/jpeg',
+            'Content-Length' => (string) strlen($bytes),
+            'Cache-Control'  => 'public, max-age=86400, immutable',
+        ]);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // GET  /admin/samples/{sample}/wsi-preview/dzi-tile/{level}/{col}_{row}.{ext}
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Serve an individual DeepZoom tile (JPEG) at a given pyramid level.
+     * Tiles live under preview_output/dzi/slide_files/<level>/<col>_<row>.jpg
+     */
+    public function dziTile(Sample $sample, int $level, int $col, int $row, string $ext): Response
+    {
+        // Hard-clamp values to safe ranges (defensive against path traversal)
+        $level = max(0, min($level, 32));
+        $col   = max(0, min($col, 100_000));
+        $row   = max(0, min($row, 100_000));
+        $ext   = in_array($ext, ['jpg', 'jpeg', 'png'], true) ? $ext : 'jpg';
+
+        $absolutePath = storage_path(
+            "app/wsi_previews/{$sample->id}/preview_output/dzi/slide_files/{$level}/{$col}_{$row}.jpg"
+        );
+
+        if (!file_exists($absolutePath)) {
+            // Returning 404 lets OpenSeadragon mark the tile as missing without breaking the viewer
+            abort(404);
+        }
+
+        $bytes = file_get_contents($absolutePath);
+
+        return response($bytes, 200, [
+            'Content-Type'   => 'image/jpeg',
+            'Content-Length' => (string) strlen($bytes),
+            // Tiles never change for a given preview run → aggressive caching is safe.
+            'Cache-Control'  => 'public, max-age=86400, immutable',
         ]);
     }
 

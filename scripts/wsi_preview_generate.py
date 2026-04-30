@@ -239,41 +239,57 @@ def main() -> None:
     # ── Thumbnail generation ─────────────────────────────────────────────────
     try:
         from PIL import Image as _PIL_Image
+        # Disable Pillow's "decompression bomb" guard — we KNOW the image is huge.
+        _PIL_Image.MAX_IMAGE_PIXELS = None
 
-        MAX_DIM = 4096  # high-quality thumbnail — long edge ≤ 4096 px
+        # Maximum-quality preview — long edge up to 16384 px.
+        # No memory budget: we read directly from the highest-resolution level
+        # available (level 0 when possible) and only downscale if the result
+        # would exceed TARGET_MAX. This produces a thumbnail virtually
+        # indistinguishable from a native pyramid view in QuPath / ASAP.
+        TARGET_MAX = 16384
 
-        w0_full = result["slide_width"]
-        h0_full = result["slide_height"]
-
-        # Find the smallest pyramid level that is still ≥ MAX_DIM on any
-        # side (or level 0 if every level is smaller than MAX_DIM).
-        # We read from that level and downsample with Lanczos — this avoids
-        # decompressing the full-resolution scan (which can be GBs in RAM)
-        # while still producing a much sharper result than using level 0.
+        # Pick the smallest pyramid level whose long edge is still ≥ TARGET_MAX
+        # (i.e. the highest-resolution level we can use without losing detail).
+        # If every level is smaller than TARGET_MAX, fall back to level 0.
         best_level = 0
         for lvl in range(slide.level_count - 1, -1, -1):
             lw, lh = slide.level_dimensions[lvl]
-            if max(lw, lh) >= MAX_DIM:
-                # Safety: skip levels whose uncompressed RGB would exceed
-                # ~600 MB (200 MP × 3 channels)
-                if lw * lh <= 200_000_000:
-                    best_level = lvl
+            if max(lw, lh) >= TARGET_MAX:
+                best_level = lvl
                 break
 
         lw_lvl, lh_lvl = slide.level_dimensions[best_level]
         region = slide.read_region((0, 0), best_level, (lw_lvl, lh_lvl))
-        img    = region.convert("RGB")
 
-        # Scale down to MAX_DIM if needed, using Lanczos for best sharpness
-        ratio = min(MAX_DIM / lw_lvl, MAX_DIM / lh_lvl, 1.0)
+        # Composite RGBA on a white background BEFORE converting to RGB.
+        # OpenSlide returns RGBA where background pixels have alpha = 0
+        # (fully transparent) and their RGB channels are often (0, 0, 0).
+        # A plain .convert("RGB") drops the alpha channel without blending,
+        # turning every transparent pixel black — making the thumbnail appear
+        # dark / distorted for all slides.  Pasting on white correctly renders
+        # the slide background as white, as expected for H&E slides.
+        if region.mode == 'RGBA':
+            bg = _PIL_Image.new('RGB', region.size, (255, 255, 255))
+            bg.paste(region, mask=region.split()[3])
+            img = bg
+        else:
+            img = region.convert('RGB')
+
+        # Free the RGBA buffer ASAP — for huge level-0 reads this saves GBs.
+        del region
+
+        # Downscale only if the chosen level is larger than TARGET_MAX.
+        ratio = min(TARGET_MAX / lw_lvl, TARGET_MAX / lh_lvl, 1.0)
         if ratio < 1.0:
             tw = max(1, int(round(lw_lvl * ratio)))
             th = max(1, int(round(lh_lvl * ratio)))
             img = img.resize((tw, th), _PIL_Image.LANCZOS)
 
         thumb_path = str(Path(output_dir) / "thumbnail.jpg")
-        # quality=95 + subsampling=0 preserves colour fidelity of stains
-        img.save(thumb_path, "JPEG", quality=95, subsampling=0)
+        # quality=95 + subsampling=0 preserves H&E stain colour fidelity.
+        # Larger JPEG (~10-30 MB) is acceptable — it's served once per preview.
+        img.save(thumb_path, "JPEG", quality=95, subsampling=0, optimize=True)
         result["thumbnail_path"] = thumb_path
     except Exception as exc:
         # Thumbnail failure is non-fatal — the verification checks still pass.
@@ -350,29 +366,48 @@ def main() -> None:
                 result["tissue_patch_count"] = int(frac_tissue * full_nx * full_ny)
 
             # ── 2. blur_score ─────────────────────────────────────────────────
-            # Read several 512×512 regions at level 0 from tissue areas and
-            # compute Laplacian variance (higher = sharper).
-            # Mapped to [0, 1] where 0 = sharp, 1 = very blurry.
+            # Measure Laplacian variance ONLY inside tissue regions.
+            # Sampling background (uniform white) gives near-zero variance
+            # → falsely high blur_score even for perfectly sharp slides.
+            # We use the tissue_fracs grid computed above to pick sampling
+            # coordinates that are guaranteed to fall inside tissue.
             W0, H0 = result["slide_width"], result["slide_height"]
-            sample_regions = []
-            # Always sample the centre
-            sample_regions.append((
-                max(0, W0 // 2 - 256), max(0, H0 // 2 - 256)
-            ))
-            # Add a few more positions spread across the slide
-            for fx, fy in [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75),
-                           (0.50, 0.25), (0.50, 0.75), (0.25, 0.50), (0.75, 0.50)]:
-                sample_regions.append((
-                    max(0, min(int(fx * W0) - 256, W0 - 512)),
-                    max(0, min(int(fy * H0) - 256, H0 - 512)),
-                ))
+
+            # Build tissue-aware sample positions from the patch grid.
+            tissue_positions = []
+            if tissue_fracs is not None:
+                tissue_idx = np.argwhere(tissue_fracs >= MIN_TISSUE_FRAC)
+                if len(tissue_idx) > 0:
+                    rng_b = np.random.default_rng(seed=42)
+                    chosen_idx = tissue_idx
+                    if len(tissue_idx) > 12:
+                        sel = rng_b.choice(len(tissue_idx), size=12, replace=False)
+                        chosen_idx = tissue_idx[sel]
+                    for pi, pj in chosen_idx:
+                        # Centre of this patch in level-0 pixel coordinates.
+                        # pi = row index, pj = column index in the patch grid.
+                        cx0 = int((pj + 0.5) * P_LVL * ds)
+                        cy0 = int((pi + 0.5) * P_LVL * ds)
+                        sx = int(max(0, min(cx0 - 256, W0 - 512)))
+                        sy = int(max(0, min(cy0 - 256, H0 - 512)))
+                        tissue_positions.append((sx, sy))
+
+            # Fallback to geometric positions when tissue grid is unavailable.
+            if not tissue_positions:
+                tissue_positions = [(max(0, W0 // 2 - 256), max(0, H0 // 2 - 256))]
+                for fx, fy in [(0.25, 0.25), (0.75, 0.25),
+                               (0.25, 0.75), (0.75, 0.75)]:
+                    tissue_positions.append((
+                        max(0, min(int(fx * W0) - 256, W0 - 512)),
+                        max(0, min(int(fy * H0) - 256, H0 - 512)),
+                    ))
 
             lap_vars = []
-            for sx, sy in sample_regions[:8]:  # max 8 samples
+            for sx, sy in tissue_positions[:10]:
                 try:
                     tile = slide.read_region((sx, sy), 0, (512, 512)).convert("L")
                     ta   = np.asarray(tile, dtype=np.float32)
-                    # Discrete Laplacian: 4-connected
+                    # Discrete 4-connected Laplacian
                     lap = (
                         -4.0 * ta[1:-1, 1:-1]
                         + ta[:-2, 1:-1] + ta[2:, 1:-1]
@@ -384,9 +419,10 @@ def main() -> None:
 
             if lap_vars:
                 mean_var = float(np.mean(lap_vars))
-                # Sharp H&E slides typically: var ≈ 500–8000
-                # Blurry: var < 100; excellent: var > 5000
-                # Mapping: blur_score = 1 / (1 + mean_var / 300)
+                # blur_score = 1 / (1 + mean_var / 300): 0 = sharp, 1 = blurry.
+                # Sharp 40x H&E tissue:   var ≥ 1000  → score ≤ 0.23
+                # Acceptable 20x tissue:  var ≥ 200   → score ≤ 0.60
+                # Genuinely blurry:       var < 100   → score ≥ 0.75
                 result["blur_score"] = round(1.0 / (1.0 + mean_var / 300.0), 4)
 
             # ── 3. artifact_score ─────────────────────────────────────────────
@@ -441,6 +477,72 @@ def main() -> None:
 
     except Exception:
         pass  # non-fatal
+
+    # ── DeepZoom tile generation (OpenSeadragon-compatible) ─────────────────
+    # This produces a full DZI pyramid: <output>/dzi/slide.dzi + slide_files/<level>/<col>_<row>.jpg
+    # OpenSeadragon then loads only the visible tiles at the current zoom level,
+    # giving QuPath-equivalent quality at every magnification with bounded memory.
+    try:
+        from openslide.deepzoom import DeepZoomGenerator
+        from concurrent.futures import ThreadPoolExecutor
+        from PIL import Image as _DZ_Image
+
+        TILE_SIZE = 512
+        OVERLAP   = 1
+        JPEG_Q    = 90
+
+        dzi_root  = Path(output_dir) / "dzi"
+        files_dir = dzi_root / "slide_files"
+        files_dir.mkdir(parents=True, exist_ok=True)
+
+        dz = DeepZoomGenerator(slide, tile_size=TILE_SIZE, overlap=OVERLAP, limit_bounds=False)
+
+        # DZI descriptor (XML) — points OpenSeadragon at the tile pyramid.
+        dzi_xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<Image xmlns="http://schemas.microsoft.com/deepzoom/2008" '
+            f'Format="jpeg" Overlap="{OVERLAP}" TileSize="{TILE_SIZE}">\n'
+            f'  <Size Width="{result["slide_width"]}" Height="{result["slide_height"]}"/>\n'
+            '</Image>\n'
+        )
+        (dzi_root / "slide.dzi").write_text(dzi_xml, encoding="utf-8")
+
+        # Pre-create level directories (avoids race conditions in the thread pool)
+        for lvl in range(dz.level_count):
+            (files_dir / str(lvl)).mkdir(exist_ok=True)
+
+        def _render_tile(args):
+            lvl, col, row = args
+            try:
+                tile = dz.get_tile(lvl, (col, row))
+                # Composite RGBA → RGB on white (background pixels otherwise become black)
+                if tile.mode == 'RGBA':
+                    bg = _DZ_Image.new('RGB', tile.size, (255, 255, 255))
+                    bg.paste(tile, mask=tile.split()[3])
+                    tile = bg
+                tile.save(files_dir / str(lvl) / f"{col}_{row}.jpg",
+                          "JPEG", quality=JPEG_Q, optimize=True)
+            except Exception:
+                pass  # individual tile failures are tolerable
+
+        # Build the full task list across all pyramid levels.
+        tasks = []
+        for lvl in range(dz.level_count):
+            cols, rows = dz.level_tiles[lvl]
+            for c in range(cols):
+                for r in range(rows):
+                    tasks.append((lvl, c, r))
+
+        # Render in parallel — OpenSlide is thread-safe for read_region.
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            for _ in ex.map(_render_tile, tasks):
+                pass
+
+        result["dzi_relative_path"] = "dzi/slide.dzi"
+        result["dzi_tile_count"]    = len(tasks)
+    except Exception as exc:
+        prev = result.get("error") or ""
+        result["error"] = (prev + f"; dzi generation failed: {exc}").lstrip("; ")
 
     slide.close()
     _save_and_exit(0, output_dir)

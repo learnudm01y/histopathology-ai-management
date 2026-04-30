@@ -304,7 +304,7 @@ class GoogleDriveService
      * @throws \RuntimeException if rclone fails or the file cannot be found after download.
      */
     public function downloadToLocal(
-        string $localDir,
+        string  $localDir,
         ?string $remotePath = null,
         ?string $fileId     = null,
         ?string $fileName   = null,
@@ -314,26 +314,37 @@ class GoogleDriveService
             mkdir($localDir, 0755, true);
         }
 
+        // Performance flags — multi-threaded HTTP-range download for large WSI files.
+        // rclone defaults to 1 stream per file; for a 1-5GB slide on a fast
+        // connection this leaves a lot of bandwidth on the table.
+        $perfFlags = [
+            '--drive-acknowledge-abuse',
+            '--multi-thread-streams=8',          // 8 parallel HTTP-range streams
+            '--multi-thread-cutoff=64M',         // engage multi-thread for files > 64MB
+            '--drive-chunk-size=64M',            // larger chunks → fewer API roundtrips
+            '--transfers=4',
+            '--checkers=8',
+            '--buffer-size=64M',
+        ];
+
         if ($remotePath !== null) {
             // Direct path download — rclone copies the file into $localDir
-            $this->rclone([
+            $this->rclone(array_merge([
                 'copy',
                 "{$this->remoteName}:{$remotePath}",
                 $localDir,
-                '--drive-acknowledge-abuse',
-            ], timeout: $timeout);
+            ], $perfFlags), timeout: $timeout);
 
             // The local filename equals the basename of the remote path
             $downloaded = $localDir . DIRECTORY_SEPARATOR . basename($remotePath);
         } elseif ($fileId !== null) {
             // File-ID download — treats the Drive file as a virtual "root folder"
-            $this->rclone([
+            $this->rclone(array_merge([
                 'copy',
                 "{$this->remoteName}:",
                 $localDir,
                 "--drive-root-folder-id={$fileId}",
-                '--drive-acknowledge-abuse',
-            ], timeout: $timeout);
+            ], $perfFlags), timeout: $timeout);
 
             // Filename comes from the resolved Drive metadata
             $resolvedName = $fileName ?? $this->getFileNameFromDriveId($fileId);

@@ -51,7 +51,9 @@ class WsiPreviewJob implements ShouldQueue
 
     public function __construct(
         public readonly int $sampleId,
-    ) {}
+    ) {
+        $this->onQueue('previews');
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -63,6 +65,20 @@ class WsiPreviewJob implements ShouldQueue
         $sample = Sample::find($this->sampleId);
         if (!$sample) {
             $this->_cacheError($cacheKey, 'Sample not found.');
+            return;
+        }
+
+        // ── Guard: reject if sample is still being uploaded ──────────────────
+        // storage_status = 'downloading' means rclone is actively transferring
+        // this file to Google Drive. Attempting a preview download at the same
+        // time would (a) race against an incomplete remote file and (b) saturate
+        // bandwidth, stalling the upload. Fail fast with a clear message.
+        if ($sample->storage_status === 'downloading') {
+            $this->_cacheError(
+                $cacheKey,
+                'Upload is still in progress for this sample. Please wait until the upload completes before running a preview.'
+            );
+            Log::warning("[WsiPreviewJob] Sample #{$this->sampleId} is still uploading — preview aborted.");
             return;
         }
 
@@ -82,24 +98,41 @@ class WsiPreviewJob implements ShouldQueue
             mkdir($tempDir, 0755, true);
         }
 
-        Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: downloading WSI to {$tempDir}");
+        // ── Skip download if file already exists locally ─────────────────────
+        // Massive speed-up for repeat previews: a fully-downloaded WSI
+        // (matching the remote size) is reused instead of re-downloaded.
+        $expectedName = $fileName ?: ($remotePath ? basename($remotePath) : null);
+        $expectedPath = $expectedName ? ($tempDir . DIRECTORY_SEPARATOR . $expectedName) : null;
+        $wsiPath      = null;
 
-        // ── Download ─────────────────────────────────────────────────────────
-        try {
-            $wsiPath = $drive->downloadToLocal(
-                localDir:   $tempDir,
-                remotePath: $remotePath,
-                fileId:     $remotePath ? null : $fileId,
-                fileName:   $fileName,
-                timeout:    12_000,
-            );
-        } catch (\Throwable $e) {
-            Log::error("[WsiPreviewJob] Download failed: " . $e->getMessage());
-            $this->_cacheError($cacheKey, 'Download failed: ' . $e->getMessage());
-            return;
+        if ($expectedPath && is_file($expectedPath) && filesize($expectedPath) > 0) {
+            $localSize  = filesize($expectedPath);
+            $remoteSize = (int) ($sample->file_size_bytes ?? 0);
+            if ($remoteSize <= 0 || $localSize === $remoteSize) {
+                Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: reusing cached local file {$expectedPath} ({$localSize} bytes)");
+                $wsiPath = $expectedPath;
+            } else {
+                Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: local size {$localSize} ≠ remote {$remoteSize}, re-downloading");
+            }
         }
 
-        Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: download complete → {$wsiPath}");
+        if ($wsiPath === null) {
+            Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: downloading WSI to {$tempDir}");
+            try {
+                $wsiPath = $drive->downloadToLocal(
+                    localDir:   $tempDir,
+                    remotePath: $remotePath,
+                    fileId:     $remotePath ? null : $fileId,
+                    fileName:   $fileName,
+                    timeout:    12_000,
+                );
+            } catch (\Throwable $e) {
+                Log::error("[WsiPreviewJob] Download failed: " . $e->getMessage());
+                $this->_cacheError($cacheKey, 'Download failed: ' . $e->getMessage());
+                return;
+            }
+            Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: download complete → {$wsiPath}");
+        }
 
         // ── Run Python inspection script ─────────────────────────────────────
         $pythonBin  = config('app.python_binary', 'python');
@@ -217,6 +250,7 @@ class WsiPreviewJob implements ShouldQueue
             ],
             'wsi_path' => $wsiPath,
             'thumb_rel' => $thumbRelPath,
+            'dzi_available' => !empty($pyData['dzi_relative_path']),
         ], self::CACHE_TTL);
 
         Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: inspection complete → "

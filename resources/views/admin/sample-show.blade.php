@@ -1162,13 +1162,36 @@
                 <div class="spinner-border text-primary" role="status">
                     <span class="sr-only">Loading…</span>
                 </div>
-                <p style="margin-top:.5rem; font-size:.8rem; color:#666;">Loading thumbnail…</p>
+                <p style="margin-top:.5rem; font-size:.8rem; color:#666;">Loading viewer…</p>
             </div>
+
+            {{--
+                OpenSeadragon DeepZoom viewer — renders QuPath-equivalent
+                full-resolution slides by streaming only the visible tiles
+                at the current zoom level. Falls back gracefully to the
+                static <img> below if no DZI pyramid is available.
+            --}}
+            <div id="osd-viewer"
+                 style="position:absolute; top:0; left:0; right:0; bottom:0; width:100%; height:100%; display:none; background:#111;"></div>
+
+            {{-- Static fallback image (only shown when DZI is not available) --}}
+            {{--
+                transform-origin:0 0 is critical for correct zoom-toward-cursor math.
+                The JS controls translate(tx,ty) scale(s) where (tx,ty) is the
+                top-left corner position in the container coordinate system.
+                max-width/max-height:none prevents the browser from clamping the image.
+                image-rendering:high-quality ensures bilinear/bicubic interpolation is
+                used at all zoom levels for maximum clinical image fidelity.
+            --}}
             <img id="modal-thumb-img" src="" alt="WSI"
-                 style="position:absolute; top:50%; left:50%;
-                        transform:translate(-50%,-50%) scale(1);
-                        transform-origin:center center; max-width:none; max-height:none;
-                        will-change:transform; display:none;"
+                 style="position:absolute; top:0; left:0;
+                        transform-origin:0 0;
+                        transform:translate(0px,0px) scale(1);
+                        max-width:none; max-height:none;
+                        will-change:transform;
+                        image-rendering:high-quality;
+                        image-rendering:-webkit-optimize-contrast;
+                        display:none;"
                  draggable="false">
         </div>
     </div>
@@ -1201,6 +1224,8 @@
 @endsection
 
 @push('scripts')
+<link  rel="stylesheet" href="https://cdn.jsdelivr.net/npm/openseadragon@4.1.0/build/openseadragon/openseadragon.min.css">
+<script src="https://cdn.jsdelivr.net/npm/openseadragon@4.1.0/build/openseadragon/openseadragon.min.js"></script>
 <script>
 (function () {
     'use strict';
@@ -1374,7 +1399,14 @@
     var lastData   = null; // cached result for "Re-open"
 
     /* ── Zoom / pan state ── */
-    var mScale = 1, mOriginX = 0, mOriginY = 0;
+    /* tx, ty: translation of image top-left corner relative to container top-left.
+       mScale: current zoom factor.
+       Correct transform-origin:0 0 math:
+         applyTransform → transform: translate(tx px, ty px) scale(mScale)
+         fitToScreen    → tx=(cw-iw*s)/2, ty=(ch-ih*s)/2
+         zoomAtCursor   → tx = cx - (cx-tx)*(newS/mScale)
+                          ty = cy - (cy-ty)*(newS/mScale)  */
+    var mScale = 1, mTx = 0, mTy = 0;
 
     /* ─────────────────────────────────────────────────────────────────── */
     /* Helpers                                                               */
@@ -1533,20 +1565,87 @@
     /* ─────────────────────────────────────────────────────────────────── */
     /* Fullscreen Modal                                                      */
     /* ─────────────────────────────────────────────────────────────────── */
+    var osdViewer = null; // OpenSeadragon instance, recreated per open
+
+    function destroyOsdViewer() {
+        if (osdViewer) {
+            try { osdViewer.destroy(); } catch (e) {}
+            osdViewer = null;
+        }
+        var osdHost = document.getElementById('osd-viewer');
+        if (osdHost) { osdHost.style.display = 'none'; osdHost.innerHTML = ''; }
+    }
+
     function openModal(data) {
         if (!elModal) return;
-
-        // Reset transform
-        mScale = 1; mOriginX = 0; mOriginY = 0;
-        applyModalTransform();
-        if (elModalZoomLbl) elModalZoomLbl.textContent = '100%';
 
         // Show modal
         elModal.style.display = 'flex';
         document.body.style.overflow = 'hidden';
 
-        // Load thumbnail
-        if (elModalThumb && data && data.thumbnail_url) {
+        // Reset transform state for the static <img> fallback
+        mScale = 1; mTx = 0; mTy = 0;
+        applyModalTransform();
+        if (elModalZoomLbl) elModalZoomLbl.textContent = '100%';
+
+        // Always destroy any existing OSD viewer first
+        destroyOsdViewer();
+
+        var hasDzi = data && data.dzi_url && typeof OpenSeadragon !== 'undefined';
+        var osdHost = document.getElementById('osd-viewer');
+
+        if (hasDzi && osdHost) {
+            // ── DeepZoom path: OpenSeadragon with native DZI parser ───────────
+            // Pass slide.dzi URL directly — OSD fetches it, reads Width/Height/
+            // TileSize, then builds tile URLs via its built-in DZI handler:
+            //   {url_without_ext}_files/{level}/{x}_{y}.jpeg
+            // The `slide_files/{level}/{tileFile}` Laravel route handles those.
+            if (elModalThumb) elModalThumb.style.display = 'none';
+            if (elModalSpinner) elModalSpinner.style.display = 'block';
+            osdHost.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;width:100%;height:100%;display:block;background:#111;';
+
+            osdViewer = OpenSeadragon({
+                element:              osdHost,
+                tileSources:          data.dzi_url,
+                prefixUrl:            'https://cdn.jsdelivr.net/npm/openseadragon@4.1.0/build/openseadragon/images/',
+                showNavigator:        true,
+                navigatorPosition:    'BOTTOM_RIGHT',
+                navigatorHeight:      120,
+                navigatorWidth:       160,
+                showRotationControl:  true,
+                gestureSettingsMouse: { clickToZoom: false, dblClickToZoom: true, scrollToZoom: true },
+                animationTime:        0.3,
+                blendTime:            0.1,
+                constrainDuringPan:   true,
+                visibilityRatio:      1.0,
+                minZoomImageRatio:    0.9,
+                maxZoomPixelRatio:    4.0,
+                immediateRender:      false,
+                imageLoaderLimit:     8,
+                timeout:              60000,
+                showZoomControl:      false,
+                showHomeControl:      false,
+                showFullPageControl:  false,
+                ajaxWithCredentials:  true,
+            });
+
+            osdViewer.addOnceHandler('open', function () {
+                if (elModalSpinner) elModalSpinner.style.display = 'none';
+                if (elModalZoomLbl) elModalZoomLbl.textContent = 'Fit';
+            });
+            osdViewer.addHandler('zoom', function () {
+                if (!osdViewer || !elModalZoomLbl) return;
+                var z  = osdViewer.viewport.getZoom(true);
+                var hz = osdViewer.viewport.getHomeZoom();
+                if (hz > 0) elModalZoomLbl.textContent = Math.round((z / hz) * 100) + '%';
+            });
+            osdViewer.addHandler('open-failed', function (e) {
+                if (elModalSpinner) elModalSpinner.innerHTML =
+                    '<i class="mdi mdi-image-broken-variant" style="font-size:3rem; color:#555;"></i>'
+                    + '<p style="margin-top:.5rem; font-size:.8rem; color:#f55;">Viewer open failed. Check console.</p>';
+            });
+        } else if (elModalThumb && data && data.thumbnail_url) {
+            // ── Fallback path: static thumbnail ──────────────────────────────
             elModalThumb.style.display = 'none';
             if (elModalSpinner) elModalSpinner.style.display = 'block';
 
@@ -1569,6 +1668,7 @@
 
     function closeModal() {
         if (!elModal) return;
+        destroyOsdViewer();
         elModal.style.display = 'none';
         document.body.style.overflow = '';
         document.removeEventListener('keydown', onModalKeyDown);
@@ -1576,9 +1676,24 @@
 
     function onModalKeyDown(e) {
         if (e.key === 'Escape') confirmCloseAndDelete();
-        if (e.key === '+' || e.key === '=') { mScale = Math.min(mScale * 1.2, 30); applyModalTransform(); }
-        if (e.key === '-')                   { mScale = Math.max(mScale * 0.83, 0.05); applyModalTransform(); }
-        if (e.key === '0')                   { fitToScreen(); }
+        var cx, cy, newScale;
+        if (e.key === '+' || e.key === '=') {
+            cx = elModalContainer.clientWidth / 2; cy = elModalContainer.clientHeight / 2;
+            newScale = Math.min(mScale * 1.2, 40);
+            mTx = cx - (cx - mTx) * (newScale / mScale);
+            mTy = cy - (cy - mTy) * (newScale / mScale);
+            mScale = newScale;
+            applyModalTransform();
+        }
+        if (e.key === '-') {
+            cx = elModalContainer.clientWidth / 2; cy = elModalContainer.clientHeight / 2;
+            newScale = Math.max(mScale * 0.83, 0.02);
+            mTx = cx - (cx - mTx) * (newScale / mScale);
+            mTy = cy - (cy - mTy) * (newScale / mScale);
+            mScale = newScale;
+            applyModalTransform();
+        }
+        if (e.key === '0') { fitToScreen(); }
     }
 
     /* Confirm + cleanup (one-shot viewing). */
@@ -1600,8 +1715,10 @@
     /* ─────────────────────────────────────────────────────────────────── */
     function applyModalTransform() {
         if (!elModalThumb) return;
+        // transform-origin is 0 0 (top-left of image).
+        // translate moves the image top-left corner to (mTx, mTy) inside the container.
         elModalThumb.style.transform =
-            'translate(calc(-50% + ' + mOriginX + 'px), calc(-50% + ' + mOriginY + 'px)) scale(' + mScale + ')';
+            'translate(' + mTx + 'px, ' + mTy + 'px) scale(' + mScale + ')';
         if (elModalZoomLbl) elModalZoomLbl.textContent = Math.round(mScale * 100) + '%';
     }
 
@@ -1611,39 +1728,44 @@
         var ch = elModalContainer.clientHeight;
         var iw = elModalThumb.naturalWidth  || elModalThumb.width  || cw;
         var ih = elModalThumb.naturalHeight || elModalThumb.height || ch;
-        mScale   = Math.min(cw / iw, ch / ih, 1) * 0.97; // slight padding
-        mOriginX = 0;
-        mOriginY = 0;
+        // Scale to fit with 2% padding on each side
+        mScale  = Math.min(cw / iw, ch / ih) * 0.97;
+        // Centre the image in the container
+        mTx = (cw - iw * mScale) / 2;
+        mTy = (ch - ih * mScale) / 2;
         applyModalTransform();
     }
 
     if (elModalContainer) {
-        // Mouse wheel zoom (zooms toward cursor position)
+        // Mouse wheel zoom — zooms toward the cursor position
         elModalContainer.addEventListener('wheel', function (e) {
             e.preventDefault();
-            var rect   = elModalContainer.getBoundingClientRect();
-            var cx     = e.clientX - rect.left - rect.width  / 2;
-            var cy     = e.clientY - rect.top  - rect.height / 2;
-            var factor = e.deltaY < 0 ? 1.12 : 0.89;
-            var newScale = Math.min(Math.max(mScale * factor, 0.05), 30);
-            mOriginX = cx + (mOriginX - cx) * (newScale / mScale);
-            mOriginY = cy + (mOriginY - cy) * (newScale / mScale);
-            mScale   = newScale;
+            var rect     = elModalContainer.getBoundingClientRect();
+            // Cursor position relative to container top-left
+            var cx       = e.clientX - rect.left;
+            var cy       = e.clientY - rect.top;
+            var factor   = e.deltaY < 0 ? 1.12 : 0.89;
+            var newScale = Math.min(Math.max(mScale * factor, 0.02), 40);
+            // Correct zoom-toward-cursor with transform-origin:0 0:
+            //   newTx = cx - (cx - mTx) * (newScale / mScale)
+            mTx    = cx - (cx - mTx) * (newScale / mScale);
+            mTy    = cy - (cy - mTy) * (newScale / mScale);
+            mScale = newScale;
             applyModalTransform();
         }, { passive: false });
 
-        // Mouse drag
+        // Mouse drag (pan)
         var dragging = false, dragStartX = 0, dragStartY = 0;
         elModalContainer.addEventListener('mousedown', function (e) {
             dragging   = true;
-            dragStartX = e.clientX - mOriginX;
-            dragStartY = e.clientY - mOriginY;
+            dragStartX = e.clientX - mTx;
+            dragStartY = e.clientY - mTy;
             elModalContainer.style.cursor = 'grabbing';
         });
         window.addEventListener('mousemove', function (e) {
             if (!dragging) return;
-            mOriginX = e.clientX - dragStartX;
-            mOriginY = e.clientY - dragStartY;
+            mTx = e.clientX - dragStartX;
+            mTy = e.clientY - dragStartY;
             applyModalTransform();
         });
         window.addEventListener('mouseup', function () {
@@ -1652,41 +1774,70 @@
         });
 
         // Touch pinch-zoom + drag
-        var lastPinchDist = 0;
+        var lastPinchDist = 0, lastPinchMidX = 0, lastPinchMidY = 0;
         elModalContainer.addEventListener('touchstart', function (e) {
             if (e.touches.length === 2) {
+                var rect = elModalContainer.getBoundingClientRect();
                 lastPinchDist = Math.hypot(
                     e.touches[0].clientX - e.touches[1].clientX,
                     e.touches[0].clientY - e.touches[1].clientY);
+                lastPinchMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+                lastPinchMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
             } else if (e.touches.length === 1) {
                 dragging   = true;
-                dragStartX = e.touches[0].clientX - mOriginX;
-                dragStartY = e.touches[0].clientY - mOriginY;
+                dragStartX = e.touches[0].clientX - mTx;
+                dragStartY = e.touches[0].clientY - mTy;
             }
         }, { passive: true });
         elModalContainer.addEventListener('touchmove', function (e) {
             if (e.touches.length === 2) {
                 e.preventDefault();
-                var dist   = Math.hypot(
+                var rect = elModalContainer.getBoundingClientRect();
+                var dist = Math.hypot(
                     e.touches[0].clientX - e.touches[1].clientX,
                     e.touches[0].clientY - e.touches[1].clientY);
-                var ratio  = dist / (lastPinchDist || dist);
-                mScale = Math.min(Math.max(mScale * ratio, 0.05), 30);
+                var midX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+                var midY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+                var newScale = Math.min(Math.max(mScale * (dist / (lastPinchDist || dist)), 0.02), 40);
+                mTx = midX - (lastPinchMidX - mTx) * (newScale / mScale);
+                mTy = midY - (lastPinchMidY - mTy) * (newScale / mScale);
+                mScale        = newScale;
                 lastPinchDist = dist;
+                lastPinchMidX = midX;
+                lastPinchMidY = midY;
                 applyModalTransform();
             } else if (e.touches.length === 1 && dragging) {
-                mOriginX = e.touches[0].clientX - dragStartX;
-                mOriginY = e.touches[0].clientY - dragStartY;
+                mTx = e.touches[0].clientX - dragStartX;
+                mTy = e.touches[0].clientY - dragStartY;
                 applyModalTransform();
             }
         }, { passive: false });
         elModalContainer.addEventListener('touchend', function () { dragging = false; });
     }
 
-    // Zoom buttons
-    if (elModalZoomIn)  elModalZoomIn.addEventListener('click',  function () { mScale = Math.min(mScale * 1.25, 30); applyModalTransform(); });
-    if (elModalZoomOut) elModalZoomOut.addEventListener('click', function () { mScale = Math.max(mScale * 0.8, 0.05); applyModalTransform(); });
-    if (elModalZoomFit) elModalZoomFit.addEventListener('click', fitToScreen);
+    // Zoom buttons (work with both OpenSeadragon and the static-image fallback)
+    if (elModalZoomIn)  elModalZoomIn.addEventListener('click',  function () {
+        if (osdViewer) { osdViewer.viewport.zoomBy(1.25); osdViewer.viewport.applyConstraints(); return; }
+        var cx = elModalContainer.clientWidth / 2, cy = elModalContainer.clientHeight / 2;
+        var newScale = Math.min(mScale * 1.25, 40);
+        mTx = cx - (cx - mTx) * (newScale / mScale);
+        mTy = cy - (cy - mTy) * (newScale / mScale);
+        mScale = newScale;
+        applyModalTransform();
+    });
+    if (elModalZoomOut) elModalZoomOut.addEventListener('click', function () {
+        if (osdViewer) { osdViewer.viewport.zoomBy(0.8); osdViewer.viewport.applyConstraints(); return; }
+        var cx = elModalContainer.clientWidth / 2, cy = elModalContainer.clientHeight / 2;
+        var newScale = Math.max(mScale * 0.8, 0.02);
+        mTx = cx - (cx - mTx) * (newScale / mScale);
+        mTy = cy - (cy - mTy) * (newScale / mScale);
+        mScale = newScale;
+        applyModalTransform();
+    });
+    if (elModalZoomFit) elModalZoomFit.addEventListener('click', function () {
+        if (osdViewer) { osdViewer.viewport.goHome(); return; }
+        fitToScreen();
+    });
 
     /* ─────────────────────────────────────────────────────────────────── */
     /* Cleanup (delete temp file)                                            */

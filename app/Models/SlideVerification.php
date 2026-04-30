@@ -145,7 +145,7 @@ class SlideVerification extends Model
             'tissue_area_percent' => $this->numCheck($this->tissue_area_percent, fn ($v) => $v >= 10,        'min 10%'),
             'tissue_patch_count'  => $this->numCheck($this->tissue_patch_count,  fn ($v) => $v >= 50,        'min 50 patches'),
             'artifact_score'      => $this->numCheck($this->artifact_score,      fn ($v) => $v <= 0.30,      'max 0.30'),
-            'blur_score'          => $this->numCheck($this->blur_score,          fn ($v) => $v <= 0.30,      'max 0.30'),
+            'blur_score'          => $this->numCheck($this->blur_score,          fn ($v) => $v <= 0.65,      'max 0.65'),
             'background_ratio'    => $this->numCheck($this->background_ratio,    fn ($v) => $v <= 0.85,      'max 0.85'),
             default               => ['not_checked', null],
         };

@@ -44,6 +44,19 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::get('samples/{sample}/wsi-preview/thumbnail',  [WsiPreviewController::class, 'thumbnail'])->name('samples.wsi-preview.thumbnail');
         Route::post('samples/{sample}/wsi-preview/cleanup',   [WsiPreviewController::class, 'cleanup'])->name('samples.wsi-preview.cleanup');
 
+        // DeepZoom (OpenSeadragon) tile pyramid — full-resolution viewer
+        // Standard DZI URL scheme (used by OSD's native parser):
+        //   descriptor: /admin/samples/{id}/wsi-preview/slide.dzi
+        //   tiles:      /admin/samples/{id}/wsi-preview/slide_files/{level}/{x}_{y}.jpeg
+        Route::get('samples/{sample}/wsi-preview/dzi',                                  [WsiPreviewController::class, 'dzi'])->name('samples.wsi-preview.dzi');
+        Route::get('samples/{sample}/wsi-preview/slide.dzi',                            [WsiPreviewController::class, 'dzi'])->name('samples.wsi-preview.dzi-standard');
+        Route::get('samples/{sample}/wsi-preview/slide_files/{level}/{tileFile}',        [WsiPreviewController::class, 'dziTileStandard'])
+            ->where(['level' => '[0-9]+', 'tileFile' => '.+'])
+            ->name('samples.wsi-preview.dzi-tile-standard');
+        Route::get('samples/{sample}/wsi-preview/dzi-tile/{level}/{col}_{row}.{ext}',   [WsiPreviewController::class, 'dziTile'])
+            ->where(['level' => '[0-9]+', 'col' => '[0-9]+', 'row' => '[0-9]+', 'ext' => 'jpe?g|png'])
+            ->name('samples.wsi-preview.dzi-tile');
+
         Route::get('workflow', [DashboardController::class, 'workflow'])->name('workflow');
         Route::get('output', [DashboardController::class, 'output'])->name('output');
 
