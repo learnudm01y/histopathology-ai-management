@@ -57,7 +57,7 @@ class WsiPreviewController extends Controller
         // Mark as pending
         Cache::put($cacheKey, ['status' => 'pending'], 7200);
 
-        WsiPreviewJob::dispatch($sample->id);
+        WsiPreviewJob::dispatch($sample->id, 'preview');
 
         Log::info("[WsiPreviewController] Preview job dispatched for sample #{$sample->id}");
 

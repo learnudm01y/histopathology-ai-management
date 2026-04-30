@@ -66,7 +66,17 @@ class DashboardController extends Controller
             ->orderByDesc('id')
             ->get();
 
-        return view('admin.dashboard', compact('sampleStats', 'caseStats', 'verifStats', 'failedVerifications', 'rejectedSamples'));
+        // Disease type distribution: unique disease names + slide count per disease
+        $diseaseSlideStats = PatientCase::query()
+            ->select('cases.disease_type', \Illuminate\Support\Facades\DB::raw('COUNT(samples.id) as slide_count'))
+            ->leftJoin('samples', 'cases.id', '=', 'samples.case_id')
+            ->whereNotNull('cases.disease_type')
+            ->where('cases.disease_type', '!=', '')
+            ->groupBy('cases.disease_type')
+            ->orderByDesc('slide_count')
+            ->get();
+
+        return view('admin.dashboard', compact('sampleStats', 'caseStats', 'verifStats', 'failedVerifications', 'rejectedSamples', 'diseaseSlideStats'));
     }
 
     public function samples(Request $request): View
@@ -675,7 +685,7 @@ class DashboardController extends Controller
                 'error'  => null,
             ], 7200);
 
-            \App\Jobs\WsiPreviewJob::dispatch($sample->id);
+            \App\Jobs\WsiPreviewJob::dispatch($sample->id, 'verify');
             $phase2Queued = true;
         }
 

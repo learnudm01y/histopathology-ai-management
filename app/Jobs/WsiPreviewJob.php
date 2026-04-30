@@ -49,8 +49,15 @@ class WsiPreviewJob implements ShouldQueue
 
     private const CACHE_TTL = 7200; // seconds
 
+    /**
+     * 'verify'  — runs openslide_inspect.py only (fast, ~10-30 s).
+     *             Triggered by the "Verify Slide" button.
+     * 'preview' — runs wsi_preview_generate.py (full: thumbnail + quality
+     *             metrics). Triggered by the WSI Preview panel.
+     */
     public function __construct(
-        public readonly int $sampleId,
+        public readonly int    $sampleId,
+        public readonly string $mode = 'preview',
     ) {
         $this->onQueue('previews');
     }
@@ -135,16 +142,23 @@ class WsiPreviewJob implements ShouldQueue
         }
 
         // ── Run Python inspection script ─────────────────────────────────────
-        $pythonBin  = config('app.python_binary', 'python');
-        $scriptPath = base_path('scripts/wsi_preview_generate.py');
-        $outputDir  = $tempDir . DIRECTORY_SEPARATOR . 'preview_output';
+        // 'verify' mode  → openslide_inspect.py  (fast: checks + metadata only, ~10-30 s)
+        // 'preview' mode → wsi_preview_generate.py (full: thumbnail + quality metrics, ~1-2 min)
+        $pythonBin = config('app.python_binary', 'python');
 
-        if (!is_dir($outputDir)) {
-            mkdir($outputDir, 0755, true);
+        if ($this->mode === 'verify') {
+            $scriptPath = base_path('scripts/openslide_inspect.py');
+            $process    = new Process([$pythonBin, $scriptPath, $wsiPath]);
+            $process->setTimeout(180);
+        } else {
+            $scriptPath = base_path('scripts/wsi_preview_generate.py');
+            $outputDir  = $tempDir . DIRECTORY_SEPARATOR . 'preview_output';
+            if (!is_dir($outputDir)) {
+                mkdir($outputDir, 0755, true);
+            }
+            $process = new Process([$pythonBin, $scriptPath, $wsiPath, $outputDir]);
+            $process->setTimeout(3600);
         }
-
-        $process = new Process([$pythonBin, $scriptPath, $wsiPath, $outputDir]);
-        $process->setTimeout(3600); // 1 h for inspection + thumbnail of a huge slide
         $process->run();
 
         $stdout = trim($process->getOutput());
@@ -159,8 +173,13 @@ class WsiPreviewJob implements ShouldQueue
             // If 'python' binary failed (not found), retry with 'python3'
             if ($stdout === '' && $pythonBin === 'python') {
                 Log::warning("[WsiPreviewJob] Retrying with python3 binary for sample #{$this->sampleId}");
-                $process2 = new Process(['python3', $scriptPath, $wsiPath, $outputDir]);
-                $process2->setTimeout(3600);
+                if ($this->mode === 'verify') {
+                    $process2 = new Process(['python3', $scriptPath, $wsiPath]);
+                    $process2->setTimeout(180);
+                } else {
+                    $process2 = new Process(['python3', $scriptPath, $wsiPath, $outputDir ?? '']);
+                    $process2->setTimeout(3600);
+                }
                 $process2->run();
                 $stdout = trim($process2->getOutput());
                 $stderr2 = trim($process2->getErrorOutput());
@@ -218,13 +237,23 @@ class WsiPreviewJob implements ShouldQueue
         app(SlideVerificationService::class)->recomputeStatus($verification);
 
         // ── Determine thumbnail relative path for serving ────────────────────
-        $thumbAbsPath  = $pyData['thumbnail_path'] ?? null;
-        $thumbRelPath  = null;
+        // Only wsi_preview_generate.py produces a thumbnail (preview mode).
+        $thumbAbsPath = $pyData['thumbnail_path'] ?? null;
+        $thumbRelPath = null;
 
         if ($thumbAbsPath && is_file($thumbAbsPath)) {
-            // Store relative to storage/app so we can serve it via Storage
             $thumbRelPath = 'wsi_previews/' . $this->sampleId . '/preview_output/thumbnail.jpg';
         }
+
+        // In verify mode, keep any existing thumbnail that was previously generated.
+        if ($this->mode === 'verify') {
+            $existing     = Cache::get($cacheKey);
+            $thumbRelPath = $existing['thumb_rel'] ?? $thumbRelPath;
+        }
+
+        $hasDimensions = isset($pyData['slide_width'], $pyData['slide_height'])
+            && (int) $pyData['slide_width']  > 0
+            && (int) $pyData['slide_height'] > 0;
 
         // ── Cache result for frontend polling ────────────────────────────────
         Cache::put($cacheKey, [
@@ -248,21 +277,14 @@ class WsiPreviewJob implements ShouldQueue
                 'blur_score'            => $pyData['blur_score']            ?? null,
                 'background_ratio'      => $pyData['background_ratio']      ?? null,
             ],
-            'wsi_path' => $wsiPath,
-            'thumb_rel' => $thumbRelPath,
-            // Tiles are served on-demand by wsi_tile_server.py — no pre-generation.
-            // DZI is available whenever we have valid slide dimensions in the cache.
-            'dzi_available' => (
-                isset($pyData['slide_width'], $pyData['slide_height'])
-                && (int) $pyData['slide_width']  > 0
-                && (int) $pyData['slide_height'] > 0
-            ),
+            'wsi_path'      => $wsiPath,
+            'thumb_rel'     => $thumbRelPath,
+            'dzi_available' => $hasDimensions,
         ], self::CACHE_TTL);
 
-        Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: inspection complete → "
+        Log::info("[WsiPreviewJob] Sample #{$this->sampleId} ({$this->mode}): inspection complete → "
             . "open={$verificationData['open_slide_status']} "
             . "integrity={$verificationData['file_integrity_status']} "
-            . "read={$verificationData['read_test_status']} "
             . "read={$verificationData['read_test_status']}");
     }
 

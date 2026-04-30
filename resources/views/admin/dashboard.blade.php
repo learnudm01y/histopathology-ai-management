@@ -443,4 +443,106 @@
     </div>
 </div>
 
+{{-- ── Disease Type Distribution Chart ─────────────────────────────────── --}}
+@if($diseaseSlideStats->isNotEmpty())
+<h5 class="text-muted font-weight-bold mb-2 mt-2" style="font-size:.8rem; letter-spacing:.05em; text-transform:uppercase;">
+    <i class="mdi mdi-dna mr-1"></i> Disease Type Distribution
+    <span class="badge badge-secondary ml-2" style="font-size:.7rem; vertical-align:middle;">
+        {{ $diseaseSlideStats->count() }} {{ Str::plural('disease', $diseaseSlideStats->count()) }}
+    </span>
+</h5>
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card shadow-sm">
+            <div class="card-body px-3 py-3">
+                <div style="position:relative; height:{{ max(220, $diseaseSlideStats->count() * 38) }}px;">
+                    <canvas id="diseaseSlideChart"></canvas>
+                </div>
+            </div>
+            <div class="card-footer py-2 px-3 d-flex flex-wrap" style="background:transparent; gap:.4rem;">
+                @foreach($diseaseSlideStats as $row)
+                <span class="badge badge-light border" style="font-size:.72rem;">
+                    {{ $row->disease_type }}
+                    <span class="badge badge-primary ml-1">{{ number_format($row->slide_count) }}</span>
+                </span>
+                @endforeach
+            </div>
+        </div>
+    </div>
+</div>
+@endif
+
 @endsection
+
+@push('scripts')
+@if($diseaseSlideStats->isNotEmpty())
+<script>
+(function () {
+    'use strict';
+
+    var labels = @json($diseaseSlideStats->pluck('disease_type'));
+    var counts  = @json($diseaseSlideStats->pluck('slide_count'));
+
+    // Generate a palette of distinct colours
+    function genColors(n) {
+        var palette = [
+            'rgba(63,81,181,.75)','rgba(0,150,136,.75)','rgba(255,152,0,.75)',
+            'rgba(244,67,54,.75)','rgba(103,58,183,.75)','rgba(0,188,212,.75)',
+            'rgba(76,175,80,.75)','rgba(255,87,34,.75)','rgba(233,30,99,.75)',
+            'rgba(96,125,139,.75)','rgba(205,220,57,.75)','rgba(121,85,72,.75)'
+        ];
+        var out = [];
+        for (var i = 0; i < n; i++) out.push(palette[i % palette.length]);
+        return out;
+    }
+
+    var colors = genColors(labels.length);
+
+    var ctx = document.getElementById('diseaseSlideChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'horizontalBar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Slides',
+                data: counts,
+                backgroundColor: colors,
+                borderColor: colors.map(function (c) { return c.replace('.75', '1'); }),
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            legend: { display: false },
+            tooltips: {
+                callbacks: {
+                    label: function (item) {
+                        return ' ' + item.xLabel + ' slide' + (item.xLabel !== 1 ? 's' : '');
+                    }
+                }
+            },
+            scales: {
+                xAxes: [{
+                    ticks: {
+                        beginAtZero: true,
+                        precision: 0,
+                        fontColor: '#6c757d',
+                        fontSize: 11
+                    },
+                    gridLines: { color: 'rgba(0,0,0,.05)' }
+                }],
+                yAxes: [{
+                    ticks: {
+                        fontColor: '#495057',
+                        fontSize: 11
+                    },
+                    gridLines: { display: false }
+                }]
+            }
+        }
+    });
+}());
+</script>
+@endif
+@endpush
