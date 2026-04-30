@@ -168,68 +168,160 @@ class WsiPreviewJob implements ShouldQueue
         }
 
         // ── Run Python inspection script ─────────────────────────────────────
-        // 'verify' mode  → openslide_inspect.py  (fast: checks + metadata only, ~10-30 s)
-        // 'preview' mode → wsi_preview_generate.py (full: thumbnail + quality metrics, ~1-2 min)
-        $pythonBin = config('app.python_binary', PHP_OS_FAMILY === 'Windows' ? 'python' : 'python3');
+        // BOTH modes start with openslide_inspect.py (fast: ~5-15 s).
+        // In 'preview' mode we additionally run wsi_preview_generate.py for
+        // the thumbnail and deep metrics — but ONLY AFTER we've already set the
+        // cache to 'ready' so the DZI viewer can open without waiting.
+        $pythonBin  = config('app.python_binary', PHP_OS_FAMILY === 'Windows' ? 'python' : 'python3');
+        $inspectScript = base_path('scripts/openslide_inspect.py');
 
-        if ($this->mode === 'verify') {
-            $scriptPath = base_path('scripts/openslide_inspect.py');
-            $process    = new Process([$pythonBin, $scriptPath, $wsiPath]);
-            $process->setTimeout(180);
-        } else {
-            $scriptPath = base_path('scripts/wsi_preview_generate.py');
-            $outputDir  = $tempDir . DIRECTORY_SEPARATOR . 'preview_output';
-            if (!is_dir($outputDir)) {
-                mkdir($outputDir, 0755, true);
-            }
-            $process = new Process([$pythonBin, $scriptPath, $wsiPath, $outputDir]);
-            $process->setTimeout(3600);
-        }
-        $process->run();
+        $fastProcess = new Process([$pythonBin, $inspectScript, $wsiPath]);
+        $fastProcess->setTimeout(180);
+        $fastProcess->run();
 
-        $stdout = trim($process->getOutput());
-        $stderr = trim($process->getErrorOutput());
-        $pyData = json_decode($stdout, true);
+        $fastStdout = trim($fastProcess->getOutput());
+        $fastStderr = trim($fastProcess->getErrorOutput());
 
-        if ($stderr !== '') {
-            Log::warning("[WsiPreviewJob] Python stderr for sample #{$this->sampleId}: {$stderr}");
+        if ($fastStderr !== '') {
+            Log::warning("[WsiPreviewJob] Python stderr for sample #{$this->sampleId}: {$fastStderr}");
         }
 
-        if (!is_array($pyData)) {
-            // If 'python' binary failed (not found), retry with 'python3'
-            if ($stdout === '' && $pythonBin === 'python') {
-                Log::warning("[WsiPreviewJob] Retrying with python3 binary for sample #{$this->sampleId}");
-                if ($this->mode === 'verify') {
-                    $process2 = new Process(['python3', $scriptPath, $wsiPath]);
-                    $process2->setTimeout(180);
-                } else {
-                    $process2 = new Process(['python3', $scriptPath, $wsiPath, $outputDir ?? '']);
-                    $process2->setTimeout(3600);
-                }
-                $process2->run();
-                $stdout = trim($process2->getOutput());
-                $stderr2 = trim($process2->getErrorOutput());
-                if ($stderr2 !== '') {
-                    Log::warning("[WsiPreviewJob] python3 stderr for sample #{$this->sampleId}: {$stderr2}");
-                }
-                $pyData = json_decode($stdout, true);
-            }
+        $fastData = json_decode($fastStdout, true);
 
-            if (!is_array($pyData)) {
-                Log::error("[WsiPreviewJob] Could not parse Python output for sample #{$this->sampleId}. stdout=[{$stdout}] stderr=[{$stderr}]");
-                $this->_cacheError($cacheKey, 'WSI inspection script returned unexpected output.');
-                return;
+        // Retry with python3 when 'python' is not found on this system.
+        if (!is_array($fastData) && $fastStdout === '' && $pythonBin === 'python') {
+            Log::warning("[WsiPreviewJob] Retrying with python3 binary for sample #{$this->sampleId}");
+            $retry = new Process(['python3', $inspectScript, $wsiPath]);
+            $retry->setTimeout(180);
+            $retry->run();
+            $fastStdout = trim($retry->getOutput());
+            if (($s = trim($retry->getErrorOutput())) !== '') {
+                Log::warning("[WsiPreviewJob] python3 stderr for sample #{$this->sampleId}: {$s}");
             }
+            $fastData = json_decode($fastStdout, true);
+            $pythonBin = 'python3'; // use python3 for subsequent calls too
         }
 
-        // Detect silent Python failures (e.g. missing openslide library)
-        if (!empty($pyData['error'])) {
-            Log::error("[WsiPreviewJob] Python script error for sample #{$this->sampleId}: {$pyData['error']}");
-            $this->_cacheError($cacheKey, $pyData['error']);
+        if (!is_array($fastData)) {
+            Log::error("[WsiPreviewJob] Could not parse openslide_inspect output for sample #{$this->sampleId}. stdout=[{$fastStdout}]");
+            $this->_cacheError($cacheKey, 'WSI inspection script returned unexpected output.');
             return;
         }
 
-        // ── Update verification record ────────────────────────────────────────
+        if (!empty($fastData['error']) && ($fastData['open_slide_status'] ?? '') === 'failed') {
+            Log::error("[WsiPreviewJob] openslide_inspect error for sample #{$this->sampleId}: {$fastData['error']}");
+            $this->_cacheError($cacheKey, $fastData['error']);
+            return;
+        }
+
+        // ── Phase 1: persist fast metadata & mark cache ready ────────────────
+        // The DZI viewer can now open. Thumbnail + deep metrics follow below.
+        $hasDimensions = isset($fastData['slide_width'], $fastData['slide_height'])
+            && (int) $fastData['slide_width']  > 0
+            && (int) $fastData['slide_height'] > 0;
+
+        // Keep any existing thumbnail from a previous preview run.
+        $existingCache = Cache::get($cacheKey);
+        $thumbRelPath  = $existingCache['thumb_rel'] ?? null;
+
+        $buildMeta = fn(array $d) => [
+            'level_count'         => $d['level_count']         ?? null,
+            'slide_width'         => $d['slide_width']         ?? null,
+            'slide_height'        => $d['slide_height']        ?? null,
+            'mpp_x'               => $d['mpp_x']               ?? null,
+            'mpp_y'               => $d['mpp_y']               ?? null,
+            'magnification_power' => $d['magnification_power'] ?? null,
+            'tissue_area_percent' => $d['tissue_area_percent'] ?? null,
+            'tissue_patch_count'  => $d['tissue_patch_count']  ?? null,
+            'artifact_score'      => $d['artifact_score']      ?? null,
+            'blur_score'          => $d['blur_score']           ?? null,
+            'background_ratio'    => $d['background_ratio']    ?? null,
+        ];
+
+        $buildChecks = fn(array $d) => [
+            'open_slide_status'     => $d['open_slide_status']     ?? 'not_checked',
+            'file_integrity_status' => $d['file_integrity_status'] ?? 'not_checked',
+            'read_test_status'      => $d['read_test_status']      ?? 'not_checked',
+        ];
+
+        Cache::put($cacheKey, [
+            'status'               => 'ready',
+            'error'                => $fastData['error'] ?? null,
+            'checks'               => $buildChecks($fastData),
+            'wsi_meta'             => $buildMeta($fastData),
+            'wsi_path'             => $wsiPath,
+            'thumb_rel'            => $thumbRelPath,
+            'dzi_available'        => $hasDimensions,
+            'thumbnail_generating' => ($this->mode === 'preview'), // hint for UI
+        ], self::CACHE_TTL);
+
+        // Persist fast check results to DB immediately.
+        $this->_persistVerification($fastData, $this->sampleId);
+
+        Log::info("[WsiPreviewJob] Sample #{$this->sampleId} ({$this->mode}): inspection complete → "
+            . "open={$fastData['open_slide_status']} "
+            . "integrity={$fastData['file_integrity_status']} "
+            . "read={$fastData['read_test_status']}");
+
+        // ── Phase 2 (preview mode only): thumbnail + deep metrics ────────────
+        // Runs AFTER cache is already 'ready' — the DZI viewer is already open
+        // on the user's browser while this runs in the background.
+        if ($this->mode === 'preview') {
+            $outputDir = storage_path("app/wsi_previews/{$this->sampleId}/preview_output");
+            if (!is_dir($outputDir)) {
+                mkdir($outputDir, 0755, true);
+            }
+
+            $deepProcess = new Process(
+                [$pythonBin, base_path('scripts/wsi_preview_generate.py'), $wsiPath, $outputDir]
+            );
+            $deepProcess->setTimeout(3600);
+            $deepProcess->run();
+
+            $deepStdout = trim($deepProcess->getOutput());
+            if (($s = trim($deepProcess->getErrorOutput())) !== '') {
+                Log::warning("[WsiPreviewJob] wsi_preview_generate stderr for sample #{$this->sampleId}: {$s}");
+            }
+
+            $deepData = json_decode($deepStdout, true);
+
+            if (is_array($deepData)) {
+                // Update DB with deep metrics (they supersede the fast values).
+                $this->_persistVerification($deepData, $this->sampleId);
+
+                // Determine thumbnail path.
+                $thumbAbsPath = $deepData['thumbnail_path'] ?? null;
+                $thumbRelPath = ($thumbAbsPath && is_file($thumbAbsPath))
+                    ? 'wsi_previews/' . $this->sampleId . '/preview_output/thumbnail.jpg'
+                    : ($existingCache['thumb_rel'] ?? null);
+
+                // Merge deep data into the existing 'ready' cache entry.
+                $current = Cache::get($cacheKey) ?? [];
+                Cache::put($cacheKey, array_merge($current, [
+                    'checks'               => $buildChecks($deepData),
+                    'wsi_meta'             => $buildMeta($deepData),
+                    'thumb_rel'            => $thumbRelPath,
+                    'thumbnail_generating' => false,
+                ]), self::CACHE_TTL);
+
+                Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: deep inspection complete, thumbnail=" . ($thumbRelPath ? 'yes' : 'no'));
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
+    public function failed(\Throwable $exception): void
+    {
+        $cacheKey = "wsi_preview:{$this->sampleId}";
+        $this->_cacheError($cacheKey, $exception->getMessage());
+        Log::error("[WsiPreviewJob] Job failed for sample #{$this->sampleId}: " . $exception->getMessage());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private function _persistVerification(array $pyData, int $sampleId): void
+    {
         $verificationData = array_filter([
             'open_slide_status'     => $pyData['open_slide_status']     ?? null,
             'file_integrity_status' => $pyData['file_integrity_status'] ?? null,
@@ -248,82 +340,20 @@ class WsiPreviewJob implements ShouldQueue
             'verified_at'           => now()->toDateTimeString(),
         ], fn($v) => $v !== null);
 
-        // Force the status columns even if null (we must overwrite 'not_checked')
+        // Force status columns (must overwrite 'not_checked').
         foreach (['open_slide_status', 'file_integrity_status', 'read_test_status'] as $col) {
             if (isset($pyData[$col])) {
                 $verificationData[$col] = $pyData[$col];
             }
         }
+
         $verification = SlideVerification::updateOrCreate(
-            ['sample_id' => $this->sampleId],
+            ['sample_id' => $sampleId],
             $verificationData,
         );
 
-        // Recompute aggregate verification_status (passed / failed / pending)
         app(SlideVerificationService::class)->recomputeStatus($verification);
-
-        // ── Determine thumbnail relative path for serving ────────────────────
-        // Only wsi_preview_generate.py produces a thumbnail (preview mode).
-        $thumbAbsPath = $pyData['thumbnail_path'] ?? null;
-        $thumbRelPath = null;
-
-        if ($thumbAbsPath && is_file($thumbAbsPath)) {
-            $thumbRelPath = 'wsi_previews/' . $this->sampleId . '/preview_output/thumbnail.jpg';
-        }
-
-        // In verify mode, keep any existing thumbnail that was previously generated.
-        if ($this->mode === 'verify') {
-            $existing     = Cache::get($cacheKey);
-            $thumbRelPath = $existing['thumb_rel'] ?? $thumbRelPath;
-        }
-
-        $hasDimensions = isset($pyData['slide_width'], $pyData['slide_height'])
-            && (int) $pyData['slide_width']  > 0
-            && (int) $pyData['slide_height'] > 0;
-
-        // ── Cache result for frontend polling ────────────────────────────────
-        Cache::put($cacheKey, [
-            'status'   => 'ready',
-            'error'    => $pyData['error'] ?? null,
-            'checks'   => [
-                'open_slide_status'     => $pyData['open_slide_status']     ?? 'not_checked',
-                'file_integrity_status' => $pyData['file_integrity_status'] ?? 'not_checked',
-                'read_test_status'      => $pyData['read_test_status']      ?? 'not_checked',
-            ],
-            'wsi_meta' => [
-                'level_count'           => $pyData['level_count']           ?? null,
-                'slide_width'           => $pyData['slide_width']           ?? null,
-                'slide_height'          => $pyData['slide_height']          ?? null,
-                'mpp_x'                 => $pyData['mpp_x']                 ?? null,
-                'mpp_y'                 => $pyData['mpp_y']                 ?? null,
-                'magnification_power'   => $pyData['magnification_power']   ?? null,
-                'tissue_area_percent'   => $pyData['tissue_area_percent']   ?? null,
-                'tissue_patch_count'    => $pyData['tissue_patch_count']    ?? null,
-                'artifact_score'        => $pyData['artifact_score']        ?? null,
-                'blur_score'            => $pyData['blur_score']            ?? null,
-                'background_ratio'      => $pyData['background_ratio']      ?? null,
-            ],
-            'wsi_path'      => $wsiPath,
-            'thumb_rel'     => $thumbRelPath,
-            'dzi_available' => $hasDimensions,
-        ], self::CACHE_TTL);
-
-        Log::info("[WsiPreviewJob] Sample #{$this->sampleId} ({$this->mode}): inspection complete → "
-            . "open={$verificationData['open_slide_status']} "
-            . "integrity={$verificationData['file_integrity_status']} "
-            . "read={$verificationData['read_test_status']}");
     }
-
-    // ─────────────────────────────────────────────────────────────────────────
-
-    public function failed(\Throwable $exception): void
-    {
-        $cacheKey = "wsi_preview:{$this->sampleId}";
-        $this->_cacheError($cacheKey, $exception->getMessage());
-        Log::error("[WsiPreviewJob] Job failed for sample #{$this->sampleId}: " . $exception->getMessage());
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
 
     private function resolveRemotePath(Sample $sample): ?string
     {
