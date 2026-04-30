@@ -359,9 +359,10 @@ class WsiPreviewController extends Controller
         // Prefer the venv Python (matches the server environment).
         $venvPython = base_path('venv/bin/python3');
         if (PHP_OS_FAMILY === 'Windows') {
-            $python = 'python';
-            // On Windows, start detached so PHP does not wait for the process.
-            $cmd = "start /B \"wsi-tile-server\" python " . escapeshellarg($script);
+            // 'start' is a cmd.exe built-in, so we must invoke it through cmd /c.
+            // /B = no new window, keep it attached to the same console group.
+            $scriptArg = str_replace('/', DIRECTORY_SEPARATOR, $script);
+            $cmd = 'cmd /c start /B python ' . escapeshellarg($scriptArg) . ' > NUL 2>&1';
             pclose(popen($cmd, 'r'));
         } else {
             $python = is_file($venvPython) ? $venvPython : 'python3';
@@ -370,8 +371,8 @@ class WsiPreviewController extends Controller
 
         Log::info('[WsiPreviewController] Started wsi_tile_server.py — waiting for port 8001…');
 
-        // Poll for up to 8 seconds.
-        for ($i = 0; $i < 16; $i++) {
+        // Poll for up to 15 seconds (Flask on Windows can take a moment).
+        for ($i = 0; $i < 30; $i++) {
             usleep(500_000); // 0.5 s
             if ($this->isTileServerUp()) {
                 Log::info('[WsiPreviewController] Tile server is now up.');
@@ -379,7 +380,7 @@ class WsiPreviewController extends Controller
             }
         }
 
-        Log::warning('[WsiPreviewController] Tile server did not start within 8 s.');
+        Log::warning('[WsiPreviewController] Tile server did not start within 15 s.');
     }
 
     private function isTileServerUp(): bool
