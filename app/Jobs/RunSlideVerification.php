@@ -61,5 +61,25 @@ class RunSlideVerification implements ShouldQueue, ShouldBeUnique
             Log::error("[RunSlideVerification] Sample #{$this->sampleId} failed: " . $e->getMessage());
             throw $e;
         }
+
+        // Phase 1 (metadata-only) almost always results in 'pending' because
+        // WSI-derived checks (open_slide, level_count, mpp, tissue %) require
+        // OpenSlide. Dispatch WsiPreviewJob (mode='verify') so those checks run
+        // and quality_status can advance to 'passed' or 'rejected'.
+        $hasSource = $sample->file_id
+            || $sample->wsi_remote_path
+            || $sample->storage_path;
+
+        // Skip if deep checks already exist (open_slide_status was set by a
+        // previous run) — avoids re-downloading a file we already inspected.
+        $alreadyInspected = \App\Models\SlideVerification::where('sample_id', $sample->id)
+            ->whereNotNull('open_slide_status')
+            ->where('open_slide_status', '!=', 'not_checked')
+            ->exists();
+
+        if ($hasSource && !$alreadyInspected) {
+            WsiPreviewJob::dispatch($this->sampleId, 'verify');
+            Log::info("[RunSlideVerification] Sample #{$this->sampleId}: dispatched WsiPreviewJob (verify mode) for deep inspection.");
+        }
     }
 }
