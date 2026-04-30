@@ -61,6 +61,36 @@ class SlideVerificationService
             }
         }
 
+        // ── Preserve previously-computed Python values ──────────────────────
+        // collectMetadata() always sets artifact_score, blur_score and several
+        // other WSI-only fields to null because they require the Python worker.
+        // If this run did not produce new values for those fields we must NOT
+        // overwrite the non-null values that WsiPreviewJob wrote earlier;
+        // otherwise every Phase-1 verify resets quality scores back to null.
+        $existing = SlideVerification::where('sample_id', $sample->id)->first();
+        if ($existing) {
+            // Numeric fields: keep the existing value when $data is null.
+            $preserveIfNull = [
+                'level_count', 'slide_width', 'slide_height',
+                'mpp_x', 'mpp_y', 'magnification_power',
+                'tissue_area_percent', 'background_ratio',
+                'tissue_patch_count', 'artifact_score', 'blur_score',
+            ];
+            foreach ($preserveIfNull as $field) {
+                if (($data[$field] ?? null) === null && $existing->{$field} !== null) {
+                    $data[$field] = $existing->{$field};
+                }
+            }
+            // Status fields: preserve 'passed'/'failed' when PHP can only say
+            // 'not_checked' (file on Drive, no local path accessible this run).
+            foreach (['open_slide_status', 'file_integrity_status', 'read_test_status'] as $col) {
+                if (($data[$col] ?? 'not_checked') === 'not_checked'
+                    && in_array($existing->{$col}, ['passed', 'failed'], true)) {
+                    $data[$col] = $existing->{$col};
+                }
+            }
+        }
+
         // Persist or update the verification record (one per sample).
         $verification = SlideVerification::updateOrCreate(
             ['sample_id' => $sample->id],

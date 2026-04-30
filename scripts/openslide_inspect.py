@@ -53,6 +53,9 @@ result: dict[str, Any] = {
     "magnification_power": None,
     "tissue_area_percent": None,
     "background_ratio": None,
+    "tissue_patch_count": None,
+    "blur_score": None,
+    "artifact_score": None,
     "error": None,
 }
 
@@ -191,6 +194,105 @@ def main() -> None:
             tissue_pct = (tissue_pixels / total) * 100.0
             result["tissue_area_percent"] = round(tissue_pct, 2)
             result["background_ratio"] = round(1.0 - (tissue_pct / 100.0), 4)
+
+            # ── Advanced tissue quality metrics ───────────────────────────────
+            # tissue_patch_count, blur_score, artifact_score
+            # All computed best-effort — any failure leaves the value as None.
+            try:
+                PATCH_SIZE      = 256
+                MIN_TISSUE_FRAC = 0.20
+                ds    = float(slide.level_downsamples[target_lvl])
+                P_LVL = max(8, int(round(PATCH_SIZE / ds)))
+                nh_p  = lh // P_LVL
+                nw_p  = lw // P_LVL
+
+                tissue_fracs = None
+                if nh_p > 0 and nw_p > 0:
+                    arr_c = arr[:nh_p * P_LVL, :nw_p * P_LVL]
+                    pats  = arr_c.reshape(nh_p, P_LVL, nw_p, P_LVL)
+                    tissue_fracs = (pats < threshold).mean(axis=(1, 3))
+
+                    # ── 1. tissue_patch_count ─────────────────────────────────
+                    frac_tissue = float((tissue_fracs >= MIN_TISSUE_FRAC).mean())
+                    full_nx     = max(1, result["slide_width"]  // PATCH_SIZE)
+                    full_ny     = max(1, result["slide_height"] // PATCH_SIZE)
+                    result["tissue_patch_count"] = int(frac_tissue * full_nx * full_ny)
+
+                # ── 2. blur_score ─────────────────────────────────────────────
+                # Laplacian variance on tissue regions; 0 = sharp, 1 = blurry.
+                W0, H0 = result["slide_width"], result["slide_height"]
+                tissue_positions: list = []
+                if tissue_fracs is not None:
+                    tissue_idx = np.argwhere(tissue_fracs >= MIN_TISSUE_FRAC)
+                    if len(tissue_idx) > 0:
+                        rng = np.random.default_rng(seed=42)
+                        chosen = tissue_idx if len(tissue_idx) <= 12 else tissue_idx[
+                            rng.choice(len(tissue_idx), size=12, replace=False)]
+                        for pi, pj in chosen:
+                            cx0 = int((pj + 0.5) * P_LVL * ds)
+                            cy0 = int((pi + 0.5) * P_LVL * ds)
+                            sx  = int(max(0, min(cx0 - 256, W0 - 512)))
+                            sy  = int(max(0, min(cy0 - 256, H0 - 512)))
+                            tissue_positions.append((sx, sy))
+                if not tissue_positions:
+                    tissue_positions = [(max(0, W0 // 2 - 256), max(0, H0 // 2 - 256))]
+
+                lap_vars: list = []
+                for sx, sy in tissue_positions[:10]:
+                    try:
+                        tile = slide.read_region((sx, sy), 0, (512, 512)).convert("L")
+                        ta   = np.asarray(tile, dtype=np.float32)
+                        lap  = (
+                            -4.0 * ta[1:-1, 1:-1]
+                            + ta[:-2, 1:-1] + ta[2:, 1:-1]
+                            + ta[1:-1, :-2] + ta[1:-1, 2:]
+                        )
+                        lap_vars.append(float(np.var(lap)))
+                    except Exception:
+                        pass
+
+                if lap_vars:
+                    mean_var = float(np.mean(lap_vars))
+                    # 0 = sharp, 1 = blurry; threshold in model is <= 0.65.
+                    # Sharp 20x H&E:  var >= 200  → score <= 0.60
+                    # Blurry slide:   var <  100  → score >= 0.75
+                    result["blur_score"] = round(1.0 / (1.0 + mean_var / 300.0), 4)
+
+                # ── 3. artifact_score ─────────────────────────────────────────
+                # Detect pen marks (high saturation, non-H&E hue) and very dark
+                # folds. artifact_score = fraction of tissue pixels flagged.
+                region_rgb = slide.read_region((0, 0), target_lvl, (lw, lh)).convert("RGB")
+                arr_rgb    = np.asarray(region_rgb, dtype=np.uint8).astype(np.float32) / 255.0
+                R_ch = arr_rgb[:, :, 0]
+                G_ch = arr_rgb[:, :, 1]
+                B_ch = arr_rgb[:, :, 2]
+                Cmax  = np.maximum(np.maximum(R_ch, G_ch), B_ch)
+                Cmin  = np.minimum(np.minimum(R_ch, G_ch), B_ch)
+                delta = Cmax - Cmin
+                eps   = 1e-8
+                S_ch  = np.where(Cmax > eps, delta / (Cmax + eps), 0.0)
+                V_ch  = Cmax
+                H_ch  = np.zeros_like(R_ch)
+                mr = (Cmax == R_ch) & (delta > eps)
+                mg = (Cmax == G_ch) & (delta > eps)
+                mb = (Cmax == B_ch) & (delta > eps)
+                H_ch[mr] = (60.0 * ((G_ch[mr] - B_ch[mr]) / (delta[mr] + eps))) % 360.0
+                H_ch[mg] =  60.0 * ((B_ch[mg] - R_ch[mg]) / (delta[mg] + eps)) + 120.0
+                H_ch[mb] =  60.0 * ((R_ch[mb] - G_ch[mb]) / (delta[mb] + eps)) + 240.0
+                tissue_mask  = arr < threshold
+                tissue_total = float(tissue_mask.sum())
+                he_hue_mask  = ((H_ch >= 300) | (H_ch <= 30) |
+                                ((H_ch >= 200) & (H_ch <= 270)))
+                pen_marks      = tissue_mask & (S_ch > 0.45) & ~he_hue_mask
+                dark_artifacts = tissue_mask & (V_ch < 0.12)
+                artifact_px    = float((pen_marks | dark_artifacts).sum())
+                result["artifact_score"] = round(
+                    artifact_px / (tissue_total + 1.0), 4
+                )
+            except Exception as exc_qm:
+                prev = result.get("error") or ""
+                result["error"] = (prev + f"; quality metrics failed: {exc_qm}").lstrip("; ")
+
     except Exception:
         # Non-fatal: leave as None so the PHP layer treats it as not_checked.
         pass
