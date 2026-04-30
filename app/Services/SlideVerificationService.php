@@ -186,7 +186,7 @@ class SlideVerificationService
             ?? ($sample->getAttributes()['category'] ?? null);
 
         // Determine label clarity
-        $labelStatus = 'unknown';
+        $labelStatus = null;
         if ($label) {
             $lower = strtolower((string) $label);
             $labelStatus = match (true) {

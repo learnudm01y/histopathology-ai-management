@@ -50,15 +50,15 @@ class SlideVerification extends Model
         // WSI technical properties
         ['code' => 'level_count',             'label' => 'Multi-resolution levels exist',           'group' => 'wsi',      'kind' => 'numeric'],
         ['code' => 'slide_dimensions',        'label' => 'Slide dimensions are sufficient',         'group' => 'wsi',      'kind' => 'numeric'],
-        ['code' => 'mpp_x',                   'label' => 'MPP-X value exists',                      'group' => 'wsi',      'kind' => 'present'],
-        ['code' => 'mpp_y',                   'label' => 'MPP-Y value exists',                      'group' => 'wsi',      'kind' => 'present'],
+        ['code' => 'mpp_x',                   'label' => 'MPP-X value exists',                      'group' => 'wsi',      'kind' => 'numeric'],
+        ['code' => 'mpp_y',                   'label' => 'MPP-Y value exists',                      'group' => 'wsi',      'kind' => 'numeric'],
         ['code' => 'magnification_power',     'label' => 'Resolution is suitable',                  'group' => 'wsi',      'kind' => 'numeric'],
 
         // Sample / clinical metadata
         ['code' => 'sample_type',             'label' => 'Sample type is appropriate',              'group' => 'clinical', 'kind' => 'present'],
         ['code' => 'stain_type',              'label' => 'Stain type is appropriate',               'group' => 'clinical', 'kind' => 'present'],
-        ['code' => 'gender',                  'label' => 'Gender available for clinical tracking',  'group' => 'clinical', 'kind' => 'present'],
-        ['code' => 'age_at_index',            'label' => 'Age available for clinical tracking',     'group' => 'clinical', 'kind' => 'present'],
+        ['code' => 'gender',                  'label' => 'Gender available for clinical tracking',  'group' => 'clinical', 'kind' => 'info'],
+        ['code' => 'age_at_index',            'label' => 'Age available for clinical tracking',     'group' => 'clinical', 'kind' => 'info'],
         ['code' => 'label',                   'label' => 'Label exists (for supervised training)',  'group' => 'clinical', 'kind' => 'present'],
         ['code' => 'label_status',            'label' => 'Label is not ambiguous',                  'group' => 'clinical', 'kind' => 'status'],
 
@@ -132,6 +132,14 @@ class SlideVerification extends Model
                 : ['passed', (string) $value];
         }
 
+        // 'info' fields are optional metadata — not_checked when absent, passed when present.
+        if ($kind === 'info') {
+            $value = $this->{$code} ?? null;
+            return $value === null || $value === ''
+                ? ['not_checked', null]
+                : ['passed', (string) $value];
+        }
+
         // numeric thresholds
         return match ($code) {
             'file_size_mb'        => $this->numCheck($this->file_size_mb,        fn ($v) => $v >= 5,         'min 5 MB'),
@@ -142,6 +150,8 @@ class SlideVerification extends Model
                 return ($w >= 1024 && $h >= 1024) ? ['passed', "{$w} × {$h}"] : ['failed', "{$w} × {$h} (min 1024)"];
             })(),
             'magnification_power' => $this->numCheck($this->magnification_power, fn ($v) => $v >= 20,        'min 20x'),
+            'mpp_x'               => $this->numCheck($this->mpp_x,               fn ($v) => $v > 0,          '> 0'),
+            'mpp_y'               => $this->numCheck($this->mpp_y,               fn ($v) => $v > 0,          '> 0'),
             'tissue_area_percent' => $this->numCheck($this->tissue_area_percent, fn ($v) => $v >= 10,        'min 10%'),
             'tissue_patch_count'  => $this->numCheck($this->tissue_patch_count,  fn ($v) => $v >= 50,        'min 50 patches'),
             'artifact_score'      => $this->numCheck($this->artifact_score,      fn ($v) => $v <= 0.30,      'max 0.30'),

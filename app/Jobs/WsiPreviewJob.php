@@ -144,7 +144,7 @@ class WsiPreviewJob implements ShouldQueue
         // ── Run Python inspection script ─────────────────────────────────────
         // 'verify' mode  → openslide_inspect.py  (fast: checks + metadata only, ~10-30 s)
         // 'preview' mode → wsi_preview_generate.py (full: thumbnail + quality metrics, ~1-2 min)
-        $pythonBin = config('app.python_binary', 'python');
+        $pythonBin = config('app.python_binary', PHP_OS_FAMILY === 'Windows' ? 'python' : 'python3');
 
         if ($this->mode === 'verify') {
             $scriptPath = base_path('scripts/openslide_inspect.py');
