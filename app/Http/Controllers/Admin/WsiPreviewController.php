@@ -210,13 +210,20 @@ class WsiPreviewController extends Controller
             abort(404, 'WSI file not available.');
         }
 
-        $tileUrl  = "http://127.0.0.1:8001/tile/{$sample->id}/{$level}/{$col}/{$row}"
-                  . '?wsi_path=' . urlencode($wsiPath);
+        $this->ensureTileServerRunning();
 
-        $response = Http::timeout(15)->get($tileUrl);
+        $tileUrl = "http://127.0.0.1:8001/tile/{$sample->id}/{$level}/{$col}/{$row}"
+                 . '?wsi_path=' . urlencode($wsiPath);
+
+        try {
+            $response = Http::timeout(15)->get($tileUrl);
+        } catch (\Throwable $e) {
+            Log::warning("[WsiPreviewController] Tile server unavailable for sample #{$sample->id}: " . $e->getMessage());
+            return $this->_blankTile();
+        }
 
         if (!$response->successful()) {
-            abort(503, 'Tile server unavailable.');
+            return $this->_blankTile();
         }
 
         return response($response->body(), 200, [
@@ -247,13 +254,20 @@ class WsiPreviewController extends Controller
             abort(404, 'WSI file not available.');
         }
 
-        $tileUrl  = "http://127.0.0.1:8001/tile/{$sample->id}/{$level}/{$col}/{$row}"
-                  . '?wsi_path=' . urlencode($wsiPath);
+        $this->ensureTileServerRunning();
 
-        $response = Http::timeout(15)->get($tileUrl);
+        $tileUrl = "http://127.0.0.1:8001/tile/{$sample->id}/{$level}/{$col}/{$row}"
+                 . '?wsi_path=' . urlencode($wsiPath);
+
+        try {
+            $response = Http::timeout(15)->get($tileUrl);
+        } catch (\Throwable $e) {
+            Log::warning("[WsiPreviewController] Tile server unavailable for sample #{$sample->id}: " . $e->getMessage());
+            return $this->_blankTile();
+        }
 
         if (!$response->successful()) {
-            abort(503, 'Tile server unavailable.');
+            return $this->_blankTile();
         }
 
         return response($response->body(), 200, [
@@ -304,6 +318,79 @@ class WsiPreviewController extends Controller
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Return a 1×1 transparent/grey JPEG so the viewer shows a blank tile
+     * instead of crashing when the tile server is temporarily unavailable.
+     */
+    private function _blankTile(): Response
+    {
+        // Minimal 1×1 grey JPEG (hard-coded bytes, no PIL/GD dependency).
+        static $jpeg = null;
+        if ($jpeg === null) {
+            // 1×1 white JPEG generated once via base64.
+            $jpeg = base64_decode(
+                '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFgABAQEAAAAAAAAAAAAAAAAABgUEA//EABwQAAICAwEBAAAAAAAAAAAAAAECAwQREiExBf/aAAgBAQAAPwCwej6tIdoqe5rHqm5pCLuGm8K4JkL1QAAA'
+            );
+        }
+        return response($jpeg, 200, [
+            'Content-Type'  => 'image/jpeg',
+            'Cache-Control' => 'no-store',
+        ]);
+    }
+
+    /**
+     * Check if the WSI tile server is running on port 8001.
+     * If not, attempt to start it automatically and wait up to 8 s.
+     */
+    private function ensureTileServerRunning(): void
+    {
+        // Fast path: port is already open.
+        if ($this->isTileServerUp()) {
+            return;
+        }
+
+        $script = base_path('scripts/wsi_tile_server.py');
+        if (!is_file($script)) {
+            Log::warning('[WsiPreviewController] wsi_tile_server.py not found — tiles will fail.');
+            return;
+        }
+
+        // Prefer the venv Python (matches the server environment).
+        $venvPython = base_path('venv/bin/python3');
+        if (PHP_OS_FAMILY === 'Windows') {
+            $python = 'python';
+            // On Windows, start detached so PHP does not wait for the process.
+            $cmd = "start /B \"wsi-tile-server\" python " . escapeshellarg($script);
+            pclose(popen($cmd, 'r'));
+        } else {
+            $python = is_file($venvPython) ? $venvPython : 'python3';
+            shell_exec('nohup ' . escapeshellarg($python) . ' ' . escapeshellarg($script) . ' > /dev/null 2>&1 &');
+        }
+
+        Log::info('[WsiPreviewController] Started wsi_tile_server.py — waiting for port 8001…');
+
+        // Poll for up to 8 seconds.
+        for ($i = 0; $i < 16; $i++) {
+            usleep(500_000); // 0.5 s
+            if ($this->isTileServerUp()) {
+                Log::info('[WsiPreviewController] Tile server is now up.');
+                return;
+            }
+        }
+
+        Log::warning('[WsiPreviewController] Tile server did not start within 8 s.');
+    }
+
+    private function isTileServerUp(): bool
+    {
+        $sock = @fsockopen('127.0.0.1', 8001, $errno, $errstr, 1);
+        if ($sock) {
+            fclose($sock);
+            return true;
+        }
+        return false;
+    }
 
     /** Recursively delete a directory and all its contents. */
     private function deleteDirectory(string $dir): void
