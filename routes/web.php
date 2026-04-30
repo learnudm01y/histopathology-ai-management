@@ -30,6 +30,8 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::get('/', [DashboardController::class, 'index'])->name('dashboard');
         Route::get('samples', [DashboardController::class, 'samples'])->name('samples');
         Route::post('samples', [DashboardController::class, 'storeSample'])->name('samples.store');
+        // !! Must be before samples/{sample} to avoid route-model-binding collision !!
+        Route::post('samples/verify-unverified', [DashboardController::class, 'verifyAllUnverified'])->name('samples.verify-unverified');
         Route::get('samples/{sample}', [DashboardController::class, 'showSample'])->name('samples.show');
         Route::get('samples/{sample}/edit', [DashboardController::class, 'editSample'])->name('samples.edit');
         Route::put('samples/{sample}', [DashboardController::class, 'updateSample'])->name('samples.update');

@@ -162,6 +162,12 @@
                             Showing {{ $samples->firstItem() ?? 0 }}–{{ $samples->lastItem() ?? 0 }}
                             of {{ $samples->total() }}
                         </small>
+                        {{-- ── Verify All Unverified Samples ── --}}
+                        <button type="button" class="btn btn-outline-warning btn-sm"
+                                id="bulkVerifyBtn"
+                                title="Queue all unverified / pending samples for slide verification (skips failed and already-verified)">
+                            <i class="mdi mdi-shield-search mr-1"></i> Verify All Unverified Samples
+                        </button>
                         <button type="button" class="btn btn-primary btn-sm" data-toggle="modal" data-target="#addSampleModal">
                             <i class="mdi mdi-plus"></i> Add Sample
                         </button>
@@ -768,6 +774,65 @@
     Its functionality has been merged into `addSampleModal` as the last
     section "Import GDC Files (Manifest / Metadata / Clinical)".
 --}}
+
+{{-- ── Bulk Verify — Confirmation + Progress Modal ──────────────────────── --}}
+<div class="modal fade" id="bulkVerifyModal" tabindex="-1" role="dialog"
+     aria-labelledby="bulkVerifyModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="bulkVerifyModalLabel">
+                    <i class="mdi mdi-shield-search mr-1"></i> Verify All Unverified Samples
+                </h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                {{-- Step 1: Confirmation --}}
+                <div id="bulkVerifyConfirm">
+                    <p class="mb-2">
+                        This will queue every sample that has <strong>never been verified</strong>
+                        or is currently in <strong>pending</strong> status for background
+                        verification.
+                    </p>
+                    <ul class="mb-2" style="font-size:.88rem;">
+                        <li>Samples already marked <span class="badge badge-danger">failed</span> are <strong>skipped</strong>.</li>
+                        <li>Samples with status <span class="badge badge-success">passed</span> are <strong>skipped</strong>.</li>
+                        <li>Jobs run in the queue — large slides may take several minutes each.</li>
+                    </ul>
+                    <p class="text-muted mb-0" style="font-size:.83rem;">
+                        You can continue using the system while the queue processes in the background.
+                    </p>
+                </div>
+                {{-- Step 2: Running --}}
+                <div id="bulkVerifyRunning" style="display:none; text-align:center; padding:.5rem 0;">
+                    <div class="spinner-border text-warning mb-3" role="status">
+                        <span class="sr-only">Loading…</span>
+                    </div>
+                    <p class="mb-0 font-weight-bold">Queuing samples…</p>
+                </div>
+                {{-- Step 3: Done --}}
+                <div id="bulkVerifyDone" style="display:none; text-align:center; padding:.5rem 0;">
+                    <i class="mdi mdi-check-circle-outline text-success" style="font-size:2.5rem;"></i>
+                    <p class="font-weight-bold mt-2 mb-1" id="bulkVerifyDoneMsg"></p>
+                    <p class="text-muted mb-0" style="font-size:.83rem;">
+                        The queue workers will process the jobs in the background.
+                        Refresh the page or check individual samples to see updated statuses.
+                    </p>
+                </div>
+                {{-- Error --}}
+                <div id="bulkVerifyError" style="display:none;" class="alert alert-danger mb-0 mt-2"></div>
+            </div>
+            <div class="modal-footer" id="bulkVerifyFooter">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-warning" id="bulkVerifyConfirmBtn">
+                    <i class="mdi mdi-play-circle-outline mr-1"></i> Start Verification Queue
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 @endpush
 
 @push('scripts')
@@ -940,5 +1005,88 @@
     });
     @endif
 })();
+</script>
+
+{{-- ── Bulk Verify JS ─────────────────────────────────────────────────────── --}}
+<script>
+(function () {
+    'use strict';
+
+    var bulkVerifyBtn     = document.getElementById('bulkVerifyBtn');
+    var confirmBtn        = document.getElementById('bulkVerifyConfirmBtn');
+    var confirmBox        = document.getElementById('bulkVerifyConfirm');
+    var runningBox        = document.getElementById('bulkVerifyRunning');
+    var doneBox           = document.getElementById('bulkVerifyDone');
+    var errorBox          = document.getElementById('bulkVerifyError');
+    var doneMsg           = document.getElementById('bulkVerifyDoneMsg');
+    var footer            = document.getElementById('bulkVerifyFooter');
+
+    // Open modal when the toolbar button is clicked
+    if (bulkVerifyBtn) {
+        bulkVerifyBtn.addEventListener('click', function () {
+            // Reset modal to confirmation step
+            confirmBox.style.display  = 'block';
+            runningBox.style.display  = 'none';
+            doneBox.style.display     = 'none';
+            errorBox.style.display    = 'none';
+            errorBox.textContent      = '';
+            footer.style.display      = '';
+            confirmBtn.disabled       = false;
+            $('#bulkVerifyModal').modal('show');
+        });
+    }
+
+    // User confirms — call the API
+    if (confirmBtn) {
+        confirmBtn.addEventListener('click', function () {
+            confirmBtn.disabled      = true;
+            confirmBox.style.display = 'none';
+            runningBox.style.display = 'block';
+            footer.style.display     = 'none';
+
+            fetch('{{ route('admin.samples.verify-unverified') }}', {
+                method:  'POST',
+                headers: {
+                    'Content-Type':     'application/json',
+                    'Accept':           'application/json',
+                    'X-CSRF-TOKEN':     document.querySelector('meta[name="csrf-token"]')
+                                        ? document.querySelector('meta[name="csrf-token"]').getAttribute('content')
+                                        : '{{ csrf_token() }}',
+                },
+            })
+            .then(function (res) {
+                return res.json().then(function (data) {
+                    return { ok: res.ok, data: data };
+                });
+            })
+            .then(function (resp) {
+                runningBox.style.display = 'none';
+                if (resp.ok) {
+                    var count = resp.data.queued || 0;
+                    doneMsg.textContent = count > 0
+                        ? count + ' sample' + (count !== 1 ? 's' : '') + ' queued for verification.'
+                        : 'No unverified samples found — nothing was queued.';
+                    doneBox.style.display = 'block';
+                    footer.innerHTML = '<button type="button" class="btn btn-success" data-dismiss="modal">Close</button>';
+                    footer.style.display = '';
+                } else {
+                    errorBox.textContent  = resp.data.message || 'An error occurred. Please try again.';
+                    errorBox.style.display = 'block';
+                    confirmBox.style.display = 'block';
+                    footer.style.display = '';
+                    confirmBtn.disabled  = false;
+                }
+            })
+            .catch(function (err) {
+                runningBox.style.display  = 'none';
+                errorBox.textContent      = 'Network error: ' + err.message;
+                errorBox.style.display    = 'block';
+                confirmBox.style.display  = 'block';
+                footer.style.display      = '';
+                confirmBtn.disabled       = false;
+            });
+        });
+    }
+}());
 </script>
 @endpush

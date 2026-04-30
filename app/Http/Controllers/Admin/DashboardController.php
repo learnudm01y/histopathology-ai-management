@@ -734,6 +734,65 @@ class DashboardController extends Controller
     }
 
     /**
+     * Bulk-verify every sample that has never been verified OR whose current
+     * verification_status is 'pending'.
+     *
+     * Skips samples whose verification_status is already 'failed' (as requested).
+     * Skips samples whose storage_status is 'not_downloaded' (nothing to inspect).
+     *
+     * Dispatches RunSlideVerification jobs in chunks so the queue workers can
+     * fan out across all available CPUs without memory pressure on the web
+     * process. A cache key tracks the queued count for the frontend to poll.
+     *
+     * POST /admin/samples/verify-unverified
+     */
+    public function verifyAllUnverified(): \Illuminate\Http\JsonResponse
+    {
+        // ── IDs of samples that already have a non-failed, non-pending record ─
+        $excludeIds = \App\Models\SlideVerification::whereIn('verification_status', ['passed', 'failed'])
+            ->pluck('sample_id');
+
+        // ── Target samples ─────────────────────────────────────────────────────
+        // Must have a downloadable file (not_downloaded → nothing to inspect).
+        $query = Sample::whereNotIn('id', $excludeIds)
+            ->where('storage_status', '!=', 'not_downloaded')
+            ->orderBy('id');
+
+        $total = $query->count();
+
+        if ($total === 0) {
+            return response()->json([
+                'queued'  => 0,
+                'message' => 'No unverified samples found — nothing to queue.',
+            ]);
+        }
+
+        // ── Cache key: frontend polls this to show live progress ───────────────
+        $batchKey = 'bulk_verify:batch';
+        \Illuminate\Support\Facades\Cache::put($batchKey, [
+            'total'     => $total,
+            'queued_at' => now()->toDateTimeString(),
+        ], 7200);
+
+        // ── Dispatch jobs in chunks to avoid loading all models at once ────────
+        $queued = 0;
+        $query->select('id')->chunk(200, function ($rows) use (&$queued) {
+            foreach ($rows as $row) {
+                \App\Jobs\RunSlideVerification::dispatch($row->id)
+                    ->onQueue('default');
+                $queued++;
+            }
+        });
+
+        \Illuminate\Support\Facades\Log::info("[verifyAllUnverified] Queued {$queued} RunSlideVerification jobs.");
+
+        return response()->json([
+            'queued'  => $queued,
+            'message' => "Queued {$queued} samples for verification.",
+        ]);
+    }
+
+    /**
      * Inline-edit a single field on the slide_verifications record.
      * Called by AJAX PATCH from the sample-show verification card.
      */
