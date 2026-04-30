@@ -99,46 +99,72 @@ class WsiPreviewJob implements ShouldQueue
             return;
         }
 
-        // ── Local temp directory ─────────────────────────────────────────────
-        $tempDir = storage_path("app/wsi_previews/{$this->sampleId}");
-        if (!is_dir($tempDir)) {
-            mkdir($tempDir, 0755, true);
-        }
+        // ── Attempt rclone FUSE mount path (on-demand, no full download) ─────
+        // When an rclone FUSE mount is active at WSI_GDRIVE_MOUNT, OpenSlide
+        // reads only the exact byte ranges it needs for each tile request.
+        // rclone VFS caches those ranges on-disk automatically — no full file
+        // download is ever triggered by this code path.
+        $wsiPath   = null;
+        $usingFuse = false;
+        $mountRoot = env('WSI_GDRIVE_MOUNT', '');
 
-        // ── Skip download if file already exists locally ─────────────────────
-        // Massive speed-up for repeat previews: a fully-downloaded WSI
-        // (matching the remote size) is reused instead of re-downloaded.
-        $expectedName = $fileName ?: ($remotePath ? basename($remotePath) : null);
-        $expectedPath = $expectedName ? ($tempDir . DIRECTORY_SEPARATOR . $expectedName) : null;
-        $wsiPath      = null;
+        if ($mountRoot && $remotePath) {
+            // $remotePath is a relative path on the remote (e.g.
+            // "samples/TCGA-BRCA/tumor/uuid/file.svs"). Strip any
+            // "remote:" prefix that may have been stored.
+            $relPath   = ltrim(preg_replace('/^[a-zA-Z0-9_\-]+:/', '', $remotePath), '/');
+            $candidate = rtrim($mountRoot, '/') . '/' . $relPath;
 
-        if ($expectedPath && is_file($expectedPath) && filesize($expectedPath) > 0) {
-            $localSize  = filesize($expectedPath);
-            $remoteSize = (int) ($sample->file_size_bytes ?? 0);
-            if ($remoteSize <= 0 || $localSize === $remoteSize) {
-                Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: reusing cached local file {$expectedPath} ({$localSize} bytes)");
-                $wsiPath = $expectedPath;
+            if (is_file($candidate)) {
+                $wsiPath   = $candidate;
+                $usingFuse = true;
+                Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: using FUSE mount at {$candidate} — no download needed");
             } else {
-                Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: local size {$localSize} ≠ remote {$remoteSize}, re-downloading");
+                Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: FUSE path {$candidate} not found, falling back to download");
             }
         }
 
+        // ── Fall back: download from Google Drive ────────────────────────────
+        // Used when no FUSE mount is configured or the path is not yet visible
+        // on the mount (e.g. file was just uploaded and VFS hasn't seen it yet).
         if ($wsiPath === null) {
-            Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: downloading WSI to {$tempDir}");
-            try {
-                $wsiPath = $drive->downloadToLocal(
-                    localDir:   $tempDir,
-                    remotePath: $remotePath,
-                    fileId:     $remotePath ? null : $fileId,
-                    fileName:   $fileName,
-                    timeout:    12_000,
-                );
-            } catch (\Throwable $e) {
-                Log::error("[WsiPreviewJob] Download failed: " . $e->getMessage());
-                $this->_cacheError($cacheKey, 'Download failed: ' . $e->getMessage());
-                return;
+            $tempDir = storage_path("app/wsi_previews/{$this->sampleId}");
+            if (!is_dir($tempDir)) {
+                mkdir($tempDir, 0755, true);
             }
-            Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: download complete → {$wsiPath}");
+
+            // Reuse a fully-downloaded local copy when its size matches remote.
+            $expectedName = $fileName ?: ($remotePath ? basename($remotePath) : null);
+            $expectedPath = $expectedName ? ($tempDir . DIRECTORY_SEPARATOR . $expectedName) : null;
+
+            if ($expectedPath && is_file($expectedPath) && filesize($expectedPath) > 0) {
+                $localSize  = filesize($expectedPath);
+                $remoteSize = (int) ($sample->file_size_bytes ?? 0);
+                if ($remoteSize <= 0 || $localSize === $remoteSize) {
+                    Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: reusing cached local file {$expectedPath} ({$localSize} bytes)");
+                    $wsiPath = $expectedPath;
+                } else {
+                    Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: local size {$localSize} ≠ remote {$remoteSize}, re-downloading");
+                }
+            }
+
+            if ($wsiPath === null) {
+                Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: downloading WSI to {$tempDir}");
+                try {
+                    $wsiPath = $drive->downloadToLocal(
+                        localDir:   $tempDir,
+                        remotePath: $remotePath,
+                        fileId:     $remotePath ? null : $fileId,
+                        fileName:   $fileName,
+                        timeout:    12_000,
+                    );
+                } catch (\Throwable $e) {
+                    Log::error("[WsiPreviewJob] Download failed: " . $e->getMessage());
+                    $this->_cacheError($cacheKey, 'Download failed: ' . $e->getMessage());
+                    return;
+                }
+                Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: download complete → {$wsiPath}");
+            }
         }
 
         // ── Run Python inspection script ─────────────────────────────────────

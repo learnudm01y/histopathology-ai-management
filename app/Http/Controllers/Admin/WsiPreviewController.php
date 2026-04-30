@@ -277,9 +277,15 @@ class WsiPreviewController extends Controller
         $cacheKey = "wsi_preview:{$sample->id}";
         $data     = Cache::get($cacheKey);
 
-        // Delete the entire temp directory for this sample
+        // Only delete the temp directory when the preview used a locally
+        // downloaded copy (not a FUSE mount path). FUSE paths live outside
+        // the app storage directory and must never be deleted.
+        $mountRoot   = env('WSI_GDRIVE_MOUNT', '');
+        $cachedPath  = $data['wsi_path'] ?? '';
+        $isFusePath  = $mountRoot && str_starts_with($cachedPath, rtrim($mountRoot, '/'));
+
         $tempDir = storage_path("app/wsi_previews/{$sample->id}");
-        if (is_dir($tempDir)) {
+        if (!$isFusePath && is_dir($tempDir)) {
             $this->deleteDirectory($tempDir);
             Log::info("[WsiPreviewController] Deleted temp dir for sample #{$sample->id}: {$tempDir}");
         }
