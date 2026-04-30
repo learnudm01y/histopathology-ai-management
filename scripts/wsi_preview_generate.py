@@ -247,7 +247,7 @@ def main() -> None:
         # available (level 0 when possible) and only downscale if the result
         # would exceed TARGET_MAX. This produces a thumbnail virtually
         # indistinguishable from a native pyramid view in QuPath / ASAP.
-        TARGET_MAX = 16384
+        TARGET_MAX = 4096
 
         # Pick the smallest pyramid level whose long edge is still ≥ TARGET_MAX
         # (i.e. the highest-resolution level we can use without losing detail).
@@ -477,72 +477,6 @@ def main() -> None:
 
     except Exception:
         pass  # non-fatal
-
-    # ── DeepZoom tile generation (OpenSeadragon-compatible) ─────────────────
-    # This produces a full DZI pyramid: <output>/dzi/slide.dzi + slide_files/<level>/<col>_<row>.jpg
-    # OpenSeadragon then loads only the visible tiles at the current zoom level,
-    # giving QuPath-equivalent quality at every magnification with bounded memory.
-    try:
-        from openslide.deepzoom import DeepZoomGenerator
-        from concurrent.futures import ThreadPoolExecutor
-        from PIL import Image as _DZ_Image
-
-        TILE_SIZE = 512
-        OVERLAP   = 1
-        JPEG_Q    = 90
-
-        dzi_root  = Path(output_dir) / "dzi"
-        files_dir = dzi_root / "slide_files"
-        files_dir.mkdir(parents=True, exist_ok=True)
-
-        dz = DeepZoomGenerator(slide, tile_size=TILE_SIZE, overlap=OVERLAP, limit_bounds=False)
-
-        # DZI descriptor (XML) — points OpenSeadragon at the tile pyramid.
-        dzi_xml = (
-            '<?xml version="1.0" encoding="UTF-8"?>\n'
-            '<Image xmlns="http://schemas.microsoft.com/deepzoom/2008" '
-            f'Format="jpeg" Overlap="{OVERLAP}" TileSize="{TILE_SIZE}">\n'
-            f'  <Size Width="{result["slide_width"]}" Height="{result["slide_height"]}"/>\n'
-            '</Image>\n'
-        )
-        (dzi_root / "slide.dzi").write_text(dzi_xml, encoding="utf-8")
-
-        # Pre-create level directories (avoids race conditions in the thread pool)
-        for lvl in range(dz.level_count):
-            (files_dir / str(lvl)).mkdir(exist_ok=True)
-
-        def _render_tile(args):
-            lvl, col, row = args
-            try:
-                tile = dz.get_tile(lvl, (col, row))
-                # Composite RGBA → RGB on white (background pixels otherwise become black)
-                if tile.mode == 'RGBA':
-                    bg = _DZ_Image.new('RGB', tile.size, (255, 255, 255))
-                    bg.paste(tile, mask=tile.split()[3])
-                    tile = bg
-                tile.save(files_dir / str(lvl) / f"{col}_{row}.jpg",
-                          "JPEG", quality=JPEG_Q, optimize=True)
-            except Exception:
-                pass  # individual tile failures are tolerable
-
-        # Build the full task list across all pyramid levels.
-        tasks = []
-        for lvl in range(dz.level_count):
-            cols, rows = dz.level_tiles[lvl]
-            for c in range(cols):
-                for r in range(rows):
-                    tasks.append((lvl, c, r))
-
-        # Render in parallel — OpenSlide is thread-safe for read_region.
-        with ThreadPoolExecutor(max_workers=8) as ex:
-            for _ in ex.map(_render_tile, tasks):
-                pass
-
-        result["dzi_relative_path"] = "dzi/slide.dzi"
-        result["dzi_tile_count"]    = len(tasks)
-    except Exception as exc:
-        prev = result.get("error") or ""
-        result["error"] = (prev + f"; dzi generation failed: {exc}").lstrip("; ")
 
     slide.close()
     _save_and_exit(0, output_dir)

@@ -9,6 +9,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -152,52 +153,75 @@ class WsiPreviewController extends Controller
 
     /**
      * Serve the DeepZoom (DZI) descriptor — the OpenSeadragon entry point.
-     * The descriptor declares tile size / overlap / image dimensions; OSD then
-     * fetches individual tiles via the dziTile() endpoint.
+     * Generated on-the-fly from cached slide dimensions (no pre-generation needed).
+     * OSD fetches individual tiles via dziTileStandard() which proxies to the
+     * wsi_tile_server.py Flask process running on 127.0.0.1:8001.
      */
     public function dzi(Sample $sample): Response
     {
-        $absolutePath = storage_path("app/wsi_previews/{$sample->id}/preview_output/dzi/slide.dzi");
+        $cacheKey = "wsi_preview:{$sample->id}";
+        $data     = Cache::get($cacheKey);
 
-        if (!file_exists($absolutePath)) {
-            abort(404, 'DeepZoom descriptor not available. Re-run the preview.');
+        if (!$data || ($data['status'] ?? '') !== 'ready') {
+            abort(404, 'Preview not ready.');
         }
 
-        return response(file_get_contents($absolutePath), 200, [
+        $w = (int) ($data['wsi_meta']['slide_width']  ?? 0);
+        $h = (int) ($data['wsi_meta']['slide_height'] ?? 0);
+
+        if ($w <= 0 || $h <= 0) {
+            abort(404, 'Slide dimensions not available in cache.');
+        }
+
+        $xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+             . "<Image xmlns=\"http://schemas.microsoft.com/deepzoom/2008\" "
+             . "Format=\"jpeg\" Overlap=\"1\" TileSize=\"512\">\n"
+             . "  <Size Width=\"{$w}\" Height=\"{$h}\"/>\n"
+             . "</Image>\n";
+
+        return response($xml, 200, [
             'Content-Type'  => 'application/xml',
             'Cache-Control' => 'no-store, no-cache, must-revalidate',
         ]);
     }
 
     /**
-     * Serve an individual DeepZoom tile using OSD's standard URL scheme:
+     * Serve an individual DeepZoom tile on-demand via the wsi_tile_server.py
+     * Flask process (127.0.0.1:8001). No pre-generation required — tiles are
+     * read directly from the WSI file by OpenSlide, exactly like QuPath does.
+     *
+     * URL scheme used by OSD's native DZI parser:
      *   slide_files/{level}/{col}_{row}.jpeg
-     * This route is used by OSD's native DZI parser (tileSources: 'slide.dzi').
      */
     public function dziTileStandard(Sample $sample, int $level, string $tileFile): Response
     {
-        $level = max(0, min($level, 32));
+        $level = max(0, min($level, 64));
 
-        // tileFile = "0_0.jpeg" or "0_0.jpg" — extract col/row safely
         if (!preg_match('/^(\d+)_(\d+)\.(jpe?g|png)$/i', $tileFile, $m)) {
             abort(404);
         }
-        $col = (int) $m[1];
-        $row = (int) $m[2];
+        $col = max(0, min((int) $m[1], 100_000));
+        $row = max(0, min((int) $m[2], 100_000));
 
-        $absolutePath = storage_path(
-            "app/wsi_previews/{$sample->id}/preview_output/dzi/slide_files/{$level}/{$col}_{$row}.jpg"
-        );
+        $data    = Cache::get("wsi_preview:{$sample->id}");
+        $wsiPath = $data['wsi_path'] ?? null;
 
-        if (!file_exists($absolutePath)) {
-            abort(404);
+        if (!$wsiPath || !is_file($wsiPath)) {
+            abort(404, 'WSI file not available.');
         }
 
-        $bytes = file_get_contents($absolutePath);
+        $tileUrl  = "http://127.0.0.1:8001/tile/{$sample->id}/{$level}/{$col}/{$row}"
+                  . '?wsi_path=' . urlencode($wsiPath);
 
-        return response($bytes, 200, [
+        $response = Http::timeout(15)->get($tileUrl);
+
+        if (!$response->successful()) {
+            abort(503, 'Tile server unavailable.');
+        }
+
+        return response($response->body(), 200, [
             'Content-Type'   => 'image/jpeg',
-            'Content-Length' => (string) strlen($bytes),
+            'Content-Length' => (string) strlen($response->body()),
             'Cache-Control'  => 'public, max-age=86400, immutable',
         ]);
     }
@@ -207,32 +231,34 @@ class WsiPreviewController extends Controller
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * Serve an individual DeepZoom tile (JPEG) at a given pyramid level.
-     * Tiles live under preview_output/dzi/slide_files/<level>/<col>_<row>.jpg
+     * Serve an individual DeepZoom tile on-demand (custom URL scheme).
+     * Proxies to wsi_tile_server.py exactly like dziTileStandard().
      */
     public function dziTile(Sample $sample, int $level, int $col, int $row, string $ext): Response
     {
-        // Hard-clamp values to safe ranges (defensive against path traversal)
-        $level = max(0, min($level, 32));
+        $level = max(0, min($level, 64));
         $col   = max(0, min($col, 100_000));
         $row   = max(0, min($row, 100_000));
-        $ext   = in_array($ext, ['jpg', 'jpeg', 'png'], true) ? $ext : 'jpg';
 
-        $absolutePath = storage_path(
-            "app/wsi_previews/{$sample->id}/preview_output/dzi/slide_files/{$level}/{$col}_{$row}.jpg"
-        );
+        $data    = Cache::get("wsi_preview:{$sample->id}");
+        $wsiPath = $data['wsi_path'] ?? null;
 
-        if (!file_exists($absolutePath)) {
-            // Returning 404 lets OpenSeadragon mark the tile as missing without breaking the viewer
-            abort(404);
+        if (!$wsiPath || !is_file($wsiPath)) {
+            abort(404, 'WSI file not available.');
         }
 
-        $bytes = file_get_contents($absolutePath);
+        $tileUrl  = "http://127.0.0.1:8001/tile/{$sample->id}/{$level}/{$col}/{$row}"
+                  . '?wsi_path=' . urlencode($wsiPath);
 
-        return response($bytes, 200, [
+        $response = Http::timeout(15)->get($tileUrl);
+
+        if (!$response->successful()) {
+            abort(503, 'Tile server unavailable.');
+        }
+
+        return response($response->body(), 200, [
             'Content-Type'   => 'image/jpeg',
-            'Content-Length' => (string) strlen($bytes),
-            // Tiles never change for a given preview run → aggressive caching is safe.
+            'Content-Length' => (string) strlen($response->body()),
             'Cache-Control'  => 'public, max-age=86400, immutable',
         ]);
     }

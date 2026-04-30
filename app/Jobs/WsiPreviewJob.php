@@ -250,7 +250,13 @@ class WsiPreviewJob implements ShouldQueue
             ],
             'wsi_path' => $wsiPath,
             'thumb_rel' => $thumbRelPath,
-            'dzi_available' => !empty($pyData['dzi_relative_path']),
+            // Tiles are served on-demand by wsi_tile_server.py — no pre-generation.
+            // DZI is available whenever we have valid slide dimensions in the cache.
+            'dzi_available' => (
+                isset($pyData['slide_width'], $pyData['slide_height'])
+                && (int) $pyData['slide_width']  > 0
+                && (int) $pyData['slide_height'] > 0
+            ),
         ], self::CACHE_TTL);
 
         Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: inspection complete → "
