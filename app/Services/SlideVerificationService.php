@@ -477,6 +477,15 @@ class SlideVerificationService
 
         $verification->update(['verification_status' => $status]);
 
+        // Sync Sample.quality_status so the samples table reflects verification.
+        $qualityStatus = match ($status) {
+            'passed'  => 'passed',
+            'failed'  => 'rejected',
+            default   => 'pending',
+        };
+        Sample::where('id', $verification->sample_id)
+              ->update(['quality_status' => $qualityStatus]);
+
         return $verification->fresh();
     }
 }
