@@ -107,6 +107,16 @@ class SlideVerificationService
             }
         }
 
+        // ── Remove orphan rows that share the same slide_id ─────────────────
+        // A previous verify run may have keyed a row by slide_id alone,
+        // leaving an orphan that triggers a UNIQUE constraint violation when
+        // we now try to set slide_id on the row keyed by sample_id.
+        if (!empty($data['slide_id'])) {
+            SlideVerification::where('slide_id', $data['slide_id'])
+                ->where('sample_id', '!=', $sample->id)
+                ->delete();
+        }
+
         $verification = SlideVerification::updateOrCreate(
             ['sample_id' => $sample->id],
             $data,
