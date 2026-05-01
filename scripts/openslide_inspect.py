@@ -56,6 +56,10 @@ result: dict[str, Any] = {
     "tissue_patch_count": None,
     "blur_score": None,
     "artifact_score": None,
+    "stain_raw": None,
+    "stain_normalized": None,
+    "scanner_vendor": None,
+    "scanner_model": None,
     "error": None,
 }
 
@@ -295,6 +299,59 @@ def main() -> None:
 
     except Exception:
         # Non-fatal: leave as None so the PHP layer treats it as not_checked.
+        pass
+
+    # ── Stain & scanner metadata ────────────────────────────────────────
+    try:
+        desc = (
+            props.get("aperio.ImageDescription", "")
+            or props.get("openslide.comment", "")
+            or ""
+        )
+
+        # Aperio SVS: |Stain=Hematoxylin and Eosin| or |Stain=IHC|
+        stain_raw: str | None = None
+        import re
+        m = re.search(r"[|;]\s*Stain\s*=\s*([^|;\r\n]+)", desc, re.IGNORECASE)
+        if m:
+            stain_raw = m.group(1).strip()
+        else:
+            # Fallback: check other known property keys
+            for key in ("tiff.Software", "leica.staining", "hamamatsu.SourceLens"):
+                val = props.get(key)
+                if val and any(s in val.lower() for s in ("hematoxylin", "eosin", "h&e", "ihc", "stain")):
+                    stain_raw = val.strip()
+                    break
+
+        if stain_raw:
+            result["stain_raw"] = stain_raw
+            low = stain_raw.lower()
+            if any(k in low for k in ("hematoxylin", "eosin", "h&e", "h & e", "he ", "h+e")):
+                result["stain_normalized"] = "H&E"
+            elif any(k in low for k in ("ihc", "immunohistochem", "immunohistochemistry")):
+                result["stain_normalized"] = "IHC"
+            elif any(k in low for k in ("pas", "periodic acid")):
+                result["stain_normalized"] = "PAS"
+            elif any(k in low for k in ("masson", "trichrome")):
+                result["stain_normalized"] = "Masson Trichrome"
+            elif any(k in low for k in ("giemsa",)):
+                result["stain_normalized"] = "Giemsa"
+            elif any(k in low for k in ("alcian",)):
+                result["stain_normalized"] = "Alcian Blue"
+            else:
+                result["stain_normalized"] = stain_raw
+
+        # Scanner vendor/model
+        result["scanner_vendor"] = (
+            props.get("aperio.ScanScope ID")
+            or props.get("hamamatsu.ProductVersion")
+            or props.get("openslide.vendor")
+        )
+        result["scanner_model"] = (
+            props.get("aperio.AppMag")  # reuse if no dedicated field
+            and None  # don't overwrite magnification
+        ) or props.get("tiff.Model")
+    except Exception:
         pass
 
     slide.close()

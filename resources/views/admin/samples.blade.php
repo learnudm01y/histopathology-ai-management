@@ -402,22 +402,37 @@
 
                     <div class="tab-content mb-3">
 
-                        {{-- Method 1: Upload File --}}
+                        {{-- Method 1: Local File Path --}}
                         <div class="tab-pane fade {{ old('upload_method', 'upload') === 'upload' ? 'show active' : '' }}"
                              id="pane-upload" role="tabpanel">
+                            <div class="alert alert-info mb-3 py-2" style="font-size:.85rem;">
+                                <i class="mdi mdi-information-outline mr-1"></i>
+                                <strong>Local File Upload:</strong>
+                                Paste the full path to the WSI file on the server.
+                                The upload to Google Drive runs entirely in the background — the browser is not involved.
+                            </div>
                             <div class="form-group mb-0">
-                                <label>Slide / Image File <span class="text-danger">*</span></label>
-                                <div class="custom-file">
-                                    <input type="file" class="custom-file-input @error('sample_file') is-invalid @enderror"
-                                           name="sample_file" id="sampleFileInput"
-                                           accept=".svs,.tiff,.tif,.ndpi,.scn,.mrxs,.vsi,.czi,.bif">
-                                    <label class="custom-file-label" for="sampleFileInput">Choose file…</label>
+                                <label for="localFilePathInput">File Path <span class="text-danger">*</span></label>
+                                <div class="input-group">
+                                    <div class="input-group-prepend">
+                                        <span class="input-group-text"><i class="mdi mdi-file-outline"></i></span>
+                                    </div>
+                                    <input type="text"
+                                           class="form-control @error('local_file_path') is-invalid @enderror"
+                                           name="local_file_path"
+                                           id="localFilePathInput"
+                                           value="{{ old('local_file_path') }}"
+                                           placeholder="e.g. /home/data/TCGA/slide.svs  or  C:\Downloads\slide.svs"
+                                           autocomplete="off"
+                                           spellcheck="false">
+                                    @error('local_file_path')
+                                        <div class="invalid-feedback">{{ $message }}</div>
+                                    @enderror
                                 </div>
-                                <small class="form-text text-muted">
-                                    Supported: SVS, TIFF, NDPI, SCN, MRXS, VSI, CZI, BIF, DICOM and other whole-slide formats.
-                                    The file will be uploaded directly to Google Drive — nothing is stored on the server.
+                                <small class="form-text text-muted mt-1">
+                                    Supported: SVS, TIFF, NDPI, SCN, MRXS, VSI, CZI, BIF and other whole-slide formats.
+                                    Copy the full file path and paste it here — no size limits.
                                 </small>
-                                @error('sample_file')<div class="text-danger small mt-1">{{ $message }}</div>@enderror
                             </div>
                         </div>
 
@@ -801,6 +816,21 @@
                         <li>Samples with status <span class="badge badge-success">passed</span> are <strong>skipped</strong>.</li>
                         <li>Jobs run in the queue — large slides may take several minutes each.</li>
                     </ul>
+
+                    {{-- Stain detection option --}}
+                    <div class="card card-body bg-light py-2 px-3 mb-2" style="font-size:.88rem;">
+                        <div class="custom-control custom-checkbox">
+                            <input type="checkbox" class="custom-control-input" id="detectStainCheck" checked>
+                            <label class="custom-control-label font-weight-bold" for="detectStainCheck">
+                                <i class="mdi mdi-palette-outline mr-1 text-primary"></i> Auto-detect stain from SVS metadata
+                            </label>
+                        </div>
+                        <p class="text-muted mb-0 mt-1 ml-4" style="font-size:.80rem;">
+                            Reads the stain type (H&amp;E, IHC, PAS…) directly from the slide file and
+                            auto-fills the <em>Stain</em> field for any sample that doesn't have one yet.
+                        </p>
+                    </div>
+
                     <p class="text-muted mb-0" style="font-size:.83rem;">
                         You can continue using the system while the queue processes in the background.
                     </p>
@@ -866,13 +896,10 @@
         return document.getElementById('uploadMethodInput').value || 'upload';
     }
 
-    // ── Show chosen file name in custom-file label ───────────────────────────
-    var fileInput = document.getElementById('sampleFileInput');
-    if (fileInput) {
-        fileInput.addEventListener('change', function () {
-            var label = this.nextElementSibling;
-            label.textContent = this.files.length ? this.files[0].name : 'Choose file…';
-            // Clear other methods
+    // ── Local file path: clear other methods on input ────────────────────────
+    var localPathInput = document.getElementById('localFilePathInput');
+    if (localPathInput) {
+        localPathInput.addEventListener('input', function () {
             var gdriveEl = document.querySelector('input[name="gdrive_link"]');
             var pathEl   = document.getElementById('bulkFolderPathInput');
             if (gdriveEl) gdriveEl.value = '';
@@ -921,11 +948,12 @@
 
     // ── Form submission: sync active method then submit ───────────────────────
     document.getElementById('addSampleForm').addEventListener('submit', function (e) {
-        // Always read the active tab from DOM before submitting
         var activeMethod = getActiveUploadMethod();
         document.getElementById('uploadMethodInput').value = activeMethod;
-        // No client-side blocking — server handles all validation
+        // All methods (upload/gdrive/bulk) do a simple form POST — no JS interception needed.
     });
+
+    // Update the custom-file label when user picks a file
 
     // ── Populate disease subtype dropdown based on category selection ────────
     function updateDiseaseSubtypeDropdown() {
@@ -1053,6 +1081,11 @@
                                         ? document.querySelector('meta[name="csrf-token"]').getAttribute('content')
                                         : '{{ csrf_token() }}',
                 },
+                body: JSON.stringify({
+                    detect_stain: document.getElementById('detectStainCheck')
+                                  ? document.getElementById('detectStainCheck').checked
+                                  : true,
+                }),
             })
             .then(function (res) {
                 return res.json().then(function (data) {

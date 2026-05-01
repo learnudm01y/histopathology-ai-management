@@ -298,10 +298,18 @@ class WsiPreviewController extends Controller
         $cachedPath  = $data['wsi_path'] ?? '';
         $isFusePath  = $mountRoot && str_starts_with($cachedPath, rtrim($mountRoot, '/'));
 
+        // Delete temp working dir (usually already gone — job auto-cleans it).
         $tempDir = storage_path("app/wsi_previews/{$sample->id}");
         if (!$isFusePath && is_dir($tempDir)) {
             $this->deleteDirectory($tempDir);
             Log::info("[WsiPreviewController] Deleted temp dir for sample #{$sample->id}: {$tempDir}");
+        }
+
+        // Delete the permanent thumbnail dir created by the job.
+        $thumbDir = storage_path("app/thumbnails/{$sample->id}");
+        if (is_dir($thumbDir)) {
+            $this->deleteDirectory($thumbDir);
+            Log::info("[WsiPreviewController] Deleted thumbnail dir for sample #{$sample->id}: {$thumbDir}");
         }
 
         Cache::forget($cacheKey);

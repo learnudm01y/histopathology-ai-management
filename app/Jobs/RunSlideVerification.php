@@ -42,8 +42,10 @@ class RunSlideVerification implements ShouldQueue, ShouldBeUnique
      */
     public int $uniqueFor = 600;
 
-    public function __construct(public readonly int $sampleId)
-    {
+    public function __construct(
+        public readonly int  $sampleId,
+        public readonly bool $detectStain = true,
+    ) {
     }
 
     public function handle(SlideVerificationService $service): void
@@ -78,8 +80,8 @@ class RunSlideVerification implements ShouldQueue, ShouldBeUnique
             ->exists();
 
         if ($hasSource && !$alreadyInspected) {
-            WsiPreviewJob::dispatch($this->sampleId, 'verify');
-            Log::info("[RunSlideVerification] Sample #{$this->sampleId}: dispatched WsiPreviewJob (verify mode) for deep inspection.");
+            WsiPreviewJob::dispatch($this->sampleId, 'verify', $this->detectStain);
+            Log::info("[RunSlideVerification] Sample #{$this->sampleId}: dispatched WsiPreviewJob (verify mode, detect_stain={$this->detectStain}).");
         }
     }
 }

@@ -53,6 +53,7 @@ class ProcessSampleUpload implements ShouldQueue
         public readonly ?string $gdriveFileName  = null,
         public readonly ?string $bulkFolderPath  = null,
         public readonly ?string $bulkFolderName  = null,
+        public readonly bool    $deleteSource    = true,
     ) {
         $this->onQueue('uploads');
     }
@@ -84,9 +85,10 @@ class ProcessSampleUpload implements ShouldQueue
                 $meta       = $drive->uploadLocalFile($this->tempFilePath, $folderPath);
                 $fileName   = $meta['Name'] ?? basename($this->tempFilePath);
 
-                @unlink($this->tempFilePath);
+                if ($this->deleteSource) {
+                    @unlink($this->tempFilePath);
+                }
 
-                $shareLink = $drive->getShareableLink($folderPath . '/' . $fileName);
                 $wsiPath   = $folderPath . '/' . $fileName;
 
                 $sample->update([
@@ -98,7 +100,7 @@ class ProcessSampleUpload implements ShouldQueue
                     'storage_path'    => $folderPath,
                     'wsi_remote_path' => $wsiPath,
                     'upload_type'     => 'single',
-                    'storage_link'    => $shareLink,
+                    'storage_link'    => $meta['URL'] ?? null,
                     'storage_status'  => 'available',
                     'download_completed_at' => now(),
                 ]);
@@ -217,7 +219,7 @@ class ProcessSampleUpload implements ShouldQueue
 
         } catch (\Throwable $e) {
             // Clean up only temp files (Method 1 single upload temp)
-            if ($this->tempFilePath && file_exists($this->tempFilePath)) {
+            if ($this->deleteSource && $this->tempFilePath && file_exists($this->tempFilePath)) {
                 @unlink($this->tempFilePath);
             }
             // NOTE: do NOT delete bulkFolderPath — it's the user's original local folder

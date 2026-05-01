@@ -15,8 +15,6 @@ use App\Services\CaseLinker;
 use App\Services\GoogleDriveService;
 use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
 
 class DashboardController extends Controller
@@ -161,12 +159,12 @@ class DashboardController extends Controller
 
         // Method-specific validation
         if ($uploadMethod === 'upload') {
-            if (!$request->hasFile('sample_file') || !$request->file('sample_file')) {
+            if (!$request->filled('local_file_path')) {
                 return back()
-                    ->withErrors(['sample_file' => 'Please select a file to upload. (Upload File tab)'])
+                    ->withErrors(['local_file_path' => 'Please enter the local file path. (Upload File tab)'])
                     ->withInput();
             }
-            $rules['sample_file'] = ['required', 'file', 'max:5242880'];  // 5GB
+            $rules['local_file_path'] = ['required', 'string', 'max:1000'];
 
         } elseif ($uploadMethod === 'gdrive') {
             if (!$request->filled('gdrive_link')) {
@@ -186,13 +184,11 @@ class DashboardController extends Controller
         }
 
         $validated = $request->validate($rules, [
-            'sample_file.required' => 'Please select a file to upload.',
-            'sample_file.file' => 'The selected file must be a valid file.',
-            'sample_file.max' => 'File size exceeds 5GB limit.',
-            'gdrive_link.required' => 'Please provide a Google Drive link.',
-            'gdrive_link.url' => 'Please provide a valid URL.',
-            'bulk_folder.required' => 'Please select a folder to upload.',
-            'organ_id.required' => 'Please select an Organ.',
+            'local_file_path.required' => 'Please enter the local file path.',
+            'gdrive_link.required'     => 'Please provide a Google Drive link.',
+            'gdrive_link.url'          => 'Please provide a valid URL.',
+            'bulk_folder.required'     => 'Please select a folder to upload.',
+            'organ_id.required'        => 'Please select an Organ.',
         ]);
 
         // ── Resolve upload info ──────────────────────────────────────────────
@@ -204,16 +200,20 @@ class DashboardController extends Controller
         $initialName     = 'Processing…';
         $initialSize     = null;  // captured early to survive job failure
 
-        if ($uploadMethod === 'upload' && $request->hasFile('sample_file')) {
-            $file        = $request->file('sample_file');
-            $initialName = $file->getClientOriginalName();
-            $initialSize = $file->getSize() ?: null;  // bytes, known immediately
+        if ($uploadMethod === 'upload') {
+            // Strip control chars (handles paths pasted from Explorer with hidden bytes)
+            $rawPath  = trim(preg_replace('/[\x00-\x1F\x7F]+/', '', $request->input('local_file_path', '')));
+            $realPath = realpath(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $rawPath));
 
-            // Save to temp folder — deleted by the job after Drive upload
-            Storage::makeDirectory('temp');
-            $tempName     = uniqid('sample_', true) . '.' . $file->getClientOriginalExtension();
-            $file->move(storage_path('app/temp'), $tempName);
-            $tempFilePath = storage_path('app/temp/' . $tempName);
+            if ($realPath === false || !is_file($realPath)) {
+                return back()
+                    ->withErrors(['local_file_path' => 'File not found: "' . $rawPath . '". Please verify the path.'])
+                    ->withInput();
+            }
+
+            $tempFilePath = $realPath;          // Job reads from this path directly
+            $initialName  = basename($realPath);
+            $initialSize  = filesize($realPath) ?: null;
 
         } elseif ($uploadMethod === 'gdrive') {
             /** @var GoogleDriveService $drive */
@@ -521,6 +521,8 @@ class DashboardController extends Controller
         $this->linkSampleToCase($sample);
 
         // ── Dispatch background job ──────────────────────────────────────────
+        // deleteSource=false for local path uploads — the job must NOT delete
+        // the user's original file after uploading to Google Drive.
         try {
             ProcessSampleUpload::dispatch(
                 $sample->id,
@@ -529,6 +531,7 @@ class DashboardController extends Controller
                 $gdriveFileName,
                 $bulkFolderPath,
                 $bulkFolderName,
+                deleteSource: ($uploadMethod !== 'upload'), // keep original local file
             );
 
             \Illuminate\Support\Facades\Log::info("[DashboardController] Sample #{$sample->id} queued for {$uploadMethod} upload: {$initialName}");
@@ -543,6 +546,117 @@ class DashboardController extends Controller
                 'skipped' => [],
             ]);
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // NOTE: chunked upload methods removed — local path approach used instead
+    // ─────────────────────────────────────────────────────────────────────────
+    // (placeholder to preserve diff context)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // DELETE MARKER START
+    //
+    // Step 1  POST /admin/samples/chunk-prepare
+    //   • Validates metadata (organ, category, etc.) — no file yet.
+    //   • Creates the Sample record with storage_status='pending'.
+    //   • Returns JSON { sample_id, upload_id, chunk_size }.
+    //
+    // Step 2  POST /admin/samples/chunk-receive   (called N times, one per chunk)
+    //   • Receives binary chunk + index via FormData.
+    //   • Saves to storage/app/chunks/{upload_id}/chunk_{index}.
+    //   • Returns JSON { received, total }.
+    //
+    // Step 3  POST /admin/samples/chunk-finalize
+    //   • Assembles all chunks into storage/app/temp/{filename}.
+    //   • Dispatches ProcessSampleUpload with the assembled temp file.
+    //   • Deletes the chunk directory.
+    //   • Returns JSON { success, redirect_url }.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    public function chunkPrepare(\Illuminate\Http\Request $request): \Illuminate\Http\JsonResponse
+    {
+        $validated = $request->validate([
+            'organ_id'           => ['required', 'exists:organs,id'],
+            'data_source_id'     => ['nullable', 'exists:data_sources,id'],
+            'category_id'        => ['nullable', 'exists:categories,id'],
+            'disease_subtype_id' => ['nullable', 'exists:disease_subtypes,id'],
+            'stain_id'           => ['nullable', 'exists:stains,id'],
+            'stain_marker'       => ['nullable', 'string', 'max:100'],
+            'training_phase'     => ['nullable', 'integer', 'min:1', 'max:3'],
+            'file_name'          => ['required', 'string', 'max:260'],
+            'file_size'          => ['required', 'integer', 'min:1'],
+            'total_chunks'       => ['required', 'integer', 'min:1'],
+        ]);
+
+        // Resolve initial names exactly as storeSample does for 'upload' method.
+        $tissueName  = null;
+        $sampleIdStr = null;
+
+        $sample = Sample::create([
+            'organ_id'           => $validated['organ_id'],
+            'data_source_id'     => $validated['data_source_id']     ?? null,
+            'category_id'        => $validated['category_id']        ?? null,
+            'disease_subtype_id' => $validated['disease_subtype_id'] ?? null,
+            'stain_id'           => $validated['stain_id']            ?? null,
+            'stain_marker'       => $validated['stain_marker']        ?? null,
+            'training_phase'     => $validated['training_phase']      ?? null,
+            'file_name'          => $validated['file_name'],
+            'file_size_bytes'    => $validated['file_size'],
+            'storage_status'     => 'pending',
+            'tissue_name'        => $tissueName,
+        ]);
+
+        $uploadId = \Illuminate\Support\Str::uuid()->toString();
+
+        // Stash upload context in cache (10-minute TTL — enough to finish upload)
+        \Illuminate\Support\Facades\Cache::put("chunk_upload:{$uploadId}", [
+            'sample_id'    => $sample->id,
+            'file_name'    => $validated['file_name'],
+            'file_size'    => $validated['file_size'],
+            'total_chunks' => (int) $validated['total_chunks'],
+            'received'     => 0,
+        ], 600);
+
+        return response()->json([
+            'sample_id'  => $sample->id,
+            'upload_id'  => $uploadId,
+            'chunk_size' => 10 * 1024 * 1024, // 10 MB
+        ]);
+    }
+
+    public function chunkReceive(\Illuminate\Http\Request $request): \Illuminate\Http\JsonResponse
+    {
+        $request->validate([
+            'upload_id'   => ['required', 'string', 'max:36'],
+            'chunk_index' => ['required', 'integer', 'min:0'],
+            'chunk'       => ['required', 'file'],
+        ]);
+
+        $uploadId   = $request->input('upload_id');
+        $chunkIndex = (int) $request->input('chunk_index');
+        $meta       = \Illuminate\Support\Facades\Cache::get("chunk_upload:{$uploadId}");
+
+        if (!$meta) {
+            return response()->json(['error' => 'Upload session not found or expired.'], 404);
+        }
+
+        $chunkDir = storage_path("app/chunks/{$uploadId}");
+        if (!is_dir($chunkDir)) {
+            mkdir($chunkDir, 0755, true);
+        }
+
+        $request->file('chunk')->move($chunkDir, "chunk_{$chunkIndex}");
+
+        $meta['received'] = max($meta['received'], $chunkIndex + 1);
+        \Illuminate\Support\Facades\Cache::put("chunk_upload:{$uploadId}", $meta, 600);
+
+        return response()->json([
+            'received' => $meta['received'],
+            'total'    => $meta['total_chunks'],
+        ]);
+    }
+
+    // chunk methods removed — upload now uses local file path (see storeSample)
+
 
     public function showSample(Sample $sample): View
     {
@@ -853,8 +967,10 @@ class DashboardController extends Controller
      *
      * POST /admin/samples/verify-unverified
      */
-    public function verifyAllUnverified(): \Illuminate\Http\JsonResponse
+    public function verifyAllUnverified(\Illuminate\Http\Request $request): \Illuminate\Http\JsonResponse
     {
+        $detectStain = (bool) $request->input('detect_stain', true);
+
         // ── IDs of samples that already have a non-failed, non-pending record ─
         $excludeIds = \App\Models\SlideVerification::whereIn('verification_status', ['passed', 'failed'])
             ->pluck('sample_id');
@@ -877,21 +993,22 @@ class DashboardController extends Controller
         // ── Cache key: frontend polls this to show live progress ───────────────
         $batchKey = 'bulk_verify:batch';
         \Illuminate\Support\Facades\Cache::put($batchKey, [
-            'total'     => $total,
-            'queued_at' => now()->toDateTimeString(),
+            'total'        => $total,
+            'queued_at'    => now()->toDateTimeString(),
+            'detect_stain' => $detectStain,
         ], 7200);
 
         // ── Dispatch jobs in chunks to avoid loading all models at once ────────
         $queued = 0;
-        $query->select('id')->chunk(200, function ($rows) use (&$queued) {
+        $query->select('id')->chunk(200, function ($rows) use (&$queued, $detectStain) {
             foreach ($rows as $row) {
-                \App\Jobs\RunSlideVerification::dispatch($row->id)
+                \App\Jobs\RunSlideVerification::dispatch($row->id, $detectStain)
                     ->onQueue('default');
                 $queued++;
             }
         });
 
-        \Illuminate\Support\Facades\Log::info("[verifyAllUnverified] Queued {$queued} RunSlideVerification jobs.");
+        \Illuminate\Support\Facades\Log::info("[verifyAllUnverified] Queued {$queued} RunSlideVerification jobs (detect_stain=" . ($detectStain ? 'true' : 'false') . ").");
 
         return response()->json([
             'queued'  => $queued,

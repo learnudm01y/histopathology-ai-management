@@ -59,6 +59,14 @@ class SlideVerificationService
                     $data[$key] = $value;
                 }
             }
+
+            // ── Auto-populate stain on the Sample if discovered from SVS ──
+            // When the SVS metadata contains a stain name and the sample has
+            // no stain assigned yet, look up or derive the Stain record and
+            // link it so the UI shows the correct stain without manual entry.
+            if (!empty($openSlideData['stain_normalized']) && $sample->stain_id === null) {
+                $this->assignStainFromOpenSlide($sample, $openSlideData['stain_normalized']);
+            }
         }
 
         // ── Preserve previously-computed Python values ──────────────────────
@@ -449,6 +457,36 @@ class SlideVerificationService
             return null;
         }
         return preg_match('/^TCGA-/i', $projectId) === 1 ? 'H&E' : null;
+    }
+
+    /**
+     * Look up or create the Stain record matching the normalized name
+     * returned by OpenSlide, then link it to the Sample.
+     */
+    public function assignStainFromOpenSlide(Sample $sample, string $normalizedName): void
+    {
+        try {
+            $stain = \App\Models\Stain::where('name', $normalizedName)
+                ->orWhere('abbreviation', $normalizedName)
+                ->first();
+
+            if (!$stain) {
+                // First time we see this stain — create a minimal record.
+                $stain = \App\Models\Stain::create([
+                    'name'         => $normalizedName,
+                    'abbreviation' => $normalizedName,
+                    'stain_type'   => 'routine',
+                    'is_active'    => true,
+                ]);
+            }
+
+            $sample->stain_id = $stain->id;
+            $sample->save();
+
+            Log::info("[SlideVerificationService] Auto-assigned stain '{$normalizedName}' to Sample #{$sample->id} from SVS metadata.");
+        } catch (\Throwable $e) {
+            Log::warning("[SlideVerificationService] Failed to assign stain from OpenSlide for Sample #{$sample->id}: {$e->getMessage()}");
+        }
     }
 
     /**

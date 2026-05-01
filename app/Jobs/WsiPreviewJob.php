@@ -58,6 +58,7 @@ class WsiPreviewJob implements ShouldQueue
     public function __construct(
         public readonly int    $sampleId,
         public readonly string $mode = 'preview',
+        public readonly bool   $detectStain = true,
     ) {
         $this->onQueue('previews');
     }
@@ -263,6 +264,11 @@ class WsiPreviewJob implements ShouldQueue
             . "integrity={$fastData['file_integrity_status']} "
             . "read={$fastData['read_test_status']}");
 
+        // ── Verify mode: temp dir is no longer needed — delete immediately ────
+        if ($this->mode === 'verify' && !$usingFuse) {
+            $this->_deleteTempDir($this->sampleId);
+        }
+
         // ── Phase 2 (preview mode only): thumbnail + deep metrics ────────────
         // Runs AFTER cache is already 'ready' — the DZI viewer is already open
         // on the user's browser while this runs in the background.
@@ -289,11 +295,21 @@ class WsiPreviewJob implements ShouldQueue
                 // Update DB with deep metrics (they supersede the fast values).
                 $this->_persistVerification($deepData, $this->sampleId);
 
-                // Determine thumbnail path.
+                // Move thumbnail to permanent storage so the temp dir can be
+                // deleted immediately — avoids leaving large SVS files on disk.
                 $thumbAbsPath = $deepData['thumbnail_path'] ?? null;
-                $thumbRelPath = ($thumbAbsPath && is_file($thumbAbsPath))
-                    ? 'wsi_previews/' . $this->sampleId . '/preview_output/thumbnail.jpg'
-                    : ($existingCache['thumb_rel'] ?? null);
+                $thumbRelPath = $existingCache['thumb_rel'] ?? null;
+
+                if ($thumbAbsPath && is_file($thumbAbsPath)) {
+                    $permDir = storage_path("app/thumbnails/{$this->sampleId}");
+                    if (!is_dir($permDir)) {
+                        mkdir($permDir, 0755, true);
+                    }
+                    $permAbs = $permDir . '/thumbnail.jpg';
+                    if (rename($thumbAbsPath, $permAbs)) {
+                        $thumbRelPath = 'thumbnails/' . $this->sampleId . '/thumbnail.jpg';
+                    }
+                }
 
                 // Merge deep data into the existing 'ready' cache entry.
                 $current = Cache::get($cacheKey) ?? [];
@@ -306,6 +322,12 @@ class WsiPreviewJob implements ShouldQueue
 
                 Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: deep inspection complete, thumbnail=" . ($thumbRelPath ? 'yes' : 'no'));
             }
+
+            // Delete the entire temp dir — the thumbnail is now in permanent
+            // storage (thumbnails/{id}/), the downloaded WSI is no longer needed.
+            if (!$usingFuse) {
+                $this->_deleteTempDir($this->sampleId);
+            }
         }
     }
 
@@ -316,6 +338,9 @@ class WsiPreviewJob implements ShouldQueue
         $cacheKey = "wsi_preview:{$this->sampleId}";
         $this->_cacheError($cacheKey, $exception->getMessage());
         Log::error("[WsiPreviewJob] Job failed for sample #{$this->sampleId}: " . $exception->getMessage());
+        // Clean up any partially-downloaded files. FUSE paths are never inside
+        // storage/app/wsi_previews, so this is always safe to call.
+        $this->_deleteTempDir($this->sampleId);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -337,6 +362,9 @@ class WsiPreviewJob implements ShouldQueue
             'artifact_score'        => $pyData['artifact_score']        ?? null,
             'blur_score'            => $pyData['blur_score']            ?? null,
             'background_ratio'      => $pyData['background_ratio']      ?? null,
+            'stain_type'            => $pyData['stain_normalized']      ?? null,
+            'scanner_vendor'        => $pyData['scanner_vendor']        ?? null,
+            'scanner_model'         => $pyData['scanner_model']         ?? null,
             'verified_at'           => now()->toDateTimeString(),
         ], fn($v) => $v !== null);
 
@@ -351,6 +379,19 @@ class WsiPreviewJob implements ShouldQueue
             ['sample_id' => $sampleId],
             $verificationData,
         );
+
+        // Auto-assign stain to the sample when detect_stain is enabled and
+        // the Python script returned a normalised stain name.
+        if ($this->detectStain && !empty($pyData['stain_normalized'])) {
+            $sample = Sample::find($sampleId);
+            if ($sample && !$sample->stain_id) {
+                app(SlideVerificationService::class)->assignStainFromOpenSlide(
+                    $sample,
+                    $pyData['stain_normalized'],
+                );
+                Log::info("[WsiPreviewJob] Sample #{$sampleId}: stain auto-assigned → {$pyData['stain_normalized']}");
+            }
+        }
 
         app(SlideVerificationService::class)->recomputeStatus($verification);
     }
@@ -368,6 +409,28 @@ class WsiPreviewJob implements ShouldQueue
         }
 
         return null;
+    }
+
+    /**
+     * Recursively delete storage/app/wsi_previews/{sampleId}/ if it exists.
+     * Called automatically after every successful or failed job run so that
+     * downloaded SVS files never persist on disk.
+     */
+    private function _deleteTempDir(int $sampleId): void
+    {
+        $tempDir = storage_path("app/wsi_previews/{$sampleId}");
+        if (!is_dir($tempDir)) {
+            return;
+        }
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($tempDir, \RecursiveDirectoryIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($iterator as $file) {
+            $file->isDir() ? rmdir($file->getRealPath()) : unlink($file->getRealPath());
+        }
+        rmdir($tempDir);
+        Log::info("[WsiPreviewJob] Cleaned up temp dir for sample #{$sampleId}: {$tempDir}");
     }
 
     private function _cacheError(string $key, string $message): void
