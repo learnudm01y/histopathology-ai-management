@@ -69,22 +69,20 @@ class SlideVerificationService
             }
         }
 
-        // ── Preserve previously-computed Python values ──────────────────────
-        // collectMetadata() always sets artifact_score, blur_score and several
-        // other WSI-only fields to null because they require the Python worker.
-        // If this run did not produce new values for those fields we must NOT
-        // overwrite the non-null values that WsiPreviewJob wrote earlier;
-        // otherwise every Phase-1 verify resets quality scores back to null.
-        //
-        // Lookup strategy: prefer slide_id (the true unique business key)
-        // because a sample can be re-imported under a new sample_id while
-        // keeping the same slide_id — looking up by sample_id alone would
-        // miss the existing row and cause a UNIQUE constraint violation on
-        // slide_id at INSERT time.
+        // ── Lookup: preserve existing Python-computed values ──────────
+        // (moved above to use sample_id lookup — see updateOrCreate block below)
         $slideId  = $data['slide_id'] ?? null;
-        $existing = $slideId
-            ? SlideVerification::where('slide_id', $slideId)->first()
-            : SlideVerification::where('sample_id', $sample->id)->first();
+        $existing = null; // will be resolved in updateOrCreate block
+
+        // Persist or update the verification record.
+        // ALWAYS key on sample_id — it is the FK used by Sample::slideVerification()
+        // and by WsiPreviewJob::_persistVerification(). Using slide_id as the
+        // primary key caused two separate rows (one per job) that the UI never
+        // merged: the sample show page would display the WsiPreviewJob row
+        // (with WSI metrics but no identity fields) instead of this one.
+        $data['sample_id'] = $sample->id;
+
+        $existing = SlideVerification::where('sample_id', $sample->id)->first();
 
         if ($existing) {
             // Numeric fields: keep the existing value when $data is null.
@@ -109,15 +107,10 @@ class SlideVerificationService
             }
         }
 
-        // Persist or update the verification record.
-        // Always key on slide_id when available — it is the true unique
-        // identifier for a slide and carries the UNIQUE DB constraint.
-        // Falling back to sample_id only when slide_id is absent avoids
-        // Duplicate-entry errors when the same physical slide was
-        // previously imported under a different sample_id.
-        $verification = $slideId
-            ? SlideVerification::updateOrCreate(['slide_id' => $slideId], $data)
-            : SlideVerification::updateOrCreate(['sample_id' => $sample->id], $data);
+        $verification = SlideVerification::updateOrCreate(
+            ['sample_id' => $sample->id],
+            $data,
+        );
 
         // Now compute the aggregate verification_status (passed/failed/pending).
         $verification = $this->finalize($verification);
@@ -145,18 +138,18 @@ class SlideVerificationService
         $filePath   = $sample->wsi_remote_path ?: $sample->storage_path;
 
         // patient_id — prefer clinical info or linked case; fall back to a
-        // best-effort parse of the TCGA barcode embedded in the file_name
-        // (e.g. "TCGA-BH-A203-11A-…" → "TCGA-BH-A203").
+        // best-effort parse of the barcode embedded in the file_name.
+        // Supports both TCGA (TCGA-BH-A203-11A-…) and GTEx (GTEX-1117F-2826.svs).
         $patientId = $clinical?->submitter_id
             ?: $sample->patientCase?->submitter_id
             ?: $this->parsePatientIdFromFileName($sample->file_name);
 
-        // case_id — GDC case UUID; try linked case, then clinical info,
-        // then parse from the storage path which often contains the UUID.
+        // case_id — GDC case UUID or GTEx tissue sample ID.
         $caseId = $sample->patientCase?->case_id
             ?: $clinical?->case_id
             ?: $this->parseUuidFromPath($sample->storage_path)
-            ?: $this->parseUuidFromPath($sample->wsi_remote_path);
+            ?: $this->parseUuidFromPath($sample->wsi_remote_path)
+            ?: $this->parseGtexSampleId($sample->file_name);
 
         // project_id — linked case → clinical → data_source name (TCGA-*).
         $projectId = $sample->patientCase?->project_id
@@ -190,7 +183,19 @@ class SlideVerificationService
         }
 
         // ── Sample / clinical metadata ──────────────────────────────────
+        // entity_type is GDC-specific (slide/aliquot/…); for non-GDC sources
+        // like GTEx derive a meaningful label from the category instead.
         $sampleType = $this->humanizeSampleType($sample->entity_type);
+        if (!$sampleType && $sample->category) {
+            $catLabel = strtolower($sample->category->label_en ?? $sample->category->name ?? '');
+            $sampleType = match ($catLabel) {
+                'tumor'        => 'Tumor Tissue',
+                'normal'       => 'Normal Tissue',
+                'metastatic'   => 'Metastatic Tissue',
+                'adjacent'     => 'Adjacent Normal',
+                default        => ucfirst($catLabel) ?: null,
+            };
+        }
 
         // stain_type — prefer the Stain model. For TCGA diagnostic slides
         // (which is virtually all of TCGA-BRCA pathology) stain is H&E by
@@ -273,16 +278,37 @@ class SlideVerificationService
     }
 
     /**
-     * Attempt to extract a TCGA-style patient barcode from a slide file
-     * name. TCGA slide names look like "TCGA-BH-A203-11A-04-TSD.<uuid>.svs"
-     * — the patient barcode is the first three dash-segments.
+     * Attempt to extract a TCGA or GTEx donor/patient barcode from a slide
+     * file name.
+     * - TCGA: "TCGA-BH-A203-11A-…" → "TCGA-BH-A203"
+     * - GTEx: "GTEX-1117F-2826.svs" → "GTEX-1117F" (donor ID)
      */
     private function parsePatientIdFromFileName(?string $fileName): ?string
     {
         if (!$fileName) {
             return null;
         }
+        // TCGA: three leading barcode segments
         if (preg_match('/(TCGA-[A-Z0-9]{2}-[A-Z0-9]{4})/i', $fileName, $m)) {
+            return strtoupper($m[1]);
+        }
+        // GTEx: donor ID = first two dash-separated segments of the filename
+        if (preg_match('/^(GTEX-[A-Z0-9]+)/i', $fileName, $m)) {
+            return strtoupper($m[1]);
+        }
+        return null;
+    }
+
+    /**
+     * Extract a GTEx tissue sample ID from a file name.
+     * "GTEX-1117F-2826.svs" → "GTEX-1117F-2826"
+     */
+    private function parseGtexSampleId(?string $fileName): ?string
+    {
+        if (!$fileName) {
+            return null;
+        }
+        if (preg_match('/^(GTEX-[A-Z0-9]+-[A-Z0-9]+)/i', $fileName, $m)) {
             return strtoupper($m[1]);
         }
         return null;
@@ -446,17 +472,18 @@ class SlideVerificationService
     }
 
     /**
-     * For TCGA diagnostic slides where no explicit Stain is recorded, we
-     * default to H&E since that's the de-facto stain for TCGA pathology.
-     * This is intentionally narrow: we ONLY default for known TCGA
-     * projects to avoid masking missing data elsewhere.
+     * For TCGA and GTEx diagnostic slides where no explicit Stain is
+     * recorded, we default to H&E since that is the de-facto stain.
+     * This is intentionally narrow to avoid masking missing data elsewhere.
      */
     private function defaultStainForProject(?string $projectId): ?string
     {
         if (!$projectId) {
             return null;
         }
-        return preg_match('/^TCGA-/i', $projectId) === 1 ? 'H&E' : null;
+        return (preg_match('/^TCGA-/i', $projectId) || preg_match('/^GTEX/i', $projectId))
+            ? 'H&E'
+            : null;
     }
 
     /**

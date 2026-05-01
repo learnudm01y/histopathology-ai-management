@@ -109,6 +109,14 @@ class WsiPreviewJob implements ShouldQueue
         $usingFuse = false;
         $mountRoot = env('WSI_GDRIVE_MOUNT', '');
 
+        // ── Guarantee cleanup regardless of exit path ────────────────────────
+        // $keepTempForTileServer = true when the preview succeeded and the tile
+        // server needs the local WSI file to remain on disk for tile serving.
+        // In ALL other cases (verify mode, any early-return, any exception) the
+        // temp dir is deleted in the finally block below.
+        $keepTempForTileServer = false;
+        try {
+
         if ($mountRoot && $remotePath) {
             // $remotePath is a relative path on the remote (e.g.
             // "samples/TCGA-BRCA/tumor/uuid/file.svs"). Strip any
@@ -264,11 +272,6 @@ class WsiPreviewJob implements ShouldQueue
             . "integrity={$fastData['file_integrity_status']} "
             . "read={$fastData['read_test_status']}");
 
-        // ── Verify mode: temp dir is no longer needed — delete immediately ────
-        if ($this->mode === 'verify' && !$usingFuse) {
-            $this->_deleteTempDir($this->sampleId);
-        }
-
         // ── Phase 2 (preview mode only): thumbnail + deep metrics ────────────
         // Runs AFTER cache is already 'ready' — the DZI viewer is already open
         // on the user's browser while this runs in the background.
@@ -323,9 +326,20 @@ class WsiPreviewJob implements ShouldQueue
                 Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: deep inspection complete, thumbnail=" . ($thumbRelPath ? 'yes' : 'no'));
             }
 
-            // Delete the entire temp dir — the thumbnail is now in permanent
-            // storage (thumbnails/{id}/), the downloaded WSI is no longer needed.
+            // Thumbnail is now in permanent storage.
+            // Keep the downloaded WSI in temp dir so the tile server can serve
+            // tiles to the browser. Cleanup happens when the user closes the
+            // preview panel (WsiPreviewController@cleanup endpoint is called).
             if (!$usingFuse) {
+                $keepTempForTileServer = true;
+            }
+        }
+        } finally {
+            // Delete temp dir when:
+            //   - verify mode (tile server never needs the file)
+            //   - preview mode that errored / returned early ($keepTempForTileServer = false)
+            // Do NOT delete when preview succeeded — tile server still reading.
+            if (!$keepTempForTileServer) {
                 $this->_deleteTempDir($this->sampleId);
             }
         }

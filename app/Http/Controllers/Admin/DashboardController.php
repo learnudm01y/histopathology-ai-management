@@ -531,7 +531,9 @@ class DashboardController extends Controller
                 $gdriveFileName,
                 $bulkFolderPath,
                 $bulkFolderName,
-                deleteSource: ($uploadMethod !== 'upload'), // keep original local file
+                // deleteSource=true (default): delete the local file after upload to
+                // Google Drive. The server must NEVER retain WSI files on disk.
+                // Note: for bulk/gdrive methods $tempFilePath is null so this is a no-op.
             );
 
             \Illuminate\Support\Facades\Log::info("[DashboardController] Sample #{$sample->id} queued for {$uploadMethod} upload: {$initialName}");

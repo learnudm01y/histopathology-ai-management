@@ -203,9 +203,9 @@
                                 <th style="padding:6px 4px;">Category</th>
                                 <th style="padding:6px 4px;">Subtype</th>
                                 <th style="padding:6px 4px;">Size</th>
-                                <th style="padding:6px 4px;">Storage</th>
-                                <th style="padding:6px 4px;">Tiling</th>
-                                <th style="padding:6px 4px;">Quality</th>
+                                <th style="padding:6px 14px;">Storage</th>
+                                <th style="padding:6px 14px;">Tiling</th>
+                                <th style="padding:6px 14px;">Quality</th>
                                 <th style="padding:6px 4px; text-align:right;">Actions</th>
                             </tr>
                         </thead>
@@ -247,14 +247,14 @@
                                 </td>
 
                                 {{-- Storage Status --}}
-                                <td style="padding:6px 4px;" class="align-middle">
+                                <td style="padding:6px 14px;" class="align-middle">
                                     <span class="badge badge-{{ $sample->storage_status_badge }}">
                                         {{ str_replace('_', ' ', $sample->storage_status) }}
                                     </span>
                                 </td>
 
                                 {{-- Tiling Status --}}
-                                <td style="padding:6px 4px;" class="align-middle">
+                                <td style="padding:6px 14px;" class="align-middle">
                                     <span class="badge badge-{{ $sample->tiling_status_badge }}">
                                         {{ $sample->tiling_status }}
                                         @if($sample->tiling_status === 'done' && $sample->tile_count)
@@ -264,7 +264,7 @@
                                 </td>
 
                                 {{-- Quality Status --}}
-                                <td style="padding:6px 4px;" class="align-middle">
+                                <td style="padding:6px 14px;" class="align-middle">
                                     <span class="badge badge-{{ $sample->quality_status_badge }}">
                                         {{ str_replace('_', ' ', $sample->quality_status) }}
                                     </span>
