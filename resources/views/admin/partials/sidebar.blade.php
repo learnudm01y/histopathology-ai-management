@@ -80,6 +80,12 @@
                             Stains
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link {{ str_starts_with($routeName ?? '', 'admin.settings.ai-models') ? 'active' : '' }}"
+                           href="{{ route('admin.settings.ai-models.index') }}">
+                            AI Models
+                        </a>
+                    </li>
                 </ul>
             </div>
         </li>

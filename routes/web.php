@@ -5,6 +5,7 @@ use App\Http\Controllers\Admin\CasesController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\ImportsController;
 use App\Http\Controllers\Admin\WsiPreviewController;
+use App\Http\Controllers\Admin\Settings\AiModelsController;
 use App\Http\Controllers\Admin\Settings\CategoriesController;
 use App\Http\Controllers\Admin\Settings\DataSourcesController;
 use App\Http\Controllers\Admin\Settings\DiseaseSubtypesController;
@@ -78,6 +79,9 @@ Route::prefix('admin')->name('admin.')->group(function () {
             Route::resource('organs', OrgansController::class)->except(['show']);
             Route::resource('data-sources', DataSourcesController::class)->except(['show']);
             Route::resource('stains', StainsController::class)->except(['show']);
+            Route::resource('ai-models', AiModelsController::class)
+                ->except(['show'])
+                ->parameters(['ai-models' => 'aiModel']);
         });
     });
 });

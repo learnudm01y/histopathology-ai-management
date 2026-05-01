@@ -67,7 +67,17 @@ class SlideVerificationService
         // If this run did not produce new values for those fields we must NOT
         // overwrite the non-null values that WsiPreviewJob wrote earlier;
         // otherwise every Phase-1 verify resets quality scores back to null.
-        $existing = SlideVerification::where('sample_id', $sample->id)->first();
+        //
+        // Lookup strategy: prefer slide_id (the true unique business key)
+        // because a sample can be re-imported under a new sample_id while
+        // keeping the same slide_id — looking up by sample_id alone would
+        // miss the existing row and cause a UNIQUE constraint violation on
+        // slide_id at INSERT time.
+        $slideId  = $data['slide_id'] ?? null;
+        $existing = $slideId
+            ? SlideVerification::where('slide_id', $slideId)->first()
+            : SlideVerification::where('sample_id', $sample->id)->first();
+
         if ($existing) {
             // Numeric fields: keep the existing value when $data is null.
             $preserveIfNull = [
@@ -91,11 +101,15 @@ class SlideVerificationService
             }
         }
 
-        // Persist or update the verification record (one per sample).
-        $verification = SlideVerification::updateOrCreate(
-            ['sample_id' => $sample->id],
-            $data,
-        );
+        // Persist or update the verification record.
+        // Always key on slide_id when available — it is the true unique
+        // identifier for a slide and carries the UNIQUE DB constraint.
+        // Falling back to sample_id only when slide_id is absent avoids
+        // Duplicate-entry errors when the same physical slide was
+        // previously imported under a different sample_id.
+        $verification = $slideId
+            ? SlideVerification::updateOrCreate(['slide_id' => $slideId], $data)
+            : SlideVerification::updateOrCreate(['sample_id' => $sample->id], $data);
 
         // Now compute the aggregate verification_status (passed/failed/pending).
         $verification = $this->finalize($verification);

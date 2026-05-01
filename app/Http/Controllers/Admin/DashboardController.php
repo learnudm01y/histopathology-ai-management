@@ -647,9 +647,116 @@ class DashboardController extends Controller
             ->with('success', 'Upload retry started for sample #' . $sample->id . '.');
     }
 
-    public function workflow(): View
+    public function workflow(Request $request): View
     {
-        return view('admin.workflow');
+        // ── Build filters ──────────────────────────────────────────
+        $filters = [
+            'uniqueness'     => $request->input('uniqueness', 'any'),         // any | unique
+            'gender'         => $request->input('gender'),                    // male | female | null
+            'quality_status' => $request->input('quality_status'),            // passed|rejected|needs_review|pending|null
+            'min_size_gb'    => $request->input('min_size_gb'),
+            'max_size_gb'    => $request->input('max_size_gb'),
+            'organ_id'       => $request->input('organ_id'),
+            'stain_id'       => $request->input('stain_id'),
+            'data_source_id' => $request->input('data_source_id'),
+            'disease_type'   => $request->input('disease_type'),
+            'tiling_status'  => $request->input('tiling_status'),             // done | pending | failed | processing | null
+            'tile_size_px'   => $request->input('tile_size_px'),
+            'magnification'  => $request->input('magnification'),
+            'category_id'    => $request->input('category_id'),
+            'is_usable'      => $request->input('is_usable'),                 // 1|0|null
+            'ai_model_id'    => $request->input('ai_model_id'),
+        ];
+
+        $query = Sample::query()
+            ->with(['organ:id,name', 'stain:id,name,abbreviation', 'dataSource:id,name',
+                    'category:id,label_en', 'patientCase:id,case_id,disease_type'])
+            ->leftJoin('cases', 'samples.case_id', '=', 'cases.id')
+            ->leftJoin('clinical_slide_case_information as clin', 'cases.case_id', '=', 'clin.case_id')
+            ->select('samples.*');
+
+        if ($filters['gender']) {
+            $query->where('clin.gender', $filters['gender']);
+        }
+        if ($filters['quality_status']) {
+            $query->where('samples.quality_status', $filters['quality_status']);
+        }
+        if ($filters['min_size_gb'] !== null && $filters['min_size_gb'] !== '') {
+            $query->where('samples.file_size_gb', '>=', (float) $filters['min_size_gb']);
+        }
+        if ($filters['max_size_gb'] !== null && $filters['max_size_gb'] !== '') {
+            $query->where('samples.file_size_gb', '<=', (float) $filters['max_size_gb']);
+        }
+        if ($filters['organ_id']) {
+            $query->where('samples.organ_id', $filters['organ_id']);
+        }
+        if ($filters['stain_id']) {
+            $query->where('samples.stain_id', $filters['stain_id']);
+        }
+        if ($filters['data_source_id']) {
+            $query->where('samples.data_source_id', $filters['data_source_id']);
+        }
+        if ($filters['disease_type']) {
+            $query->where('cases.disease_type', $filters['disease_type']);
+        }
+        if ($filters['tiling_status']) {
+            $query->where('samples.tiling_status', $filters['tiling_status']);
+        }
+        if ($filters['tile_size_px']) {
+            $query->where('samples.tile_size_px', (int) $filters['tile_size_px']);
+        }
+        if ($filters['magnification']) {
+            $query->where('samples.magnification', $filters['magnification']);
+        }
+        if ($filters['category_id']) {
+            $query->where('samples.category_id', $filters['category_id']);
+        }
+        if ($filters['is_usable'] === '1' || $filters['is_usable'] === '0') {
+            $query->where('samples.is_usable', (bool) $filters['is_usable']);
+        }
+
+        // Uniqueness: one sample per case (lowest sample id per case)
+        if ($filters['uniqueness'] === 'unique') {
+            $uniqueIds = \Illuminate\Support\Facades\DB::table('samples')
+                ->whereNotNull('case_id')
+                ->groupBy('case_id')
+                ->selectRaw('MIN(id) as id')
+                ->pluck('id');
+            $query->whereIn('samples.id', $uniqueIds);
+        }
+
+        $samples = $query->orderByDesc('samples.id')->paginate(50)->withQueryString();
+
+        // ── Filter option lists ───────────────────────────────────
+        $organs        = Organ::orderBy('name')->get(['id', 'name']);
+        $stains        = Stain::orderBy('name')->get(['id', 'name', 'abbreviation']);
+        $dataSources   = DataSource::orderBy('name')->get(['id', 'name']);
+        $categories    = Category::orderBy('label_en')->get(['id', 'label_en']);
+        $diseaseTypes  = \App\Models\PatientCase::whereNotNull('disease_type')
+            ->where('disease_type', '!=', '')
+            ->distinct()
+            ->orderBy('disease_type')
+            ->pluck('disease_type');
+        $tileSizes = Sample::whereNotNull('tile_size_px')
+            ->distinct()
+            ->orderBy('tile_size_px')
+            ->pluck('tile_size_px');
+        $magnifications = Sample::whereNotNull('magnification')
+            ->where('magnification', '!=', '')
+            ->distinct()
+            ->orderBy('magnification')
+            ->pluck('magnification');
+
+        $aiModels = \App\Models\AiModel::where('is_active', true)
+            ->orderByDesc('is_default')
+            ->orderBy('name')
+            ->get();
+
+        return view('admin.workflow', compact(
+            'filters', 'samples',
+            'organs', 'stains', 'dataSources', 'categories',
+            'diseaseTypes', 'tileSizes', 'magnifications', 'aiModels'
+        ));
     }
 
     /**
