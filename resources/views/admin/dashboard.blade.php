@@ -466,19 +466,22 @@
     @foreach($diseaseCategories as $cat)
     @php
         $cl = strtolower($cat);
-        if (str_contains($cl,'tumor')||str_contains($cl,'malignant')||str_contains($cl,'cancer')) {
-            $badgeColor = 'danger';
-        } elseif (str_contains($cl,'normal')||str_contains($cl,'benign')||str_contains($cl,'healthy')) {
-            $badgeColor = 'success';
-        } elseif (str_contains($cl,'unknown')||str_contains($cl,'uncat')) {
-            $badgeColor = 'secondary';
-        } else {
-            $badgeColor = 'primary';
-        }
+        if ($cl === 'normal')         { $badgeColor = 'success'; }
+        elseif ($cl === 'benign')     { $badgeStyle = 'background:#17a2b8;color:#fff;'; $badgeColor = ''; }
+        elseif ($cl === 'malignant')  { $badgeStyle = 'background:#ff7800;color:#fff;'; $badgeColor = ''; }
+        elseif ($cl === 'tumor')      { $badgeColor = 'danger'; }
+        elseif (str_contains($cl,'unknown')||str_contains($cl,'uncat')) { $badgeColor = 'secondary'; }
+        else                          { $badgeColor = 'primary'; }
+        $badgeStyle = $badgeStyle ?? '';
     @endphp
+    @if($badgeColor)
     <span class="badge badge-{{ $badgeColor }}" style="font-size:.75rem; padding:.35em .7em;">
+    @else
+    <span class="badge" style="font-size:.75rem; padding:.35em .7em; {{ $badgeStyle }}">
+    @endif
         <i class="mdi mdi-circle mr-1" style="font-size:.6rem;"></i>{{ $cat }}
     </span>
+    @php $badgeStyle = ''; $badgeColor = ''; @endphp
     @endforeach
 </div>
 
@@ -528,17 +531,17 @@
                             @php $cnt = $diseaseMatrix[$disease][$cat] ?? 0; @endphp
                             @php
                                 $cl2 = strtolower($cat);
-                                if (str_contains($cl2,'tumor')||str_contains($cl2,'malignant')||str_contains($cl2,'cancer')) {
-                                    $textColor = 'text-danger';
-                                } elseif (str_contains($cl2,'normal')||str_contains($cl2,'benign')||str_contains($cl2,'healthy')) {
-                                    $textColor = 'text-success';
-                                } else {
-                                    $textColor = 'text-muted';
-                                }
+                                if ($cl2 === 'normal')         { $textColor = 'text-success'; }
+                                elseif ($cl2 === 'benign')     { $textColor = ''; $textStyle = 'color:#17a2b8;'; }
+                                elseif ($cl2 === 'malignant')  { $textColor = ''; $textStyle = 'color:#ff7800;'; }
+                                elseif ($cl2 === 'tumor')      { $textColor = 'text-danger'; }
+                                else                           { $textColor = 'text-muted'; }
+                                $textStyle = $textStyle ?? '';
                             @endphp
-                            <td class="px-2 text-center align-middle {{ $cnt > 0 ? $textColor : 'text-muted' }}">
+                            <td class="px-2 text-center align-middle {{ $cnt > 0 ? $textColor : 'text-muted' }}" style="{{ $cnt > 0 ? $textStyle : '' }}">
                                 {{ $cnt > 0 ? number_format($cnt) : '—' }}
                             </td>
+                            @php $textStyle = ''; $textColor = ''; @endphp
                             @endforeach
                             <td class="px-2 text-center align-middle font-weight-bold">
                                 {{ number_format($diseaseTotals[$disease] ?? 0) }}
@@ -568,12 +571,10 @@
     // Assign a colour to each category based on its name
     function categoryColor(cat, alpha) {
         var c = cat.toLowerCase();
-        if (c.indexOf('tumor') !== -1 || c.indexOf('malignant') !== -1 || c.indexOf('cancer') !== -1) {
-            return 'rgba(220,53,69,' + alpha + ')';
-        }
-        if (c.indexOf('normal') !== -1 || c.indexOf('benign') !== -1 || c.indexOf('healthy') !== -1) {
-            return 'rgba(40,167,69,' + alpha + ')';
-        }
+        if (c === 'normal')    return 'rgba(40,167,69,'   + alpha + ')';   // green
+        if (c === 'benign')    return 'rgba(23,162,184,'  + alpha + ')';   // teal/cyan
+        if (c === 'malignant') return 'rgba(255,120,0,'   + alpha + ')';   // orange-red
+        if (c === 'tumor')     return 'rgba(220,53,69,'   + alpha + ')';   // red
         if (c.indexOf('unknown') !== -1 || c.indexOf('uncat') !== -1) {
             return 'rgba(108,117,125,' + alpha + ')';
         }

@@ -64,7 +64,14 @@ class DashboardController extends Controller
             ->orderByDesc('id')
             ->get();
 
-        // Precise disease chart: disease_type × category (Tumor / Normal / …) breakdown
+        // Precise disease chart: disease_type × category breakdown
+        // Fixed category order: Normal, Malignant, Benign, Tumor (all active, excluding Unknown)
+        $fixedCategories = Category::where('is_active', true)
+            ->whereNotIn('label_en', ['Unknown'])
+            ->orderByRaw("FIELD(label_en, 'Normal', 'Malignant', 'Benign', 'Tumor')")
+            ->pluck('label_en')
+            ->toArray();
+
         $rawDiseaseStats = \Illuminate\Support\Facades\DB::table('cases')
             ->select(
                 'cases.disease_type',
@@ -86,7 +93,7 @@ class DashboardController extends Controller
 
         $diseaseChartData = [
             'labels'     => $diseaseTotals->keys()->values()->toArray(),
-            'categories' => $rawDiseaseStats->pluck('category_label')->unique()->sort()->values()->toArray(),
+            'categories' => $fixedCategories,
             'matrix'     => $rawDiseaseStats->groupBy('disease_type')
                                 ->map(fn ($g) => $g->pluck('slide_count', 'category_label')->toArray())
                                 ->toArray(),
