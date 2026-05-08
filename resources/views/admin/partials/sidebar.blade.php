@@ -30,8 +30,8 @@
 
         <li class="nav-item {{ $routeName === 'admin.workflow' ? 'active' : '' }}">
             <a class="nav-link" href="{{ route('admin.workflow') }}">
-                <i class="menu-icon typcn typcn-flow-merge"></i>
-                <span class="menu-title">Workflow</span>
+                <i class="menu-icon typcn typcn-cog"></i>
+                <span class="menu-title">Operations</span>
             </a>
         </li>
 
@@ -84,6 +84,24 @@
                         <a class="nav-link {{ str_starts_with($routeName ?? '', 'admin.settings.ai-models') ? 'active' : '' }}"
                            href="{{ route('admin.settings.ai-models.index') }}">
                             AI Models
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {{ str_starts_with($routeName ?? '', 'admin.settings.servers') ? 'active' : '' }}"
+                           href="{{ route('admin.settings.servers.index') }}">
+                            Servers
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {{ str_starts_with($routeName ?? '', 'admin.settings.patch-sizes') ? 'active' : '' }}"
+                           href="{{ route('admin.settings.patch-sizes.index') }}">
+                            Patch Sizes
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {{ str_starts_with($routeName ?? '', 'admin.settings.magnifications') ? 'active' : '' }}"
+                           href="{{ route('admin.settings.magnifications.index') }}">
+                            Magnifications
                         </a>
                     </li>
                 </ul>

@@ -490,9 +490,19 @@ class DashboardController extends Controller
             ? (DiseaseSubtype::find($validated['disease_subtype_id'])?->name ?? '')
             : '';
 
-        $uuid              = (string) \Illuminate\Support\Str::uuid();
-        $entitySubmitterId = implode('-', array_filter([$sourceName, $categoryLabel, $subtypeName, $uuid]));
-        $tissueName        = ($sourceName || $categoryLabel || $subtypeName)
+        $uuid = (string) \Illuminate\Support\Str::uuid();
+
+        // For GTEx slides (e.g. GTEX-1117F-2826.svs) use the tissue sample ID directly
+        // so CaseLinker can match it to a PatientCase by submitter_id reduction.
+        $gtexTissueId = null;
+        if (preg_match('/^(GTEX-[A-Z0-9]+-[A-Z0-9]+)\./i', $initialName, $gtexM)) {
+            $gtexTissueId = strtoupper($gtexM[1]);
+        }
+
+        $entitySubmitterId = $gtexTissueId
+            ?: implode('-', array_filter([$sourceName, $categoryLabel, $subtypeName, $uuid]));
+
+        $tissueName = ($sourceName || $categoryLabel || $subtypeName)
             ? '/' . implode('/', array_filter([$sourceName, $categoryLabel])) . '/' . $entitySubmitterId . '/'
             : null;
 
@@ -767,6 +777,13 @@ class DashboardController extends Controller
     {
         // ── Build filters ──────────────────────────────────────────
         $filters = [
+            // ── Operations context (new) ───────────────────────────
+            'operation_type' => $request->input('operation_type'),
+            'server_id'      => $request->input('server_id'),
+            'patch_size_id'  => $request->input('patch_size_id'),
+            'magnification_id' => $request->input('magnification_id'),
+
+            // ── Sample filters ─────────────────────────────────────
             'uniqueness'     => $request->input('uniqueness', 'any'),         // any | unique
             'gender'         => $request->input('gender'),                    // male | female | null
             'quality_status' => $request->input('quality_status'),            // passed|rejected|needs_review|pending|null
@@ -776,10 +793,10 @@ class DashboardController extends Controller
             'stain_id'       => $request->input('stain_id'),
             'data_source_id' => $request->input('data_source_id'),
             'disease_type'   => $request->input('disease_type'),
-            'tiling_status'  => $request->input('tiling_status'),             // done | pending | failed | processing | null
-            'tile_size_px'   => $request->input('tile_size_px'),
-            'magnification'  => $request->input('magnification'),
-            'category_id'    => $request->input('category_id'),
+            'tiling_status'          => $request->input('tiling_status'),     // done | pending | failed | processing | null
+            'tile_size_px'           => $request->input('tile_size_px'),
+            'filter_magnification_id'=> $request->input('filter_magnification_id'), // Step-3 sample filter (separate from op context)
+            'category_id'            => $request->input('category_id'),
             'is_usable'      => $request->input('is_usable'),                 // 1|0|null
             'ai_model_id'    => $request->input('ai_model_id'),
         ];
@@ -821,8 +838,10 @@ class DashboardController extends Controller
         if ($filters['tile_size_px']) {
             $query->where('samples.tile_size_px', (int) $filters['tile_size_px']);
         }
-        if ($filters['magnification']) {
-            $query->where('samples.magnification', $filters['magnification']);
+        // NOTE: magnification_id is the operation context (Step 2 selection), NOT a sample filter.
+        // Use filter_magnification_id (Step-3 dropdown) to restrict samples by their existing magnification.
+        if ($filters['filter_magnification_id'] ?? '') {
+            $query->where('samples.magnification_id', $filters['filter_magnification_id']);
         }
         if ($filters['category_id']) {
             $query->where('samples.category_id', $filters['category_id']);
@@ -857,21 +876,28 @@ class DashboardController extends Controller
             ->distinct()
             ->orderBy('tile_size_px')
             ->pluck('tile_size_px');
-        $magnifications = Sample::whereNotNull('magnification')
-            ->where('magnification', '!=', '')
-            ->distinct()
-            ->orderBy('magnification')
-            ->pluck('magnification');
+        $magnifications = \App\Models\Magnification::where('is_active', true)
+            ->orderBy('value')
+            ->get();
 
         $aiModels = \App\Models\AiModel::where('is_active', true)
             ->orderByDesc('is_default')
             ->orderBy('name')
             ->get();
 
+        // ── Operations: servers + patch sizes ─────────────────────
+        $servers    = \App\Models\ServerName::where('is_active', true)->orderBy('name')->get();
+        $patchSizes = \App\Models\PatchSize::where('is_active', true)
+            ->with('aiModel:id,name')
+            ->orderBy('size_px')
+            ->orderBy('overlap_px')
+            ->get();
+
         return view('admin.workflow', compact(
             'filters', 'samples',
             'organs', 'stains', 'dataSources', 'categories',
-            'diseaseTypes', 'tileSizes', 'magnifications', 'aiModels'
+            'diseaseTypes', 'tileSizes', 'magnifications', 'aiModels',
+            'servers', 'patchSizes'
         ));
     }
 

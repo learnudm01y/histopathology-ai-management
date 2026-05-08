@@ -171,6 +171,9 @@
                         <button type="button" class="btn btn-primary btn-sm" data-toggle="modal" data-target="#addSampleModal">
                             <i class="mdi mdi-plus"></i> Add Sample
                         </button>
+                        <button type="button" class="btn btn-danger btn-sm" data-toggle="modal" data-target="#bulkDeleteSamplesModal">
+                            <i class="mdi mdi-delete-sweep mr-1"></i> Bulk Delete
+                        </button>
                     </div>
                 </div>
 
@@ -318,6 +321,136 @@
 
 {{-- ── Add Sample Modal ──────────────────────────────────────────────────── --}}
 @push('modals')
+
+{{-- ── Bulk Delete Samples Modal ─────────────────────────────────────────── --}}
+<div class="modal fade" id="bulkDeleteSamplesModal" tabindex="-1" role="dialog" aria-labelledby="bulkDeleteSamplesLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg" role="document">
+        <div class="modal-content border-danger" style="border-width:2px;">
+            <div class="modal-header bg-danger text-white py-2">
+                <h5 class="modal-title mb-0" id="bulkDeleteSamplesLabel">
+                    <i class="mdi mdi-delete-sweep mr-1"></i> Bulk Delete Samples
+                </h5>
+                <button type="button" class="close text-white" data-dismiss="modal"><span>&times;</span></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning py-2 small mb-3">
+                    <i class="mdi mdi-alert-outline mr-1"></i>
+                    <strong>Warning:</strong> This will permanently delete matching samples from the database
+                    <em>and</em> their files from Google Drive. This action cannot be undone.
+                </div>
+
+                {{-- Filters --}}
+                <div class="row" id="bulkSampleFilters">
+                    <div class="col-md-6">
+                        <div class="form-group mb-2">
+                            <label class="small font-weight-medium">Data Source</label>
+                            <select id="bs-data-source" class="form-control form-control-sm">
+                                <option value="">— Any —</option>
+                                @foreach($dataSources as $ds)
+                                    <option value="{{ $ds->id }}">{{ $ds->name }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-group mb-2">
+                            <label class="small font-weight-medium">Quality Status</label>
+                            <select id="bs-quality" class="form-control form-control-sm">
+                                <option value="">— Any —</option>
+                                <option value="pending">Pending</option>
+                                <option value="passed">Passed</option>
+                                <option value="rejected">Rejected</option>
+                                <option value="needs_review">Needs Review</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-group mb-2">
+                            <label class="small font-weight-medium">Organ</label>
+                            <select id="bs-organ" class="form-control form-control-sm">
+                                <option value="">— Any —</option>
+                                @foreach($organs as $organ)
+                                    <option value="{{ $organ->id }}">{{ $organ->name }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-group mb-2">
+                            <label class="small font-weight-medium">Disease Type (Category)</label>
+                            <select id="bs-category" class="form-control form-control-sm">
+                                <option value="">— Any —</option>
+                                @foreach($categories as $cat)
+                                    <option value="{{ $cat->id }}">{{ $cat->label_en }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-group mb-2">
+                            <label class="small font-weight-medium">Storage Status</label>
+                            <select id="bs-storage" class="form-control form-control-sm">
+                                <option value="">— Any —</option>
+                                <option value="not_downloaded">Not on Drive</option>
+                                <option value="downloading">Downloading</option>
+                                <option value="available">Available</option>
+                                <option value="corrupted">Corrupted</option>
+                                <option value="missing">Missing</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-md-6 d-flex align-items-end">
+                        <button type="button" class="btn btn-outline-secondary btn-sm mb-2 w-100" id="bsPreviewBtn">
+                            <i class="mdi mdi-magnify mr-1"></i> Preview Matching Samples
+                        </button>
+                    </div>
+                </div>
+
+                {{-- Preview result --}}
+                <div id="bsPreviewResult" class="d-none">
+                    <hr class="my-2">
+                    <div class="d-flex align-items-center mb-2">
+                        <span class="font-weight-bold text-danger mr-2">
+                            <i class="mdi mdi-alert-circle-outline mr-1"></i>
+                            <span id="bsMatchCount">0</span> sample(s) will be deleted
+                        </span>
+                    </div>
+                    <div id="bsPreviewList" class="small text-muted bg-light rounded p-2" style="max-height:120px;overflow-y:auto;"></div>
+                </div>
+
+                {{-- Confirm step --}}
+                <div id="bsConfirmStep" class="mt-3 d-none">
+                    <hr class="my-2">
+                    <div class="form-group mb-0">
+                        <label class="small font-weight-medium text-danger">
+                            Type <code>DELETE</code> to confirm permanent deletion:
+                        </label>
+                        <input type="text" id="bsConfirmInput" class="form-control form-control-sm mt-1"
+                               placeholder="DELETE" autocomplete="off">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer py-2">
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger btn-sm" id="bsExecuteBtn" disabled>
+                    <i class="mdi mdi-delete-forever mr-1"></i> Delete Permanently
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<form id="bsDeleteForm" method="POST" action="{{ route('admin.bulk.samples.delete') }}" style="display:none;">
+    @csrf
+    @method('DELETE')
+    <input type="hidden" name="quality_status"  id="bsF-quality">
+    <input type="hidden" name="data_source_id"  id="bsF-data-source">
+    <input type="hidden" name="organ_id"         id="bsF-organ">
+    <input type="hidden" name="category_id"      id="bsF-category">
+    <input type="hidden" name="storage_status"   id="bsF-storage">
+    <input type="hidden" name="confirm"          id="bsF-confirm">
+</form>
+
 <div class="modal fade" id="addSampleModal" tabindex="-1" role="dialog" aria-labelledby="addSampleModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-xl" role="document">
         <div class="modal-content">
@@ -344,6 +477,12 @@
                             <a class="nav-link" id="tab-main-gdc-link"
                                data-toggle="tab" href="#pane-main-gdc" role="tab">
                                 <i class="mdi mdi-cloud-upload-outline mr-1"></i> Import GDC Files
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" id="tab-main-gtex-link"
+                               data-toggle="tab" href="#pane-main-gtex" role="tab">
+                                <i class="mdi mdi-dna mr-1"></i> Import GTEx CSV
                             </a>
                         </li>
                     </ul>
@@ -684,6 +823,133 @@
             </div>
                 </div>{{-- /tab-pane #pane-main-gdc --}}
 
+                {{-- ── Tab 3: Import GTEx CSV ── --}}
+                <div class="tab-pane fade" id="pane-main-gtex" role="tabpanel">
+                    <div class="modal-body bg-light">
+                        <div class="alert alert-info py-2 small">
+                            <i class="mdi mdi-information-outline mr-1"></i>
+                            Upload the <strong>GTEx Portal CSV</strong> file (downloaded from
+                            <a href="https://gtexportal.org/home/histologyPage" target="_blank" rel="noopener">gtexportal.org</a>).
+                            <ul class="mb-0 mt-1 pl-3">
+                                <li>Creates / updates <strong>PatientCase</strong> records per donor (Subject ID).</li>
+                                <li>Creates / updates <strong>Clinical Information</strong> (sex, age, Hardy scale, tissue).</li>
+                                <li>Links existing <strong>Samples</strong> whose names match the Tissue Sample ID.</li>
+                            </ul>
+                            <small class="d-block mt-2">
+                                CSV columns expected: <code>Tissue Sample ID | Tissue | Subject ID | Sex | Age Bracket | Hardy Scale | Pathology Categories | Pathology Notes</code>
+                            </small>
+                        </div>
+
+                        @if(session('gtex_import_result') || session('gtex_import_output'))
+                        @php $gr = session('gtex_import_result'); @endphp
+                        <div class="alert alert-success small mb-2 py-2">
+                            <strong><i class="mdi mdi-check-circle-outline mr-1"></i>Import completed{{ $gr && $gr['dry_run'] ? ' (Dry Run)' : '' }}.</strong>
+                            @if($gr)
+                            <div class="mt-2 d-flex flex-wrap" style="gap:.5rem .75rem;">
+                                <span class="badge badge-success px-2 py-1">✔ Cases created: {{ $gr['cases_created'] }}</span>
+                                <span class="badge badge-info px-2 py-1">↻ Cases updated: {{ $gr['cases_updated'] }}</span>
+                                <span class="badge badge-warning px-2 py-1">🔗 Samples linked: {{ $gr['samples_linked'] }}</span>
+                                @if($gr['skipped_count'] > 0)
+                                <span class="badge badge-secondary px-2 py-1">⏭ Skipped subjects: {{ $gr['skipped_count'] }}</span>
+                                @endif
+                            </div>
+                            @endif
+                        </div>
+
+                        @if($gr && $gr['skipped_count'] > 0)
+                        <div class="alert alert-warning small mb-2 py-2">
+                            <strong><i class="mdi mdi-alert-outline mr-1"></i>{{ $gr['skipped_count'] }} subject(s) were skipped — no slides found in the system.</strong>
+                            <p class="mb-1 mt-1">
+                                <i class="mdi mdi-information-outline mr-1 text-muted"></i>
+                                <strong>Why?</strong> Case information is only imported for donors who already have
+                                at least one slide (SVS file) uploaded to this system.<br>
+                                <strong>Fix:</strong> Upload the corresponding slide files first, then re-run this import.
+                            </p>
+                            <details class="mt-1">
+                                <summary class="cursor-pointer font-weight-medium" style="cursor:pointer;">
+                                    Show skipped subjects ({{ $gr['skipped_count'] }})
+                                </summary>
+                                <div class="table-responsive mt-2">
+                                    <table class="table table-sm table-bordered mb-0 bg-white" style="font-size:.78rem;">
+                                        <thead class="thead-light">
+                                            <tr>
+                                                <th>Subject ID</th>
+                                                <th>Tissue</th>
+                                                <th>Tissue Sample ID(s)</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                        @foreach($gr['skipped_details'] as $sk)
+                                            <tr>
+                                                <td class="font-weight-medium">{{ $sk['subject'] }}</td>
+                                                <td>{{ $sk['tissue'] }}</td>
+                                                <td class="text-muted">{{ implode(', ', $sk['tissue_ids']) }}</td>
+                                            </tr>
+                                        @endforeach
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </details>
+                        </div>
+                        @endif
+
+                        @if($gr && !empty($gr['warnings']))
+                        <div class="alert alert-secondary small mb-2 py-2">
+                            <strong><i class="mdi mdi-alert-circle-outline mr-1"></i>{{ count($gr['warnings']) }} warning(s):</strong>
+                            <ul class="mb-0 mt-1 pl-3">
+                                @foreach($gr['warnings'] as $w)
+                                    <li>{{ $w }}</li>
+                                @endforeach
+                            </ul>
+                        </div>
+                        @endif
+                        @endif
+
+                        @if(session('gtex_import_error'))
+                            <div class="alert alert-danger small mb-2 py-2">
+                                <strong><i class="mdi mdi-close-circle-outline mr-1"></i>Import failed:</strong>
+                                <pre class="mb-0 mt-1 small" style="white-space:pre-wrap;">{{ session('gtex_import_error') }}</pre>
+                            </div>
+                        @endif
+
+                        <form method="POST" action="{{ route('admin.imports.gtex.store') }}" enctype="multipart/form-data" id="gtexImportForm">
+                            @csrf
+                            <div class="row">
+                                <div class="col-md-8">
+                                    <div class="form-group mb-2">
+                                        <label class="small">GTEx Portal CSV <span class="text-danger">*</span></label>
+                                        <div class="custom-file">
+                                            <input type="file"
+                                                   class="custom-file-input @error('gtex_csv') is-invalid @enderror"
+                                                   name="gtex_csv" id="gtexCsvInput"
+                                                   accept=".csv,.txt" required>
+                                            <label class="custom-file-label" for="gtexCsvInput">Choose CSV file…</label>
+                                        </div>
+                                        @error('gtex_csv')<div class="text-danger small mt-1">{{ $message }}</div>@enderror
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="form-group mb-2 mt-4">
+                                        <div class="custom-control custom-checkbox">
+                                            <input type="checkbox" class="custom-control-input" id="gtexDryRun" name="dry_run" value="1">
+                                            <label class="custom-control-label small" for="gtexDryRun">Dry Run (preview only)</label>
+                                        </div>
+                                        <div class="custom-control custom-checkbox mt-1">
+                                            <input type="checkbox" class="custom-control-input" id="gtexForceRelink" name="force_relink" value="1">
+                                            <label class="custom-control-label small" for="gtexForceRelink">Force re-link samples</label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <button type="submit" class="btn btn-success btn-sm">
+                                    <i class="mdi mdi-dna mr-1"></i> Import GTEx CSV
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>{{-- /tab-pane #pane-main-gtex --}}
+
             </div>{{-- /tab-content --}}
 
         </div>
@@ -921,6 +1187,31 @@
         });
     }
 
+    // ── GTEx CSV label ───────────────────────────────────────────────────────
+    var gtexCsvEl = document.getElementById('gtexCsvInput');
+    if (gtexCsvEl) {
+        gtexCsvEl.addEventListener('change', function () {
+            var lbl = this.nextElementSibling;
+            if (!lbl) return;
+            lbl.textContent = this.files.length ? this.files[0].name : 'Choose CSV file…';
+        });
+    }
+
+    // ── Auto-open GTEx tab if redirected back with #tab-main-gtex-link ──────
+    if (window.location.hash === '#tab-main-gtex-link') {
+        var $modal      = $('#addSampleModal');
+        var gtexTabLink = document.getElementById('tab-main-gtex-link');
+        if ($modal.length && gtexTabLink) {
+            // Open the modal first, THEN switch to the GTEx tab once it's visible
+            $modal.one('shown.bs.modal', function () {
+                $(gtexTabLink).tab('show');
+            });
+            $modal.modal('show');
+        }
+        // Clean up the hash so back-navigation works naturally
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+
     // ── Bulk path input: clear other methods on change ────────────────────────
     var bulkPathInput = document.getElementById('bulkFolderPathInput');
     if (bulkPathInput) {
@@ -1120,6 +1411,79 @@
             });
         });
     }
+}());
+
+// ── Bulk Delete Samples ───────────────────────────────────────────────────
+(function () {
+    var previewUrl = "{{ route('admin.bulk.samples.preview') }}";
+
+    function getFilters() {
+        return {
+            quality_status:  document.getElementById('bs-quality').value   || null,
+            data_source_id:  document.getElementById('bs-data-source').value || null,
+            organ_id:        document.getElementById('bs-organ').value      || null,
+            category_id:     document.getElementById('bs-category').value   || null,
+            storage_status:  document.getElementById('bs-storage').value    || null,
+        };
+    }
+
+    document.getElementById('bsPreviewBtn').addEventListener('click', function () {
+        var filters = getFilters();
+        var btn = this;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm mr-1"></span> Loading…';
+
+        fetch(previewUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content'),
+                'Accept': 'application/json',
+            },
+            body: JSON.stringify(filters),
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            document.getElementById('bsMatchCount').textContent = data.count;
+            var list = document.getElementById('bsPreviewList');
+            list.innerHTML = data.preview.length
+                ? data.preview.map(function (n) { return '<div>' + n + '</div>'; }).join('') +
+                  (data.count > data.preview.length ? '<div class="text-muted">… and ' + (data.count - data.preview.length) + ' more</div>' : '')
+                : '<em>No files to show</em>';
+            document.getElementById('bsPreviewResult').classList.remove('d-none');
+            document.getElementById('bsConfirmStep').classList.toggle('d-none', data.count === 0);
+        })
+        .catch(function () {
+            alert('Preview failed. Please try again.');
+        })
+        .finally(function () {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="mdi mdi-magnify mr-1"></i> Preview Matching Samples';
+        });
+    });
+
+    document.getElementById('bsConfirmInput').addEventListener('input', function () {
+        document.getElementById('bsExecuteBtn').disabled = (this.value.trim() !== 'DELETE');
+    });
+
+    document.getElementById('bsExecuteBtn').addEventListener('click', function () {
+        var filters = getFilters();
+        document.getElementById('bsF-quality').value      = filters.quality_status  || '';
+        document.getElementById('bsF-data-source').value  = filters.data_source_id  || '';
+        document.getElementById('bsF-organ').value         = filters.organ_id        || '';
+        document.getElementById('bsF-category').value      = filters.category_id     || '';
+        document.getElementById('bsF-storage').value       = filters.storage_status  || '';
+        document.getElementById('bsF-confirm').value       = document.getElementById('bsConfirmInput').value;
+        document.getElementById('bsDeleteForm').submit();
+    });
+
+    // Reset modal on close
+    document.getElementById('bulkDeleteSamplesModal').addEventListener('hidden.bs.modal', function () {
+        document.getElementById('bsPreviewResult').classList.add('d-none');
+        document.getElementById('bsConfirmStep').classList.add('d-none');
+        document.getElementById('bsConfirmInput').value = '';
+        document.getElementById('bsExecuteBtn').disabled = true;
+    });
 }());
 </script>
 @endpush

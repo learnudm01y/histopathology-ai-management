@@ -76,6 +76,105 @@
 </div>
 @endif
 
+{{-- ── AI Pipeline Progress ─────────────────────────────────────────────── --}}
+@php
+    $pipelineStages = $sample->pipelineStages;
+    $activeIdx = 0;
+    foreach ($pipelineStages as $i => $st) {
+        if (in_array($st['status'], ['completed', 'processing', 'failed'])) {
+            $activeIdx = $i;
+        }
+    }
+@endphp
+<div class="card mb-4">
+    <div class="card-body py-4 px-4">
+        <h5 class="card-title mb-4" style="font-size:.95rem;">
+            <i class="mdi mdi-chart-timeline-variant mr-1 text-primary"></i>
+            AI Processing Pipeline
+        </h5>
+
+        {{-- ── Progress connector track ── --}}
+        <div class="pipeline-track d-flex align-items-start justify-content-between" style="position:relative; padding:0 1rem;">
+
+            {{-- Horizontal connector line --}}
+            <div style="position:absolute; top:22px; left:calc(10% + 1rem); right:calc(10% + 1rem); height:3px; background:#e4e7ed; z-index:0;">
+                @php
+                    $completedCount = collect($pipelineStages)->filter(fn($s) => $s['status'] === 'completed')->count();
+                    $pct = count($pipelineStages) > 1 ? ($completedCount / (count($pipelineStages) - 1)) * 100 : 0;
+                    $pct = min($pct, 100);
+                @endphp
+                <div style="height:100%; width:{{ $pct }}%; background:linear-gradient(90deg,#1bcfb4,#198754); transition:width .5s;"></div>
+            </div>
+
+            {{-- Steps --}}
+            @foreach($pipelineStages as $idx => $stage)
+            @php
+                $isDone    = $stage['status'] === 'completed';
+                $isFailed  = $stage['status'] === 'failed';
+                $isRunning = $stage['status'] === 'processing';
+                $isPending = $stage['status'] === 'pending';
+
+                $circleStyle = $isDone
+                    ? 'background:#1bcfb4; border-color:#1bcfb4; color:#fff;'
+                    : ($isFailed
+                        ? 'background:#fc7c5f; border-color:#fc7c5f; color:#fff;'
+                        : ($isRunning
+                            ? 'background:#4d83ff; border-color:#4d83ff; color:#fff;'
+                            : 'background:#fff; border-color:#dee2e6; color:#adb5bd;'));
+
+                $iconClass = $isDone
+                    ? 'mdi-check-bold'
+                    : ($isFailed
+                        ? 'mdi-close'
+                        : ($isRunning
+                            ? 'mdi-loading mdi-spin'
+                            : 'mdi-circle-outline'));
+            @endphp
+            <div class="text-center" style="flex:1; position:relative; z-index:1; min-width:0;">
+                {{-- Circle --}}
+                <div style="width:44px; height:44px; border-radius:50%; border:3px solid; display:inline-flex; align-items:center; justify-content:center; font-size:1.1rem; {{ $circleStyle }} box-shadow:{{ $isDone ? '0 0 0 4px rgba(27,207,180,.18)' : 'none' }};">
+                    <i class="mdi {{ $iconClass }}"></i>
+                </div>
+
+                {{-- Label --}}
+                <p class="mb-0 mt-2 font-weight-{{ $isDone || $isRunning ? 'bold' : 'normal' }}"
+                   style="font-size:.72rem; color:{{ $isDone ? '#1bcfb4' : ($isFailed ? '#fc7c5f' : ($isRunning ? '#4d83ff' : '#6c757d')) }}; line-height:1.3;">
+                    {{ $stage['label'] }}
+                </p>
+
+                {{-- Status badge --}}
+                <span style="font-size:.65rem; display:block; margin-top:2px;">
+                    @if($isDone)
+                        <span style="color:#1bcfb4;"><i class="mdi mdi-check-circle mr-1"></i>Done</span>
+                    @elseif($isFailed)
+                        <span style="color:#fc7c5f;"><i class="mdi mdi-alert-circle mr-1"></i>Failed</span>
+                    @elseif($isRunning)
+                        <span style="color:#4d83ff;"><i class="mdi mdi-progress-clock mr-1"></i>Running</span>
+                    @else
+                        <span style="color:#adb5bd;"><i class="mdi mdi-clock-outline mr-1"></i>Pending</span>
+                    @endif
+                </span>
+
+                {{-- Timestamp --}}
+                @if($isDone && !empty($stage['completed_at']))
+                <span style="font-size:.62rem; color:#adb5bd; display:block; margin-top:2px;">
+                    {{ \Carbon\Carbon::parse($stage['completed_at'])->format('d M, H:i') }}
+                </span>
+                @endif
+
+                {{-- Result (only for final diagnosis) --}}
+                @if($stage['key'] === 'final_diagnosis' && $isDone && !empty($stage['result']))
+                <span class="badge badge-success mt-1" style="font-size:.65rem; display:inline-block; max-width:100px; white-space:normal;">
+                    {{ $stage['result'] }}
+                </span>
+                @endif
+            </div>
+            @endforeach
+
+        </div>{{-- /.pipeline-track --}}
+    </div>
+</div>
+
 {{-- ── Clinical Information ────────────────────────────────────────────── --}}
 @php
     $clinical = $sample->patientCase?->clinicalInfo;
@@ -1017,6 +1116,17 @@
                        padding:2px 10px; cursor:pointer; font-size:.75rem;">
             <i class="mdi mdi-fit-to-page-outline"></i> Fit
         </button>
+        {{-- Magnification preset buttons --}}
+        <span style="color:#555; font-size:.72rem; margin-left:.5rem;">Mag:</span>
+        <button id="modal-mag-10x" type="button" title="Jump to ~10× magnification"
+                style="background:none; border:1px solid #3a3a3a; color:#aaa; border-radius:4px;
+                       padding:1px 9px; cursor:pointer; font-size:.72rem; line-height:1.6;">10×</button>
+        <button id="modal-mag-20x" type="button" title="Jump to ~20× magnification"
+                style="background:none; border:1px solid #3a3a3a; color:#aaa; border-radius:4px;
+                       padding:1px 9px; cursor:pointer; font-size:.72rem; line-height:1.6;">20×</button>
+        <button id="modal-mag-40x" type="button" title="Jump to ~40× magnification"
+                style="background:none; border:1px solid #3a3a3a; color:#aaa; border-radius:4px;
+                       padding:1px 9px; cursor:pointer; font-size:.72rem; line-height:1.6;">40×</button>
         {{-- Close X --}}
         <button id="modal-close-x" type="button" title="Close viewer"
                 style="background:none; border:1px solid #444; color:#ccc; border-radius:4px;
@@ -1386,6 +1496,9 @@
     var elModalZoomIn   = document.getElementById('modal-zoom-in');
     var elModalZoomOut  = document.getElementById('modal-zoom-out');
     var elModalZoomFit  = document.getElementById('modal-zoom-fit');
+    var elModalMag10    = document.getElementById('modal-mag-10x');
+    var elModalMag20    = document.getElementById('modal-mag-20x');
+    var elModalMag40    = document.getElementById('modal-mag-40x');
     var elModalCloseX   = document.getElementById('modal-close-x');
     var elModalApprove  = document.getElementById('modal-approve-btn');
     var elModalClose    = document.getElementById('modal-nodecision-btn');
@@ -1838,6 +1951,38 @@
         if (osdViewer) { osdViewer.viewport.goHome(); return; }
         fitToScreen();
     });
+
+    /* ─────────────────────────────────────────────────────────────────── */
+    /* Magnification preset buttons (10×, 20×, 40×)                        */
+    /*                                                                      */
+    /* For OpenSeadragon the native slide magnification (from OpenSlide     */
+    /* mpp metadata) would give exact values, but we don't always have it.  */
+    /* Instead we use normalised OSD zoom ratios: at zoom=1 the slide fits  */
+    /* the viewport; 10× ≈ 1× scan-level, 20× ≈ 2× scan-level, 40× ≈ 4×. */
+    /* These are reasonable relative presets that work for any slide.       */
+    /* ─────────────────────────────────────────────────────────────────── */
+    function jumpToMagnification(factor) {
+        if (osdViewer) {
+            // factor is relative to the fit-to-screen (home) zoom level
+            var homeZoom = osdViewer.viewport.getHomeZoom();
+            osdViewer.viewport.zoomTo(homeZoom * factor);
+            osdViewer.viewport.applyConstraints();
+            return;
+        }
+        // Static-image fallback
+        fitToScreen();
+        var cx = elModalContainer.clientWidth  / 2;
+        var cy = elModalContainer.clientHeight / 2;
+        var newScale = Math.min(mScale * factor, 40);
+        mTx = cx - (cx - mTx) * (newScale / mScale);
+        mTy = cy - (cy - mTy) * (newScale / mScale);
+        mScale = newScale;
+        applyModalTransform();
+    }
+    // 10× ≈ 1× home zoom (overview), 20× ≈ 2×, 40× ≈ 4× (high-detail)
+    if (elModalMag10) elModalMag10.addEventListener('click', function () { jumpToMagnification(1);   });
+    if (elModalMag20) elModalMag20.addEventListener('click', function () { jumpToMagnification(2);   });
+    if (elModalMag40) elModalMag40.addEventListener('click', function () { jumpToMagnification(4);   });
 
     /* ─────────────────────────────────────────────────────────────────── */
     /* Cleanup (delete temp file)                                            */

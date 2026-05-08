@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\DataSource;
 use App\Models\PatientCase;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -31,8 +32,8 @@ class CasesController extends Controller
             });
         }
 
-        if ($request->filled('project_id')) {
-            $query->where('project_id', $request->project_id);
+        if ($request->filled('data_source_id')) {
+            $query->where('data_source_id', $request->data_source_id);
         }
 
         if ($request->filled('with_clinical')) {
@@ -71,7 +72,9 @@ class CasesController extends Controller
             ->orderBy('project_id')
             ->pluck('project_id');
 
-        return view('admin.cases.index', compact('cases', 'stats', 'projects'));
+        $dataSources = DataSource::orderBy('name')->get(['id', 'name']);
+
+        return view('admin.cases.index', compact('cases', 'stats', 'projects', 'dataSources'));
     }
 
     /**

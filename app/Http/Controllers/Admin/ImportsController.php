@@ -11,6 +11,8 @@ use App\Services\CaseLinker;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -558,5 +560,51 @@ class ImportsController extends Controller
         if ($s['clinical']['samples_linked']) $bits[] = "Linked {$s['clinical']['samples_linked']} sample(s) to cases";
         if ($s['unknown']) $bits[] = "{$s['unknown']} unrecognised file(s)";
         return $bits ? implode(' · ', $bits) : 'Nothing was imported.';
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  GTEx CSV import
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * POST /admin/imports/gtex
+     * Accepts a GTEx Portal CSV and runs the gtex:import-manifest artisan command.
+     */
+    public function storeGtex(Request $request): RedirectResponse
+    {
+        $request->validate([
+            'gtex_csv' => ['required', 'file', 'max:10240',
+                'mimetypes:text/csv,text/plain,application/csv,application/octet-stream,application/vnd.ms-excel'],
+        ], [
+            'gtex_csv.required' => 'Please choose a GTEx Portal CSV file.',
+        ]);
+
+        // Use the PHP upload temp file directly — no extra store/unlink needed.
+        // Artisan::call() is synchronous so the temp file is guaranteed to exist
+        // for the full duration of the command execution.
+        $file      = $request->file('gtex_csv');
+        $fullPath  = $file->getRealPath();
+        $resultKey = 'gtex_import_result_' . uniqid('', true);
+
+        $params = ['file' => $fullPath, '--result-key' => $resultKey];
+        if ($request->boolean('dry_run'))      $params['--dry-run']      = true;
+        if ($request->boolean('force_relink')) $params['--force-relink'] = true;
+
+        $exitCode = Artisan::call('gtex:import-manifest', $params);
+        $output   = Artisan::output();
+
+        // Read structured results stored by the command via Cache
+        $result = Cache::pull($resultKey);
+
+        $redirectUrl = route('admin.samples') . '#tab-main-gtex-link';
+
+        if ($exitCode !== 0) {
+            return redirect($redirectUrl)
+                ->with('gtex_import_error', trim($output) ?: 'Import failed with exit code ' . $exitCode);
+        }
+
+        return redirect($redirectUrl)
+            ->with('gtex_import_result', $result)
+            ->with('gtex_import_output', trim($output));
     }
 }

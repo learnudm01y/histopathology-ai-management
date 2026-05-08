@@ -20,12 +20,19 @@ use Illuminate\Support\Facades\Log;
  *      folder-path string by a bulk upload before the proper extractor was
  *      applied.
  *
+ * GTEx matching strategy:
+ *   Tissue Sample ID format: GTEX-{DONOR}-{PLATE}  e.g. GTEX-1117F-2826
+ *   Patient/donor  ID format: GTEX-{DONOR}           e.g. GTEX-1117F
+ *   Reduction: first 2 hyphen-segments  →  cases.submitter_id
+ *
  * Idempotent — safe to call multiple times. No-op if sample is already linked.
  */
 class CaseLinker
 {
     private const TCGA_PATTERN =
         '/^([A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+(?:-[A-Z0-9]+(?:-\d+)?(?:-[A-Z0-9]+)?)?)/i';
+
+    private const GTEX_PATTERN = '/^(GTEX-[A-Z0-9]+)-[A-Z0-9]+/i';
 
     /**
      * Attempt to link a single Sample to its PatientCase.
@@ -159,22 +166,41 @@ class CaseLinker
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * "TCGA-BH-A203-11A-04-TSD"  →  "TCGA-BH-A203"
+     * Reduce a slide identifier to a patient/donor submitter_id.
+     * Supports both TCGA and GTEx formats.
+     *
+     * TCGA: "TCGA-BH-A203-11A-04-TSD" → "TCGA-BH-A203" (first 3 segments)
+     * GTEx: "GTEX-1117F-2826"          → "GTEX-1117F"   (first 2 segments)
      */
     private function reduceToPatientSubmitter(?string $entitySub): ?string
     {
         if (!$entitySub) return null;
+
+        // GTEx: GTEX-DONOR-PLATE → GTEX-DONOR
+        if (preg_match(self::GTEX_PATTERN, $entitySub, $m)) {
+            return strtoupper($m[1]);
+        }
+
+        // TCGA / generic: first 3 hyphen-segments
         $parts = explode('-', $entitySub);
         if (count($parts) < 3) return null;
         return implode('-', array_slice($parts, 0, 3));
     }
 
     /**
-     * "TCGA-BH-A203-11A-04-TSD.45eca4c3-….svs"  →  "TCGA-BH-A203-11A-04-TSD"
+     * Extract a slide-level submitter ID from a file name.
+     * TCGA: "TCGA-BH-A203-11A-04-TSD.45eca4c3-….svs" → "TCGA-BH-A203-11A-04-TSD"
+     * GTEx: "GTEX-1117F-2826.svs"                     → "GTEX-1117F-2826"
      */
     private function extractTcgaSubmitterId(?string $filename): ?string
     {
         if (!$filename) return null;
+
+        // GTEx: GTEX-DONOR-PLATE.svs
+        if (preg_match('/^(GTEX-[A-Z0-9]+-[A-Z0-9]+)\.svs$/i', $filename, $m)) {
+            return strtoupper($m[1]);
+        }
+
         return preg_match(self::TCGA_PATTERN, $filename, $m) ? $m[1] : null;
     }
 }

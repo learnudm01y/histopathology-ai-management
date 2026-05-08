@@ -1,15 +1,20 @@
 <?php
 
 use App\Http\Controllers\Admin\AuthController;
+use App\Http\Controllers\Admin\BulkDeleteController;
 use App\Http\Controllers\Admin\CasesController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\ImportsController;
+use App\Http\Controllers\Admin\OperationsController;
 use App\Http\Controllers\Admin\WsiPreviewController;
 use App\Http\Controllers\Admin\Settings\AiModelsController;
 use App\Http\Controllers\Admin\Settings\CategoriesController;
 use App\Http\Controllers\Admin\Settings\DataSourcesController;
 use App\Http\Controllers\Admin\Settings\DiseaseSubtypesController;
 use App\Http\Controllers\Admin\Settings\OrgansController;
+use App\Http\Controllers\Admin\Settings\MagnificationsController;
+use App\Http\Controllers\Admin\Settings\PatchSizesController;
+use App\Http\Controllers\Admin\Settings\ServersController;
 use App\Http\Controllers\Admin\Settings\StainsController;
 use Illuminate\Support\Facades\Route;
 
@@ -61,14 +66,24 @@ Route::prefix('admin')->name('admin.')->group(function () {
             ->name('samples.wsi-preview.dzi-tile');
 
         Route::get('workflow', [DashboardController::class, 'workflow'])->name('workflow');
+        Route::post('workflow/dispatch/patch-extraction', [OperationsController::class, 'dispatchPatchExtraction'])->name('workflow.dispatch.patch-extraction');
         Route::get('output', [DashboardController::class, 'output'])->name('output');
 
         // Cases (patients) — clinical case browser
         Route::get('cases',          [CasesController::class, 'index'])->name('cases.index');
         Route::get('cases/{case}',   [CasesController::class, 'show'])->name('cases.show');
 
+        // Bulk delete (samples + cases)
+        Route::post('bulk/samples/preview', [BulkDeleteController::class, 'previewSamples'])->name('bulk.samples.preview');
+        Route::delete('bulk/samples',       [BulkDeleteController::class, 'deleteSamples'])->name('bulk.samples.delete');
+        Route::post('bulk/cases/preview',   [BulkDeleteController::class, 'previewCases'])->name('bulk.cases.preview');
+        Route::delete('bulk/cases',         [BulkDeleteController::class, 'deleteCases'])->name('bulk.cases.delete');
+
         // Imports — manifest / metadata / clinical JSON files
         Route::post('imports', [ImportsController::class, 'store'])->name('imports.store');
+
+        // GTEx CSV import
+        Route::post('imports/gtex', [ImportsController::class, 'storeGtex'])->name('imports.gtex.store');
 
         // Settings
         Route::prefix('settings')->name('settings.')->group(function () {
@@ -82,6 +97,12 @@ Route::prefix('admin')->name('admin.')->group(function () {
             Route::resource('ai-models', AiModelsController::class)
                 ->except(['show'])
                 ->parameters(['ai-models' => 'aiModel']);
+            Route::resource('servers', ServersController::class)->except(['show']);
+            Route::resource('patch-sizes', PatchSizesController::class)
+                ->except(['show'])
+                ->parameters(['patch-sizes' => 'patchSize']);
+            Route::resource('magnifications', MagnificationsController::class)
+                ->except(['show']);
         });
     });
 });

@@ -19,6 +19,10 @@ class DatabaseSeeder extends Seeder
             OrganSeeder::class,
             DataSourceSeeder::class,
             CategorySeeder::class,
+            AiModelSeeder::class,
+            ServerNameSeeder::class,
+            PatchSizeSeeder::class,
+            MagnificationSeeder::class,
         ]);
     }
 }

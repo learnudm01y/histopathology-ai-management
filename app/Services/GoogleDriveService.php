@@ -433,4 +433,42 @@ class GoogleDriveService
     {
         return trim(preg_replace('/[\/\\\\:*?"<>|]+/', '_', $name));
     }
+
+    /**
+     * Delete a file or folder from Google Drive via rclone purge/deletefile.
+     * Uses rclone deletefile for single files, purge for directories.
+     *
+     * @param string $remotePath  Full remote path (e.g. "gdrive:root/TCGA-BRCA/Normal/…/file.svs")
+     * @param bool   $isDir       If true, uses rclone purge (removes directory + contents)
+     * @return bool  True on success, false on rclone error (logs the error but does not throw)
+     */
+    public function deleteRemotePath(string $remotePath, bool $isDir = false): bool
+    {
+        $verb = $isDir ? 'purge' : 'deletefile';
+        $cmd  = ['rclone', $verb, $remotePath, '--config', config('gdrive.rclone_config')];
+
+        try {
+            $process = new Process($cmd);
+            $process->setTimeout(120);
+            $process->run();
+
+            if ($process->isSuccessful()) {
+                Log::info("[GoogleDriveService] Deleted remote path: {$remotePath}");
+                return true;
+            }
+
+            $err = trim($process->getErrorOutput());
+            // "file not found" / "object not found" — already gone, treat as success
+            if (str_contains($err, 'not found') || str_contains($err, 'object not found')) {
+                Log::info("[GoogleDriveService] Remote path already absent: {$remotePath}");
+                return true;
+            }
+
+            Log::warning("[GoogleDriveService] rclone {$verb} failed for {$remotePath}: {$err}");
+            return false;
+        } catch (\Throwable $e) {
+            Log::error("[GoogleDriveService] deleteRemotePath exception: " . $e->getMessage());
+            return false;
+        }
+    }
 }
