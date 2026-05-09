@@ -120,4 +120,29 @@ class FeatureExtractionApiController extends Controller
             'time'    => now()->toIso8601String(),
         ]);
     }
+
+    /**
+     * Self-registration — RunPod calls this on boot to update its own api_url.
+     * Authenticated via the same Bearer token (verify.server.api_key).
+     */
+    public function updateUrl(Request $request, int $serverId): JsonResponse
+    {
+        $data = $request->validate([
+            'api_url' => ['required', 'url', 'max:255'],
+        ]);
+
+        $affected = \DB::table('servers_names')
+            ->where('id', $serverId)
+            ->update(['api_url' => $data['api_url']]);
+
+        if (!$affected) {
+            return response()->json(['success' => false, 'message' => 'Server not found.'], 404);
+        }
+
+        Log::info('[API/server] Self-registered api_url for server #' . $serverId, [
+            'api_url' => $data['api_url'],
+        ]);
+
+        return response()->json(['success' => true, 'api_url' => $data['api_url']]);
+    }
 }

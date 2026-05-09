@@ -43,4 +43,8 @@ Route::prefix('v1')
             Route::get('/jobs/{sample}', [FeatureExtractionApiController::class, 'show'])
                 ->name('api.feature-extraction.show');
         });
+
+        // Server self-registration: RunPod calls this on boot to update its api_url.
+        Route::post('/servers/{serverId}/update-url', [FeatureExtractionApiController::class, 'updateUrl'])
+            ->name('api.servers.update-url');
     });
