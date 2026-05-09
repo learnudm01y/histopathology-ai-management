@@ -19,6 +19,15 @@ Schedule::command('slides:verify-pending')
     ->withoutOverlapping(5)
     ->runInBackground();
 
+// ─── Auto-recover stuck patch extraction jobs ─────────────────────────
+// Runs every 10 minutes. Finds samples stuck in tiling_status='processing'
+// for >30 min (worker was killed mid-upload), checks Drive for patches,
+// then marks as 'done' or 'failed' automatically.
+Schedule::command('patch:recover-stuck --fix')
+    ->everyTenMinutes()
+    ->withoutOverlapping(5)
+    ->runInBackground();
+
 // ─── Clean orphaned slide_verifications rows ──────────────────────────
 // Removes rows whose parent sample no longer exists in the samples table.
 // These stale rows block re-import because of the UNIQUE constraint on

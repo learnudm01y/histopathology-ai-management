@@ -185,11 +185,40 @@ class GoogleDriveService
     }
 
     /**
+     * Upload a single file to a remote folder.
+     *
+     * Used for uploading a compressed patch archive (patches.tar.gz) instead
+     * of thousands of individual patch files — dramatically fewer API calls.
+     *
+     * Returns the rclone metadata of the uploaded file (Name, Size, ID, etc.).
+     */
+    public function uploadFile(string $localFilePath, string $remoteFolder): array
+    {
+        $this->rclone(['mkdir', "{$this->remoteName}:{$remoteFolder}"], timeout: 60);
+
+        $this->rclone([
+            'copy',
+            $localFilePath,
+            "{$this->remoteName}:{$remoteFolder}",
+        ], timeout: 3600);
+
+        try {
+            return $this->fetchFileMeta($remoteFolder . '/' . basename($localFilePath));
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /**
      * Upload a directory structure (TCGA folder).
      * Preserves the original folder structure without modification.
-     * Returns metadata of any WSI files found (.svs, .tiff, .tif).
+     *
+     * @param  bool $scanForWsi  When true (default), also lists WSI files in the
+     *                           uploaded folder and returns them.  Pass false when
+     *                           uploading patch/tile folders so we don't waste time
+     *                           doing a recursive lsjson on thousands of small files.
      */
-    public function uploadBulkFolder(string $localFolderPath, string $remoteFolderPath): array
+    public function uploadBulkFolder(string $localFolderPath, string $remoteFolderPath, bool $scanForWsi = true): array
     {
         $this->rclone(['mkdir', "{$this->remoteName}:{$remoteFolderPath}"], timeout: 300);
 
@@ -199,8 +228,7 @@ class GoogleDriveService
             "{$this->remoteName}:{$remoteFolderPath}",
         ], timeout: 7200);
 
-        // Find all WSI files in the uploaded directory
-        $wsiFiles = $this->findWsiFilesInFolder($remoteFolderPath);
+        $wsiFiles = $scanForWsi ? $this->findWsiFilesInFolder($remoteFolderPath) : [];
 
         return [
             'remote_path' => $remoteFolderPath,

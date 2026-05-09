@@ -12,6 +12,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Symfony\Component\Process\Process;
@@ -80,22 +81,36 @@ class PatchExtractionJob implements ShouldQueue
             $result     = $this->runExtraction($localWsi, $patchesDir, $patchSize);
             Log::info("[PatchExtraction] Sample #{$this->sampleId}: {$result['patches_extracted']} patches extracted, {$result['patches_skipped']} skipped");
 
-            // ── 3. Upload patches to Google Drive ────────────────────────────
+            // ── 3. Compress patches into a single archive ─────────────────────
+            // Uploading 1 archive file = 1 rclone API call instead of N calls
+            // (one per patch file). This is dramatically faster for large slides.
+            $archivePath = $tempDir . DIRECTORY_SEPARATOR . 'patches.tar.gz';
+            $this->compressPatches($patchesDir, $archivePath);
+
+            // ── 4. Upload archive to Google Drive ────────────────────────────
             $gdrivePath = $this->buildGdrivePath($sample, $patchSize, $magnification);
-            $drive->uploadBulkFolder($patchesDir, $gdrivePath);
 
-            // Retrieve the Google Drive folder ID from rclone metadata
-            $folderMeta     = $drive->fetchFileMeta($gdrivePath);
-            $gdriveFolderId = $folderMeta['ID'] ?? null;
+            // Save the path BEFORE uploading so recovery command can find it
+            // even if the PHP process is killed during the upload.
+            Sample::where('id', $this->sampleId)->update(['tiles_gdrive_path' => $gdrivePath]);
 
-            Log::info("[PatchExtraction] Sample #{$this->sampleId}: uploaded to gdrive:{$gdrivePath} (id={$gdriveFolderId})");
+            Log::info("[PatchExtraction] Sample #{$this->sampleId}: starting upload → gdrive:{$gdrivePath}/patches.tar.gz");
+
+            $fileMeta = $drive->uploadFile($archivePath, $gdrivePath);
+            $gdriveFolderId = $fileMeta['ID'] ?? null;
+
+            Log::info("[PatchExtraction] Sample #{$this->sampleId}: upload complete → gdrive:{$gdrivePath}/patches.tar.gz (id={$gdriveFolderId})");
 
             // ── 4. Persist results ───────────────────────────────────────────
-            $sample->update([
+            // Reconnect the DB in case the connection went stale during the
+            // long-running upload (large slides can take 10+ minutes).
+            DB::reconnect();
+
+            Sample::where('id', $this->sampleId)->update([
                 'tiling_status'          => 'done',
                 'tile_size_px'           => $patchSize->size_px,
                 'tile_count'             => $result['patches_extracted'],
-                'tiles_path'             => null,          // temp dir will be deleted below
+                'tiles_path'             => null,
                 'tiles_gdrive_path'      => $gdrivePath,
                 'tiles_gdrive_folder_id' => $gdriveFolderId,
                 'tiling_completed_at'    => now(),
@@ -106,7 +121,12 @@ class PatchExtractionJob implements ShouldQueue
             Log::info("[PatchExtraction] Sample #{$this->sampleId}: completed successfully.");
 
         } catch (\Throwable $e) {
-            $sample->update(['tiling_status' => 'failed']);
+            try {
+                DB::reconnect();
+                Sample::where('id', $this->sampleId)->update(['tiling_status' => 'failed']);
+            } catch (\Throwable $dbErr) {
+                Log::error("[PatchExtraction] Sample #{$this->sampleId}: could not mark as failed in DB: {$dbErr->getMessage()}");
+            }
             Log::error("[PatchExtraction] Sample #{$this->sampleId} FAILED: {$e->getMessage()}", [
                 'trace' => $e->getTraceAsString(),
             ]);
@@ -300,6 +320,31 @@ class PatchExtractionJob implements ShouldQueue
         $folderName = "sample_{$sample->id}_{$patchSize->size_px}px";
 
         return implode('/', [$root, 'sliced_slides', $magFolder, $source, $category, $caseId, $folderName]);
+    }
+
+    /**
+     * Compress the patches directory into a single tar.gz archive.
+     * Uses system tar on Linux (fast), PharData fallback on Windows.
+     */
+    private function compressPatches(string $patchesDir, string $archivePath): void
+    {
+        Log::info("[PatchExtraction] Sample #{$this->sampleId}: compressing patches…");
+
+        if (PHP_OS_FAMILY !== 'Windows') {
+            $process = new Process(['tar', '-czf', $archivePath, '-C', $patchesDir, '.']);
+            $process->setTimeout(600);
+            $process->mustRun();
+        } else {
+            // Windows fallback (local dev only)
+            $tarPath = str_replace('.tar.gz', '.tar', $archivePath);
+            $phar = new \PharData($tarPath);
+            $phar->buildFromDirectory($patchesDir);
+            $phar->compress(\Phar::GZ);
+            @unlink($tarPath);
+        }
+
+        $sizeMb = round(filesize($archivePath) / 1024 / 1024, 1);
+        Log::info("[PatchExtraction] Sample #{$this->sampleId}: archive ready ({$sizeMb} MB)");
     }
 
     /** Recursively delete a directory. */
