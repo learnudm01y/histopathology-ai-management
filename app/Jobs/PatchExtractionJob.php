@@ -175,6 +175,31 @@ class PatchExtractionJob implements ShouldQueue
         $scriptPath = base_path('scripts/patch_extract.py');
         $pythonPath = (string) env('PYTHON_PATH', 'python3');
 
+        // Pre-flight: make sure the Python interpreter actually runs.
+        // Cross-platform: just try `<python> --version` and check exit code.
+        // On Hostinger / shared hosts, `python3` may not be on PATH and
+        // PYTHON_PATH must point to a virtualenv (e.g. /home/.../venv/bin/python).
+        try {
+            $verCheck = new Process([$pythonPath, '--version']);
+            $verCheck->setTimeout(15);
+            $verCheck->run();
+            $verOk = $verCheck->isSuccessful();
+        } catch (\Throwable $e) {
+            $verOk = false;
+        }
+        if (!$verOk) {
+            throw new \RuntimeException(
+                "Python interpreter not runnable: '{$pythonPath}'. " .
+                "Set PYTHON_PATH in .env to the absolute path of a Python with " .
+                "openslide-python, opencv-python-headless, numpy and Pillow installed."
+            );
+        }
+
+        // Pre-flight: make sure the script file is readable.
+        if (!is_file($scriptPath) || !is_readable($scriptPath)) {
+            throw new \RuntimeException("patch_extract.py not found or not readable at: {$scriptPath}");
+        }
+
         $cmd = [
             $pythonPath, $scriptPath,
             '--input',            $wsiPath,
@@ -189,26 +214,74 @@ class PatchExtractionJob implements ShouldQueue
             '--overview',                   // always write overview.png
         ];
 
-        $process = new Process($cmd, base_path(), null, null, 86_400);
+        // Force unbuffered Python so we get logs immediately and JSON gets flushed
+        // before exit even when the process is killed (OOM etc.).
+        $env = ['PYTHONUNBUFFERED' => '1', 'PYTHONIOENCODING' => 'UTF-8'];
+
+        $process = new Process($cmd, base_path(), $env, null, 86_400);
         $process->run();
 
+        $stdout = trim($process->getOutput());
+        $stderr = trim($process->getErrorOutput());
+
+        // The Python script ALWAYS prints a JSON line to stdout — both on
+        // success (the result dict) AND on failure (`{"error": "..."}`).
+        // Try to parse stdout first regardless of exit code, because that
+        // contains the most useful diagnostic.
+        $parsed = null;
+        if ($stdout !== '') {
+            // Stdout may have multiple lines (e.g. progress noise) — only the
+            // last non-empty line is guaranteed to be the JSON summary.
+            $lines = preg_split('/\r?\n/', $stdout);
+            for ($i = count($lines) - 1; $i >= 0; $i--) {
+                $line = trim($lines[$i]);
+                if ($line === '') {
+                    continue;
+                }
+                $tryDecode = json_decode($line, true);
+                if (json_last_error() === JSON_ERROR_NONE && is_array($tryDecode)) {
+                    $parsed = $tryDecode;
+                    break;
+                }
+            }
+        }
+
         if (!$process->isSuccessful()) {
-            $stderr = trim($process->getErrorOutput());
-            throw new \RuntimeException("patch_extract.py failed (exit {$process->getExitCode()}): {$stderr}");
+            // Build the most informative error message we can:
+            //   1. error JSON from stdout (script-reported reason — best)
+            //   2. stderr tail (Python traceback / log output)
+            //   3. exit code
+            $reason = $parsed['error']
+                ?? ($stderr !== '' ? $stderr : 'No output captured from script');
+
+            // Trim very long traces
+            if (strlen($reason) > 2000) {
+                $reason = substr($reason, 0, 2000) . '… [truncated]';
+            }
+
+            Log::error('[PatchExtraction] Script failure diagnostics', [
+                'exit_code' => $process->getExitCode(),
+                'stdout'    => $stdout,
+                'stderr'    => $stderr,
+                'cmd'       => $cmd,
+            ]);
+
+            throw new \RuntimeException(
+                "patch_extract.py failed (exit {$process->getExitCode()}): {$reason}"
+            );
         }
 
-        $json   = trim($process->getOutput());
-        $result = json_decode($json, true);
-
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            throw new \RuntimeException("patch_extract.py returned invalid JSON: {$json}");
+        if (!is_array($parsed)) {
+            throw new \RuntimeException(
+                "patch_extract.py returned invalid JSON. stdout='{$stdout}' stderr='{$stderr}'"
+            );
         }
 
-        if (isset($result['error'])) {
-            throw new \RuntimeException("patch_extract.py error: {$result['error']}");
+        if (isset($parsed['error'])) {
+            throw new \RuntimeException("patch_extract.py error: {$parsed['error']}");
         }
 
-        return $result;
+        return $parsed;
     }
 
     /**
