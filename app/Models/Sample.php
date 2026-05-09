@@ -30,6 +30,11 @@ class Sample extends Model
         // Patch extraction tracking
         'patch_server_id', 'patch_size_id', 'magnification_id',
         'tiles_gdrive_folder_id', 'tiles_gdrive_path',
+        // Feature extraction tracking (RunPod)
+        'feature_extraction_ai_model_id', 'feature_extraction_server_id',
+        'features_gdrive_path', 'features_gdrive_folder_id', 'features_runpod_path',
+        'features_patch_count', 'features_failed_patch_count',
+        'features_model_version', 'feature_extraction_error',
     ];
 
     protected $casts = [

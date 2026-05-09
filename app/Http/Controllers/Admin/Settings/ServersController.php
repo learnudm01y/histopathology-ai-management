@@ -47,6 +47,14 @@ class ServersController extends Controller
     {
         $validated = $this->validateData($request, $server->id);
 
+        // If the user left the secret fields blank, keep the existing values.
+        if (empty($validated['api_key'])) {
+            unset($validated['api_key']);
+        }
+        if (empty($validated['runpod_api_key'])) {
+            unset($validated['runpod_api_key']);
+        }
+
         $server->update([
             ...$validated,
             'is_active' => $request->boolean('is_active'),
@@ -75,12 +83,14 @@ class ServersController extends Controller
     private function validateData(Request $request, ?int $ignoreId = null): array
     {
         return $request->validate([
-            'name'        => 'required|string|max:150|unique:servers_names,name' . ($ignoreId ? ",{$ignoreId}" : ''),
-            'type'        => 'required|in:local,external',
-            'api_url'     => 'nullable|url|max:500',
-            'api_key'     => 'nullable|string|max:500',
-            'host'        => 'nullable|string|max:255',
-            'description' => 'nullable|string|max:500',
+            'name'                     => 'required|string|max:150|unique:servers_names,name' . ($ignoreId ? ",{$ignoreId}" : ''),
+            'type'                     => 'required|in:local,external',
+            'api_url'                  => 'nullable|url|max:500',
+            'api_key'                  => 'nullable|string|max:500',
+            'runpod_api_key'           => 'nullable|string|max:1000',
+            'runpod_network_volume_id' => 'nullable|string|max:100',
+            'host'                     => 'nullable|string|max:255',
+            'description'              => 'nullable|string|max:500',
         ]);
     }
 }

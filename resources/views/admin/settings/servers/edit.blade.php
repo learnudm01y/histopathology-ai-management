@@ -19,7 +19,7 @@
             <div class="card-body">
                 <h4 class="card-title mb-4">Edit: {{ $server->name }}</h4>
 
-                <form action="{{ route('admin.settings.servers.update', $server) }}" method="POST">
+                <form action="{{ route('admin.settings.servers.update', $server) }}" method="POST" autocomplete="off">
                     @csrf @method('PUT')
 
                     <div class="row">
@@ -73,13 +73,55 @@
                     <div id="apiKeyField"
                          style="{{ old('type', $server->type) === 'external' ? '' : 'display:none' }}">
                         <div class="form-group">
-                            <label>API Key / Secret</label>
+                            <label>Callback API Key / Shared Secret</label>
                             <input type="password" name="api_key"
                                    class="form-control @error('api_key') is-invalid @enderror"
                                    value="{{ old('api_key') }}"
+                                   autocomplete="new-password"
                                    placeholder="Leave blank to keep the existing key">
                             @error('api_key')<div class="invalid-feedback">{{ $message }}</div>@enderror
-                            <small class="form-text text-muted">Leave blank to keep the existing key unchanged.</small>
+                            <small class="form-text text-muted">
+                                The shared secret used to authenticate callbacks FROM the GPU server.
+                                Must match <code>RUNPOD_API_KEY</code> on the pod. Leave blank to keep unchanged.
+                            </small>
+                        </div>
+                    </div>
+
+                    {{-- RunPod-specific fields --}}
+                    <div id="runpodFields"
+                         style="{{ old('type', $server->type) === 'external' ? '' : 'display:none' }}">
+                        <hr class="my-3">
+                        <h6 class="text-muted mb-3"><i class="mdi mdi-lightning-bolt mr-1"></i>RunPod Settings</h6>
+                        <div class="row">
+                            <div class="col-md-8">
+                                <div class="form-group">
+                                    <label>RunPod Account API Key
+                                        <span class="badge badge-warning ml-1" style="font-size:.7rem;">sensitive</span>
+                                    </label>
+                                    <input type="password" name="runpod_api_key"
+                                           class="form-control @error('runpod_api_key') is-invalid @enderror"
+                                           value="{{ old('runpod_api_key') }}"
+                                           autocomplete="new-password"
+                                           placeholder="{{ $server->runpod_api_key ? '••••••••  (saved — leave blank to keep)' : 'rpa_…  (from RunPod account settings)' }}">
+                                    @error('runpod_api_key')<div class="invalid-feedback">{{ $message }}</div>@enderror
+                                    <small class="form-text text-muted">
+                                        Your RunPod account key (starts with <code>rpa_</code>). Leave blank to keep existing value.
+                                    </small>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="form-group">
+                                    <label>Network Volume ID</label>
+                                    <input type="text" name="runpod_network_volume_id"
+                                           class="form-control @error('runpod_network_volume_id') is-invalid @enderror"
+                                           value="{{ old('runpod_network_volume_id', $server->runpod_network_volume_id) }}"
+                                           placeholder="e.g. pk49baz3ni">
+                                    @error('runpod_network_volume_id')<div class="invalid-feedback">{{ $message }}</div>@enderror
+                                    <small class="form-text text-muted">
+                                        Persistent volume mounted at <code>/workspace</code> on the pod.
+                                    </small>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -117,21 +159,26 @@
 
 @push('scripts')
 <script>
-(function () {
-    var typeSelect  = document.getElementById('serverTypeSelect');
-    var apiUrlField = document.getElementById('apiUrlField');
-    var apiKeyField = document.getElementById('apiKeyField');
+document.addEventListener('DOMContentLoaded', function () {
+    var typeSelect   = document.getElementById('serverTypeSelect');
+    var apiUrlField  = document.getElementById('apiUrlField');
+    var apiKeyField  = document.getElementById('apiKeyField');
+    var runpodFields = document.getElementById('runpodFields');
 
     function toggleApiFields() {
-        var isExternal = typeSelect.value === 'external';
-        apiUrlField.style.display = isExternal ? '' : 'none';
-        apiKeyField.style.display = isExternal ? '' : 'none';
+        var isExternal = typeSelect && typeSelect.value === 'external';
+        if (apiUrlField)  apiUrlField.style.display  = isExternal ? '' : 'none';
+        if (apiKeyField)  apiKeyField.style.display  = isExternal ? '' : 'none';
+        if (runpodFields) runpodFields.style.display = isExternal ? '' : 'none';
     }
+
+    // Run immediately so the UI always reflects the current type value
+    toggleApiFields();
 
     if (typeSelect) {
         typeSelect.addEventListener('change', toggleApiFields);
     }
-})();
+});
 </script>
 @endpush
 @endsection

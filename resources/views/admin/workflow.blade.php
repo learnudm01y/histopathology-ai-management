@@ -57,8 +57,9 @@
                                         {{ ($filters['operation_type'] ?? '') === 'patch_extraction' ? 'selected' : '' }}>
                                         🔲 Patch Extraction (Slide Tiling)
                                     </option>
-                                    <option value="feature_extraction" disabled>
-                                        📊 Feature Extraction (coming soon)
+                                    <option value="feature_extraction"
+                                        {{ ($filters['operation_type'] ?? '') === 'feature_extraction' ? 'selected' : '' }}>
+                                        📊 Feature Extraction (RunPod)
                                     </option>
                                     <option value="training" disabled>
                                         🧠 Model Training (coming soon)
@@ -74,6 +75,198 @@
             </div>
         </div>
     </div>
+
+    {{-- ─── FEATURE EXTRACTION QUICK DISPATCH (RunPod) ──────────────────── --}}
+    <div class="row {{ ($filters['operation_type'] ?? '') !== 'feature_extraction' ? 'd-none' : '' }}"
+         id="featureExtractionSection">
+        <div class="col-12 grid-margin">
+            <div class="card border-info">
+                <div class="card-header bg-info text-white py-2">
+                    <h5 class="mb-0">
+                        <span class="badge badge-light text-info mr-2">2</span>
+                        <i class="mdi mdi-flask-outline mr-1"></i>
+                        Feature Extraction — RunPod GPU Server
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <p class="card-description">
+                        Send <strong>tiled samples</strong> to an external GPU server (RunPod) running TITAN / CONCH.
+                        Only samples with <code>tiling_status = done</code> are eligible.
+                        The output features are stored on Google Drive under
+                        <code>{{ config('gdrive.root_folder', 'samples') }}/features/&lt;model&gt;/&hellip;</code>.
+                    </p>
+
+                    <form method="POST" action="{{ route('admin.workflow.dispatch.feature-extraction') }}" id="featureExtractionForm">
+                        @csrf
+
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="form-group">
+                                    <label for="feSelectServer">
+                                        <i class="mdi mdi-server mr-1"></i>GPU Server (external)
+                                    </label>
+                                    @php $externalServers = $servers->where('type', 'external'); @endphp
+                                    @if($externalServers->isEmpty())
+                                        <div class="alert alert-warning py-2 px-3 mb-1" style="font-size:.85rem;">
+                                            <i class="mdi mdi-alert-outline mr-1"></i>
+                                            No external GPU servers configured.
+                                            <a href="{{ route('admin.settings.servers.create') }}" class="alert-link">Add one now →</a>
+                                        </div>
+                                        <input type="hidden" name="server_id" value="">
+                                    @else
+                                        <select name="server_id" id="feSelectServer" class="form-control" required>
+                                            <option value="">— Choose server —</option>
+                                            @foreach($externalServers as $srv)
+                                                <option value="{{ $srv->id }}">
+                                                    {{ $srv->name }}
+                                                    @if($srv->host) ({{ $srv->host }}) @endif
+                                                    @if($srv->runpod_network_volume_id) — vol:{{ $srv->runpod_network_volume_id }} @endif
+                                                </option>
+                                            @endforeach
+                                        </select>
+                                    @endif
+                                    <small class="form-text text-muted">
+                                        Only "external" servers (with api_url + api_key) are listed.
+                                        <a href="{{ route('admin.settings.servers.index') }}" target="_blank">Manage servers</a>
+                                    </small>
+                                </div>
+                            </div>
+
+                            <div class="col-md-4">
+                                <div class="form-group">
+                                    <label for="feSelectModel">
+                                        <i class="mdi mdi-brain mr-1"></i>AI Model
+                                    </label>
+                                    <select name="ai_model_id" id="feSelectModel" class="form-control" required>
+                                        <option value="">— Choose model —</option>
+                                        @foreach($aiModels as $m)
+                                            <option value="{{ $m->id }}" {{ $m->is_default ? 'selected' : '' }}>
+                                                {{ $m->name }}
+                                                @if($m->version) ({{ $m->version }}) @endif
+                                                — {{ $m->getLevelLabel() }}
+                                            </option>
+                                        @endforeach
+                                    </select>
+                                    <small class="form-text text-muted">
+                                        The model name is used as the GDrive output sub-folder.
+                                    </small>
+                                </div>
+                            </div>
+
+                            <div class="col-md-4 d-flex align-items-end">
+                                <button type="submit" class="btn btn-info btn-block" id="feExecuteBtn" disabled>
+                                    <i class="mdi mdi-rocket-launch mr-1"></i>
+                                    Dispatch to RunPod (<span id="feSelectedCount">0</span>)
+                                </button>
+                            </div>
+                        </div>
+
+                        {{-- Eligible samples table (tiling_status = done) --}}
+                        <div class="table-responsive mt-3" style="max-height:400px; overflow-y:auto;">
+                            <table class="table table-sm table-hover">
+                                <thead class="thead-light">
+                                    <tr>
+                                        <th style="width:40px;">
+                                            <input type="checkbox" id="feSelectAll" title="Select all on this page">
+                                        </th>
+                                        <th>#</th>
+                                        <th>File</th>
+                                        <th>Case</th>
+                                        <th>Patches</th>
+                                        <th>Magnification</th>
+                                        <th>Patch Size</th>
+                                        <th>FE Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @php
+                                        $eligible = \App\Models\Sample::with(['patientCase:id,case_id'])
+                                            ->where('tiling_status', 'done')
+                                            ->whereNotNull('tiles_gdrive_path')
+                                            ->orderByDesc('id')
+                                            ->limit(200)
+                                            ->get();
+                                    @endphp
+                                    @forelse($eligible as $s)
+                                        <tr>
+                                            <td>
+                                                <input type="checkbox"
+                                                       name="sample_ids[]"
+                                                       value="{{ $s->id }}"
+                                                       class="fe-sample-cb">
+                                            </td>
+                                            <td>{{ $s->id }}</td>
+                                            <td class="text-truncate" style="max-width:200px;">{{ $s->file_name }}</td>
+                                            <td>{{ $s->patientCase?->case_id ?? '—' }}</td>
+                                            <td>{{ $s->tile_count ?? '—' }}</td>
+                                            <td>{{ $s->magnification_id ? \App\Models\Magnification::find($s->magnification_id)?->label : '—' }}</td>
+                                            <td>{{ $s->tile_size_px ?? '—' }}px</td>
+                                            <td>
+                                                @php
+                                                    $fe = $s->feature_extraction_status ?? 'pending';
+                                                    $cls = match($fe) {
+                                                        'completed'  => 'success',
+                                                        'processing' => 'info',
+                                                        'failed'     => 'danger',
+                                                        default      => 'secondary',
+                                                    };
+                                                @endphp
+                                                <span class="badge badge-{{ $cls }}">{{ $fe }}</span>
+                                            </td>
+                                        </tr>
+                                    @empty
+                                        <tr>
+                                            <td colspan="8" class="text-center text-muted py-3">
+                                                No eligible samples (need <code>tiling_status = done</code>).
+                                            </td>
+                                        </tr>
+                                    @endforelse
+                                </tbody>
+                            </table>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Operation type switcher: shows/hides the matching section
+        (function () {
+            const sel  = document.getElementById('operationTypeSelect');
+            const psec = document.getElementById('serverSelectionSection');
+            const fsec = document.getElementById('featureExtractionSection');
+            if (sel) {
+                sel.addEventListener('change', function () {
+                    if (psec) psec.classList.toggle('d-none', this.value !== 'patch_extraction');
+                    if (fsec) fsec.classList.toggle('d-none', this.value !== 'feature_extraction');
+                });
+            }
+
+            // Feature-extraction selection tracker
+            const feAll  = document.getElementById('feSelectAll');
+            const feCbs  = document.querySelectorAll('.fe-sample-cb');
+            const feBtn  = document.getElementById('feExecuteBtn');
+            const feCnt  = document.getElementById('feSelectedCount');
+            const feSrv  = document.getElementById('feSelectServer');
+            const feMod  = document.getElementById('feSelectModel');
+
+            function feUpdate() {
+                const checked = Array.from(feCbs).filter(cb => cb.checked).length;
+                if (feCnt) feCnt.textContent = String(checked);
+                const serverOk = feSrv ? feSrv.value : false; // no select = no external servers
+                if (feBtn) feBtn.disabled = !(checked > 0 && serverOk && feMod?.value);
+            }
+            feAll?.addEventListener('change', e => {
+                feCbs.forEach(cb => cb.checked = e.target.checked);
+                feUpdate();
+            });
+            feCbs.forEach(cb => cb.addEventListener('change', feUpdate));
+            feSrv?.addEventListener('change', feUpdate);
+            feMod?.addEventListener('change', feUpdate);
+            feUpdate();
+        })();
+    </script>
 
     {{-- STEP 2 — Server & Patch-Size Selection --}}
     <div class="row {{ ($filters['operation_type'] ?? '') !== 'patch_extraction' ? 'd-none' : '' }}"

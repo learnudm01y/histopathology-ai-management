@@ -14,6 +14,9 @@ class ServerName extends Model
         'type',
         'api_url',
         'api_key',
+        'runpod_api_key',
+        'runpod_network_volume_id',
+        'runpod_template_id',
         'host',
         'description',
         'is_active',
@@ -23,8 +26,8 @@ class ServerName extends Model
         'is_active' => 'boolean',
     ];
 
-    // Hide the api_key from JSON serialization for security
-    protected $hidden = ['api_key'];
+    // Hide secrets from JSON serialization
+    protected $hidden = ['api_key', 'runpod_api_key'];
 
     public function samples(): HasMany
     {
