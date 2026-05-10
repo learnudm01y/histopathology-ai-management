@@ -15,6 +15,7 @@ use App\Http\Controllers\Admin\Settings\OrgansController;
 use App\Http\Controllers\Admin\Settings\MagnificationsController;
 use App\Http\Controllers\Admin\Settings\PatchSizesController;
 use App\Http\Controllers\Admin\Settings\ServersController;
+use App\Http\Controllers\Admin\Settings\RunPodController;
 use App\Http\Controllers\Admin\Settings\StainsController;
 use Illuminate\Support\Facades\Route;
 
@@ -99,6 +100,15 @@ Route::prefix('admin')->name('admin.')->group(function () {
                 ->except(['show'])
                 ->parameters(['ai-models' => 'aiModel']);
             Route::resource('servers', ServersController::class)->except(['show']);
+
+            // RunPod pod management for a specific server
+            Route::prefix('servers/{server}/runpod')->name('servers.runpod.')->group(function () {
+                Route::get('/',        [RunPodController::class, 'index'])   ->name('index');
+                Route::post('/start',  [RunPodController::class, 'start'])   ->name('start');
+                Route::post('/stop',   [RunPodController::class, 'stop'])    ->name('stop');
+                Route::post('/select', [RunPodController::class, 'select'])  ->name('select');
+                Route::get('/refresh', [RunPodController::class, 'refresh']) ->name('refresh');
+            });
             Route::resource('patch-sizes', PatchSizesController::class)
                 ->except(['show'])
                 ->parameters(['patch-sizes' => 'patchSize']);

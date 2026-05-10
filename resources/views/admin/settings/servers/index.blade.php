@@ -93,6 +93,13 @@
                                         @endif
                                     </td>
                                     <td class="text-right">
+                                        @if($srv->type === 'external' && $srv->runpod_api_key)
+                                            <a href="{{ route('admin.settings.servers.runpod.index', $srv) }}"
+                                               class="btn btn-outline-success btn-sm"
+                                               title="Manage RunPod Pods">
+                                                <i class="mdi mdi-server-network"></i>
+                                            </a>
+                                        @endif
                                         <a href="{{ route('admin.settings.servers.edit', $srv) }}"
                                            class="btn btn-outline-primary btn-sm">
                                             <i class="mdi mdi-pencil"></i>
