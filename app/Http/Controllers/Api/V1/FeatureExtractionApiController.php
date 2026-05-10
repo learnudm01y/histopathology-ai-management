@@ -135,13 +135,9 @@ class FeatureExtractionApiController extends Controller
         // This ensures the server can only update its own api_url regardless of ID.
         $server = $request->attributes->get('server');
 
-        $affected = \DB::table('servers_names')
+        \DB::table('servers_names')
             ->where('id', $server->id)
             ->update(['api_url' => $data['api_url']]);
-
-        if (!$affected) {
-            return response()->json(['success' => false, 'message' => 'Server not found.'], 404);
-        }
 
         Log::info('[API/server] Self-registered api_url for server #' . $server->id, [
             'api_url' => $data['api_url'],
