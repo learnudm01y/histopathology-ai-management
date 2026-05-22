@@ -1,0 +1,1633 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>API Histopathology Documentation</title>
+  <style>
+    /* ─── Reset & Base ─────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:           #0d0d0d;
+      --surface:      #141414;
+      --surface-2:    #1c1c1c;
+      --surface-3:    #242424;
+      --border:       #2e2e2e;
+      --border-light: #3a3a3a;
+      --text:         #e8e8e8;
+      --text-dim:     #a0a0a0;
+      --text-muted:   #666666;
+      --accent:       #888888;
+      --accent-light: #aaaaaa;
+      --code-bg:      #111111;
+      --tag-bg:       #1e1e1e;
+      --tag-border:   #383838;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      line-height: 1.7;
+      min-height: 100vh;
+    }
+
+    /* ─── Layout ────────────────────────────────────────────────────────── */
+    .page-wrapper {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 48px 24px 80px;
+    }
+
+    /* ─── Page Header ───────────────────────────────────────────────────── */
+    .page-header {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 32px;
+      margin-bottom: 40px;
+    }
+
+    .page-header .badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 3px 10px;
+      margin-bottom: 16px;
+    }
+
+    .page-header h1 {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.5px;
+      margin-bottom: 10px;
+    }
+
+    .page-header .subtitle {
+      color: var(--text-dim);
+      font-size: 14px;
+      max-width: 680px;
+      margin-bottom: 20px;
+    }
+
+    .meta-row {
+      display: flex;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+
+    .meta-item {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .meta-item strong {
+      color: var(--accent-light);
+    }
+
+    /* ─── Table of Contents ─────────────────────────────────────────────── */
+    .toc-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 20px 24px;
+      margin-bottom: 40px;
+    }
+
+    .toc-box h2 {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 14px;
+    }
+
+    .toc-list {
+      list-style: none;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 6px 24px;
+    }
+
+    .toc-list li a {
+      color: var(--text-dim);
+      text-decoration: none;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 2px 0;
+      transition: color 0.15s;
+    }
+
+    .toc-list li a:hover { color: var(--text); }
+
+    .toc-list li a .toc-num {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+      min-width: 20px;
+    }
+
+    /* ─── Accordion ─────────────────────────────────────────────────────── */
+    .accordion {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .accordion-item {
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      overflow: hidden;
+      transition: border-color 0.2s;
+    }
+
+    .accordion-item:hover { border-color: var(--border-light); }
+
+    .accordion-item.open { border-color: var(--border-light); }
+
+    .accordion-trigger {
+      width: 100%;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 18px 24px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      text-align: left;
+      color: inherit;
+      transition: background 0.15s;
+    }
+
+    .accordion-trigger:hover { background: var(--surface-2); }
+
+    .accordion-trigger .section-num {
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      color: var(--text-muted);
+      min-width: 28px;
+      font-weight: 600;
+    }
+
+    .accordion-trigger .section-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      flex: 1;
+    }
+
+    .accordion-trigger .section-tag {
+      font-size: 11px;
+      color: var(--text-muted);
+      background: var(--tag-bg);
+      border: 1px solid var(--tag-border);
+      border-radius: 3px;
+      padding: 2px 8px;
+      white-space: nowrap;
+    }
+
+    .accordion-trigger .chevron {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      color: var(--text-muted);
+      transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .accordion-item.open .chevron { transform: rotate(180deg); }
+
+    .accordion-body {
+      display: none;
+      border-top: 1px solid var(--border);
+      padding: 28px 28px 32px;
+      background: var(--surface);
+    }
+
+    .accordion-item.open .accordion-body { display: block; }
+
+    /* ─── Content Typography ─────────────────────────────────────────────── */
+    .accordion-body h3 {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      margin-top: 28px;
+      margin-bottom: 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .accordion-body h3:first-child { margin-top: 0; }
+
+    .accordion-body h4 {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent-light);
+      margin-top: 20px;
+      margin-bottom: 8px;
+    }
+
+    .accordion-body p {
+      color: var(--text-dim);
+      margin-bottom: 12px;
+      font-size: 13.5px;
+    }
+
+    .accordion-body ul, .accordion-body ol {
+      padding-left: 20px;
+      margin-bottom: 14px;
+    }
+
+    .accordion-body li {
+      color: var(--text-dim);
+      font-size: 13.5px;
+      margin-bottom: 5px;
+    }
+
+    .accordion-body li strong { color: var(--text); }
+
+    /* ─── Code Blocks ───────────────────────────────────────────────────── */
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 16px 20px;
+      overflow-x: auto;
+      margin: 12px 0 20px;
+      font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      font-size: 12.5px;
+      line-height: 1.6;
+      color: var(--text-dim);
+    }
+
+    code {
+      font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      font-size: 12px;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 1px 6px;
+      color: var(--accent-light);
+    }
+
+    pre code {
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: inherit;
+      color: inherit;
+    }
+
+    .comment  { color: #555555; }
+    .key      { color: #9e9e9e; }
+    .str      { color: #b0b0b0; }
+    .num      { color: #888888; }
+    .kw       { color: #aaaaaa; font-style: italic; }
+
+    /* ─── Tables ────────────────────────────────────────────────────────── */
+    .table-wrapper { overflow-x: auto; margin: 12px 0 20px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    thead tr { background: var(--surface-3); }
+
+    th {
+      text-align: left;
+      padding: 10px 14px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+    }
+
+    td {
+      padding: 9px 14px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-dim);
+      vertical-align: top;
+    }
+
+    tbody tr:hover { background: var(--surface-2); }
+
+    td code { font-size: 12px; }
+    td strong { color: var(--text); }
+
+    /* ─── Step Flow ─────────────────────────────────────────────────────── */
+    .step-flow {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      margin: 14px 0 20px;
+    }
+
+    .step {
+      display: flex;
+      gap: 16px;
+      padding: 14px 0;
+      position: relative;
+    }
+
+    .step-num {
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--border-light);
+      border-radius: 50%;
+      background: var(--surface-3);
+      color: var(--text-dim);
+      font-size: 11px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      position: relative;
+      z-index: 1;
+    }
+
+    .step:not(:last-child) .step-num::after {
+      content: '';
+      position: absolute;
+      top: 28px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 1px;
+      height: calc(100% + 28px);
+      background: var(--border);
+    }
+
+    .step-content {
+      padding-top: 4px;
+      padding-bottom: 8px;
+      flex: 1;
+    }
+
+    .step-content strong {
+      display: block;
+      color: var(--text);
+      font-size: 13.5px;
+      margin-bottom: 4px;
+    }
+
+    .step-content p {
+      margin-bottom: 6px;
+      color: var(--text-dim);
+      font-size: 13px;
+    }
+
+    /* ─── Path Display ──────────────────────────────────────────────────── */
+    .path-box {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--border-light);
+      border-radius: 5px;
+      padding: 12px 16px;
+      margin: 10px 0;
+      font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      font-size: 12.5px;
+      color: var(--text-dim);
+      word-break: break-all;
+    }
+
+    .path-box .path-label {
+      font-size: 10px;
+      font-family: 'Segoe UI', sans-serif;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+
+    /* ─── Alert Box ─────────────────────────────────────────────────────── */
+    .alert {
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 14px 18px;
+      margin: 14px 0;
+      background: var(--surface-3);
+    }
+
+    .alert.warning { border-left: 3px solid #555; }
+    .alert.info    { border-left: 3px solid #444; }
+    .alert strong  { color: var(--text); }
+
+    /* ─── Badge inline ──────────────────────────────────────────────────── */
+    .badge-inline {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      border-radius: 3px;
+      padding: 2px 7px;
+      vertical-align: middle;
+    }
+
+    .badge-get    { background: #1e1e1e; color: #999; border: 1px solid #333; }
+    .badge-post   { background: #1a1a1a; color: #aaa; border: 1px solid #333; }
+    .badge-done   { background: #1a1a1a; color: #aaa; border: 1px solid #333; }
+    .badge-proc   { background: #181818; color: #888; border: 1px solid #2e2e2e; }
+    .badge-fail   { background: #181818; color: #888; border: 1px solid #2e2e2e; }
+
+    /* ─── Footer ────────────────────────────────────────────────────────── */
+    .page-footer {
+      margin-top: 60px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    /* ─── Scrollbar ─────────────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div class="page-wrapper">
+
+  <!-- ════════════════ PAGE HEADER ════════════════ -->
+  <header class="page-header">
+    <div class="badge">Technical Reference</div>
+    <h1>Histopathology Management System — API &amp; Integration Documentation</h1>
+    <p class="subtitle">
+      Complete reference for RunPod ↔ Laravel ↔ Google Drive integration covering
+      feature extraction dispatch, callback contracts, Google Drive folder architecture,
+      and all related operational workflows. Intended for engineers integrating new
+      AI models (e.g. Virchow2) into the pipeline.
+    </p>
+    <div class="meta-row">
+      <span class="meta-item"><strong>System:</strong> histopathology_laravel102</span>
+      <span class="meta-item"><strong>Version:</strong> 1.0</span>
+      <span class="meta-item"><strong>Date:</strong> May 2026</span>
+      <span class="meta-item"><strong>Scope:</strong> Feature Extraction — RunPod + Google Drive</span>
+    </div>
+  </header>
+
+  <!-- ════════════════ TABLE OF CONTENTS ════════════════ -->
+  <div class="toc-box">
+    <h2>Table of Contents</h2>
+    <ul class="toc-list">
+      <li><a href="#s1"><span class="toc-num">01</span> System Architecture Overview</a></li>
+      <li><a href="#s2"><span class="toc-num">02</span> Feature Extraction Job — Laravel → RunPod</a></li>
+      <li><a href="#s3"><span class="toc-num">03</span> RunPod → Laravel Callback (Webhook)</a></li>
+      <li><a href="#s4"><span class="toc-num">04</span> Sample Status Lifecycle</a></li>
+      <li><a href="#s5"><span class="toc-num">05</span> Patch Extraction Pipeline</a></li>
+      <li><a href="#s6"><span class="toc-num">06</span> Google Drive Architecture</a></li>
+      <li><a href="#s7"><span class="toc-num">07</span> Google Drive Folder Naming Reference</a></li>
+      <li><a href="#s8"><span class="toc-num">08</span> rclone Operations Reference</a></li>
+      <li><a href="#s9"><span class="toc-num">09</span> API Endpoints Reference</a></li>
+      <li><a href="#s10"><span class="toc-num">10</span> Authentication &amp; Security</a></li>
+      <li><a href="#s11"><span class="toc-num">11</span> Queue &amp; Job Configuration</a></li>
+      <li><a href="#s12"><span class="toc-num">12</span> Environment Variables</a></li>
+    </ul>
+  </div>
+
+  <!-- ════════════════ ACCORDIONS ════════════════ -->
+  <div class="accordion">
+
+    <!-- ── 01 System Architecture Overview ── -->
+    <div class="accordion-item open" id="s1">
+      <button class="accordion-trigger" onclick="toggle(this)">
+        <span class="section-num">01</span>
+        <span class="section-title">System Architecture Overview</span>
+        <span class="section-tag">Architecture</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="accordion-body">
+        <h3>Three-System Integration</h3>
+        <p>The pipeline integrates three distinct systems that communicate over HTTPS:</p>
+        <ul>
+          <li><strong>Laravel (Hostinger)</strong> — Central management server: orchestrates jobs, stores sample metadata, exposes the API webhook endpoint. URL: <code>https://[your-domain]/api/v1/</code></li>
+          <li><strong>RunPod</strong> — GPU cloud: runs the AI model container (e.g. TITAN, Virchow2) for feature extraction. Communicates inbound via HTTP POST to RunPod's <code>/jobs/start</code> endpoint.</li>
+          <li><strong>Google Drive</strong> — Persistent storage layer: stores WSI slides, patch archives (patches.tar.gz), and extracted feature files (HDF5). Accessed via <code>rclone</code> from both Hostinger and RunPod.</li>
+        </ul>
+
+        <h3>End-to-End Flow Summary</h3>
+        <div class="step-flow">
+          <div class="step">
+            <div class="step-num">1</div>
+            <div class="step-content">
+              <strong>WSI Upload → Google Drive</strong>
+              <p>Admin uploads a Whole Slide Image (WSI) via the dashboard. The file is stored on Google Drive under the structured path hierarchy. The <code>samples</code> table records the Drive path.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">2</div>
+            <div class="step-content">
+              <strong>Patch Extraction → Google Drive</strong>
+              <p>Admin triggers patch extraction. <code>PatchExtractionJob</code> runs on Hostinger: downloads WSI from Google Drive → runs <code>patch_extract.py</code> → compresses patches → uploads <code>patches.tar.gz</code> to Google Drive at <code>sliced_slides/…</code>. Sample status set to <code>tiling_status = done</code>.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">3</div>
+            <div class="step-content">
+              <strong>Feature Extraction Dispatch → RunPod</strong>
+              <p>Admin triggers feature extraction. <code>FeatureExtractionJob</code> builds a full job payload and POSTs it to RunPod's <code>/jobs/start</code> endpoint. Sample status set to <code>feature_extraction_status = processing</code>. The target Google Drive output path is saved immediately.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">4</div>
+            <div class="step-content">
+              <strong>RunPod Processes the Job</strong>
+              <p>RunPod container downloads <code>patches.tar.gz</code> from Google Drive, loads the AI model, extracts features into HDF5 format, and uploads the results back to Google Drive at the designated <code>features/…</code> path.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">5</div>
+            <div class="step-content">
+              <strong>RunPod → Laravel Callback</strong>
+              <p>RunPod POSTs a status report to <code>POST /api/v1/feature-extraction/report</code> on Laravel. The controller updates the sample record with final status, Google Drive paths, patch counts, and model version. On failure, the error message is stored.</p>
+            </div>
+          </div>
+        </div>
+
+        <h3>Data Flow Diagram</h3>
+        <pre>
+┌──────────────────────────────────────────────────────────┐
+│               Laravel (Hostinger)                        │
+│                                                          │
+│  PatchExtractionJob  ──────────────→  Google Drive       │
+│  (patches.tar.gz upload)          sliced_slides/…/       │
+│                                                          │
+│  FeatureExtractionJob  ───POST──→  RunPod /jobs/start    │
+│  (dispatch payload)                                      │
+│                                                          │
+│  FeatureExtractionApiController  ←──POST──  RunPod       │
+│  POST /api/v1/feature-extraction/report                  │
+└──────────────────────────────────────────────────────────┘
+            ↑  rclone pull             rclone push  ↓
+┌──────────────────────────────────────────────────────────┐
+│                     Google Drive                         │
+│                                                          │
+│  {root}/sliced_slides/{mag}/{src}/{cat}/{case}/          │
+│    └── sample_{id}_{px}px/patches.tar.gz   ← Hostinger  │
+│                                                          │
+│  {root}/features/{Model}/{mag}/{src}/{cat}/{case}/       │
+│    └── sample_{id}_{px}px/                → RunPod       │
+│         ├── features.h5                                  │
+│         ├── manifest.json                                │
+│         └── patch_coords.csv                            │
+└──────────────────────────────────────────────────────────┘
+</pre>
+      </div>
+    </div>
+
+    <!-- ── 02 Feature Extraction Job ── -->
+    <div class="accordion-item" id="s2">
+      <button class="accordion-trigger" onclick="toggle(this)">
+        <span class="section-num">02</span>
+        <span class="section-title">Feature Extraction Job — Laravel → RunPod Dispatch</span>
+        <span class="section-tag">FeatureExtractionJob.php</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="accordion-body">
+
+        <h3>Job Location &amp; Queue</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Property</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td>File</td><td><code>app/Jobs/FeatureExtractionJob.php</code></td></tr>
+            <tr><td>Queue</td><td><code>operations</code></td></tr>
+            <tr><td>Timeout</td><td><code>300</code> seconds (dispatch phase only)</td></tr>
+            <tr><td>Tries</td><td><code>1</code> — retry manually from the UI if needed</td></tr>
+            <tr><td>Constructor Args</td><td><code>sampleId</code>, <code>serverId</code>, <code>aiModelId</code></td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Pre-flight Validation</h3>
+        <p>Before dispatching, the job validates all of the following. If any check fails, the sample is marked <code>feature_extraction_status = failed</code> with an error message:</p>
+        <ul>
+          <li><strong>patch_size_id</strong> — Sample must have a patch size assigned.</li>
+          <li><strong>magnification_id</strong> — Sample must have a magnification level assigned.</li>
+          <li><strong>tiles_gdrive_path</strong> — Patch extraction must have completed (non-null path required). This means <code>tiling_status = done</code>.</li>
+          <li><strong>server.type = 'external'</strong> — The assigned server must be of type external.</li>
+          <li><strong>server.api_url</strong> — Must be non-empty.</li>
+          <li><strong>server.api_key</strong> — Must be non-empty.</li>
+        </ul>
+
+        <h3>HTTP Dispatch</h3>
+        <p>The job sends a single HTTP POST request to RunPod:</p>
+        <div class="path-box">
+          <div class="path-label">Endpoint</div>
+          POST {server.api_url}/jobs/start
+        </div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Header</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td><code>Authorization</code></td><td><code>Bearer {server.api_key}</code></td></tr>
+            <tr><td><code>Content-Type</code></td><td><code>application/json</code></td></tr>
+            <tr><td><code>Accept</code></td><td><code>application/json</code></td></tr>
+          </tbody>
+        </table></div>
+        <p><strong>Timeout:</strong> 60 seconds. <strong>Retry policy:</strong> 3 attempts with 5-second delay, only on <code>ConnectionException</code>.</p>
+
+        <h3>Full Job Payload (JSON)</h3>
+        <pre>{
+  <span class="key">"sample_id"</span>:             <span class="num">42</span>,
+  <span class="key">"slide_id"</span>:              <span class="str">"TCGA-A1-A0SK-01Z-00-DX1.svs"</span>,
+  <span class="key">"patch_size_px"</span>:         <span class="num">256</span>,
+  <span class="key">"magnification"</span>:         <span class="str">"20x"</span>,
+  <span class="key">"magnification_folder"</span>:  <span class="str">"20x"</span>,
+
+  <span class="comment">// Where to find the patches on Google Drive</span>
+  <span class="key">"gdrive_input_path"</span>:     <span class="str">"samples/sliced_slides/20x/tcga/tumor/TCGA-A1-A0SK/sample_42_256px"</span>,
+  <span class="key">"gdrive_input_archive"</span>:  <span class="str">"patches.tar.gz"</span>,
+
+  <span class="comment">// Where to write results on Google Drive</span>
+  <span class="key">"gdrive_output_path"</span>:    <span class="str">"samples/features/TITAN/20x/tcga/tumor/TCGA-A1-A0SK/sample_42_256px"</span>,
+
+  <span class="comment">// AI model specification</span>
+  <span class="key">"ai_model"</span>: {
+    <span class="key">"id"</span>:               <span class="num">1</span>,
+    <span class="key">"name"</span>:             <span class="str">"TITAN"</span>,
+    <span class="key">"slug"</span>:             <span class="str">"titan"</span>,
+    <span class="key">"huggingface"</span>:      <span class="str">"MahmoodLab/TITAN"</span>,
+    <span class="key">"version"</span>:          <span class="str">"v1"</span>,
+    <span class="key">"embedding_dim"</span>:    <span class="num">768</span>,
+    <span class="key">"input_resolution"</span>: <span class="num">224</span>
+  },
+
+  <span class="comment">// Where RunPod must POST results back</span>
+  <span class="key">"callback"</span>: {
+    <span class="key">"url"</span>:    <span class="str">"https://your-laravel-server.com/api/v1/feature-extraction/report"</span>,
+    <span class="key">"token"</span>:  <span class="str">"same-value-as-server-api_key"</span>,
+    <span class="key">"method"</span>: <span class="str">"POST"</span>
+  },
+
+  <span class="key">"dispatched_at"</span>: <span class="str">"2026-05-23T12:00:00+00:00"</span>
+}</pre>
+
+        <h3>Payload Field Reference</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Field</th><th>Source</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>sample_id</code></td><td><code>samples.id</code></td><td>Primary key of the sample in Laravel DB</td></tr>
+            <tr><td><code>slide_id</code></td><td><code>samples.file_name</code></td><td>Original filename of the WSI slide. Falls back to <code>sample_{id}</code> if null</td></tr>
+            <tr><td><code>patch_size_px</code></td><td><code>patch_sizes.size_px</code></td><td>Pixel dimension of each patch (e.g. 256)</td></tr>
+            <tr><td><code>magnification</code></td><td><code>magnifications.label</code></td><td>Human-readable label (e.g. "20x")</td></tr>
+            <tr><td><code>magnification_folder</code></td><td><code>magnifications.folder_name</code></td><td>Folder-safe name used in Drive paths</td></tr>
+            <tr><td><code>gdrive_input_path</code></td><td><code>samples.tiles_gdrive_path</code></td><td>Google Drive path where patches.tar.gz resides</td></tr>
+            <tr><td><code>gdrive_input_archive</code></td><td>hardcoded</td><td>Always <code>patches.tar.gz</code></td></tr>
+            <tr><td><code>gdrive_output_path</code></td><td>computed</td><td>Target Drive path for HDF5 output. See Section 07 for naming.</td></tr>
+            <tr><td><code>ai_model.name</code></td><td><code>ai_models.name</code></td><td>Model display name (e.g. "TITAN", "Virchow2")</td></tr>
+            <tr><td><code>ai_model.slug</code></td><td>generated</td><td>Lowercase slug via <code>Str::slug()</code></td></tr>
+            <tr><td><code>ai_model.huggingface</code></td><td><code>ai_models.huggingface_url</code></td><td>HuggingFace model ID for download</td></tr>
+            <tr><td><code>ai_model.embedding_dim</code></td><td><code>ai_models.embedding_dim</code></td><td>Feature vector size</td></tr>
+            <tr><td><code>ai_model.input_resolution</code></td><td><code>ai_models.input_resolution</code></td><td>Model input resolution in pixels</td></tr>
+            <tr><td><code>callback.url</code></td><td><code>config('app.url')</code></td><td>Full URL to the report endpoint on Hostinger</td></tr>
+            <tr><td><code>callback.token</code></td><td><code>server.api_key</code></td><td>Bearer token RunPod must include when calling back</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>What Happens After Successful Dispatch</h3>
+        <p>If RunPod returns HTTP 2xx, the following fields are immediately updated on the <code>samples</code> record:</p>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Field</th><th>New Value</th></tr></thead>
+          <tbody>
+            <tr><td><code>feature_extraction_status</code></td><td><code>processing</code></td></tr>
+            <tr><td><code>feature_extraction_ai_model_id</code></td><td>FK to <code>ai_models.id</code></td></tr>
+            <tr><td><code>feature_extraction_server_id</code></td><td>FK to <code>servers_names.id</code></td></tr>
+            <tr><td><code>features_gdrive_path</code></td><td>The computed output path (saved eagerly)</td></tr>
+            <tr><td><code>feature_extraction_error</code></td><td><code>null</code> (cleared)</td></tr>
+          </tbody>
+        </table></div>
+        <div class="alert info">
+          <strong>Important:</strong> <code>features_gdrive_path</code> is written to the database <em>before</em>
+          RunPod completes the job. This allows admins to locate the output folder even if the PHP process is interrupted.
+        </div>
+
+        <h3>RunPod Expected Response</h3>
+        <pre>{
+  <span class="key">"job_id"</span>: <span class="str">"runpod-job-abc123"</span>
+}</pre>
+        <p>RunPod must return HTTP 2xx. The <code>job_id</code> is logged for tracing purposes.</p>
+      </div>
+    </div>
+
+    <!-- ── 03 RunPod Callback ── -->
+    <div class="accordion-item" id="s3">
+      <button class="accordion-trigger" onclick="toggle(this)">
+        <span class="section-num">03</span>
+        <span class="section-title">RunPod → Laravel Callback (Webhook / Status Report)</span>
+        <span class="section-tag">POST /api/v1/feature-extraction/report</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="accordion-body">
+
+        <h3>Endpoint</h3>
+        <div class="path-box">
+          <div class="path-label">URL</div>
+          POST https://[hostinger-domain]/api/v1/feature-extraction/report
+        </div>
+        <p><strong>Authentication:</strong> <code>Authorization: Bearer {server.api_key}</code> — the same key stored in <code>servers_names.api_key</code> that Laravel used to dispatch the job. Validated by the <code>verify.server.api_key</code> middleware.</p>
+
+        <h3>Request Payload Contract</h3>
+        <pre>{
+  <span class="comment">// Required fields</span>
+  <span class="key">"sample_id"</span>:                <span class="num">42</span>,
+  <span class="key">"slide_id"</span>:                 <span class="str">"TCGA-A1-A0SK-01Z-00-DX1.svs"</span>,
+  <span class="key">"status"</span>:                   <span class="str">"completed"</span>,  <span class="comment">// "processing" | "completed" | "failed"</span>
+  <span class="key">"model_name"</span>:               <span class="str">"TITAN"</span>,
+
+  <span class="comment">// Populated on completion</span>
+  <span class="key">"runpod_output_path"</span>:       <span class="str">"/workspace/output/features/sample_42_256px"</span>,
+  <span class="key">"features_gdrive_path"</span>:     <span class="str">"samples/features/TITAN/20x/tcga/tumor/TCGA-A1-A0SK/sample_42_256px"</span>,
+  <span class="key">"features_gdrive_folder_id"</span>: <span class="str">"1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs"</span>,
+  <span class="key">"patch_count"</span>:              <span class="num">3420</span>,
+  <span class="key">"failed_patch_count"</span>:       <span class="num">0</span>,
+  <span class="key">"model_version"</span>:            <span class="str">"TITAN-v1"</span>,
+
+  <span class="comment">// Populated on failure</span>
+  <span class="key">"error_message"</span>:            <span class="str">null</span>
+}</pre>
+
+        <h3>Request Field Validation Rules</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Field</th><th>Required?</th><th>Type</th><th>Max</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>sample_id</code></td><td><strong>Yes</strong></td><td>integer</td><td>—</td><td>Must exist in <code>samples</code> table</td></tr>
+            <tr><td><code>slide_id</code></td><td>No</td><td>string</td><td>255</td><td>For tracing/logging</td></tr>
+            <tr><td><code>status</code></td><td><strong>Yes</strong></td><td>enum</td><td>—</td><td><code>processing</code>, <code>completed</code>, <code>failed</code></td></tr>
+            <tr><td><code>runpod_output_path</code></td><td>No</td><td>string</td><td>500</td><td>Path inside RunPod container workspace</td></tr>
+            <tr><td><code>features_gdrive_path</code></td><td>No</td><td>string</td><td>500</td><td>Final Drive path of the HDF5 folder</td></tr>
+            <tr><td><code>features_gdrive_folder_id</code></td><td>No</td><td>string</td><td>100</td><td>Google Drive folder ID for direct linking</td></tr>
+            <tr><td><code>patch_count</code></td><td>No</td><td>integer ≥ 0</td><td>—</td><td>Total patches processed successfully</td></tr>
+            <tr><td><code>failed_patch_count</code></td><td>No</td><td>integer ≥ 0</td><td>—</td><td>Patches that failed during extraction</td></tr>
+            <tr><td><code>model_name</code></td><td>No</td><td>string</td><td>100</td><td>e.g. "TITAN", "Virchow2"</td></tr>
+            <tr><td><code>model_version</code></td><td>No</td><td>string</td><td>100</td><td>e.g. "TITAN-v1", "virchow2-v0.1"</td></tr>
+            <tr><td><code>error_message</code></td><td>No</td><td>string</td><td>2000</td><td>Full error text on failure</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Database Updates by Status</h3>
+        <h4>On <code>status = "completed"</code></h4>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>samples field</th><th>Value set</th></tr></thead>
+          <tbody>
+            <tr><td><code>feature_extraction_status</code></td><td><code>completed</code></td></tr>
+            <tr><td><code>feature_extraction_completed_at</code></td><td><code>now()</code></td></tr>
+            <tr><td><code>features_runpod_path</code></td><td><code>runpod_output_path</code></td></tr>
+            <tr><td><code>features_gdrive_path</code></td><td><code>features_gdrive_path</code></td></tr>
+            <tr><td><code>features_gdrive_folder_id</code></td><td><code>features_gdrive_folder_id</code></td></tr>
+            <tr><td><code>features_patch_count</code></td><td><code>patch_count</code></td></tr>
+            <tr><td><code>features_failed_patch_count</code></td><td><code>failed_patch_count</code></td></tr>
+            <tr><td><code>features_model_version</code></td><td><code>model_version</code></td></tr>
+            <tr><td><code>feature_extraction_error</code></td><td><code>null</code> (cleared)</td></tr>
+          </tbody>
+        </table></div>
+
+        <h4>On <code>status = "failed"</code></h4>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>samples field</th><th>Value set</th></tr></thead>
+          <tbody>
+            <tr><td><code>feature_extraction_status</code></td><td><code>failed</code></td></tr>
+            <tr><td><code>feature_extraction_error</code></td><td><code>error_message</code> from payload, or "Unknown error"</td></tr>
+          </tbody>
+        </table></div>
+
+        <h4>On <code>status = "processing"</code></h4>
+        <p>Intermediate progress reports. Only <code>feature_extraction_status = processing</code> is written. Use this for live progress indicators without completing the job record.</p>
+
+        <h3>Response</h3>
+        <pre>{
+  <span class="key">"success"</span>: <span class="kw">true</span>,
+  <span class="key">"message"</span>: <span class="str">"Status updated."</span>,
+  <span class="key">"sample"</span>: {
+    <span class="key">"id"</span>:     <span class="num">42</span>,
+    <span class="key">"status"</span>: <span class="str">"completed"</span>
+  }
+}</pre>
+
+        <h3>Additional Endpoint — Read Current Status</h3>
+        <p>RunPod can also read the current state of a sample (useful after container restarts):</p>
+        <div class="path-box">
+          <div class="path-label">URL</div>
+          GET https://[hostinger-domain]/api/v1/feature-extraction/jobs/{sample_id}
+        </div>
+        <pre>{
+  <span class="key">"success"</span>: <span class="kw">true</span>,
+  <span class="key">"sample"</span>: {
+    <span class="key">"id"</span>:                              <span class="num">42</span>,
+    <span class="key">"slide_id"</span>:                        <span class="str">"TCGA-A1-A0SK-01Z.svs"</span>,
+    <span class="key">"feature_extraction_status"</span>:      <span class="str">"completed"</span>,
+    <span class="key">"feature_extraction_completed_at"</span>: <span class="str">"2026-05-23T14:30:00Z"</span>,
+    <span class="key">"features_gdrive_path"</span>:            <span class="str">"samples/features/TITAN/20x/…"</span>,
+    <span class="key">"features_gdrive_folder_id"</span>:       <span class="str">"1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs"</span>,
+    <span class="key">"features_runpod_path"</span>:            <span class="str">"/workspace/output/features/sample_42_256px"</span>,
+    <span class="key">"features_patch_count"</span>:            <span class="num">3420</span>,
+    <span class="key">"features_failed_patch_count"</span>:     <span class="num">0</span>,
+    <span class="key">"features_model_version"</span>:          <span class="str">"TITAN-v1"</span>,
+    <span class="key">"feature_extraction_error"</span>:        <span class="kw">null</span>
+  }
+}</pre>
+
+        <h3>Server Self-Registration (Boot Hook)</h3>
+        <p>When the RunPod container starts, it should call this endpoint to register its current public IP/URL:</p>
+        <div class="path-box">
+          <div class="path-label">URL</div>
+          POST https://[hostinger-domain]/api/v1/servers/{serverId}/update-url
+        </div>
+        <pre>{
+  <span class="key">"api_url"</span>: <span class="str">"https://[runpod-public-ip]:8080"</span>
+}</pre>
+        <p>This allows Laravel to always know the correct endpoint for the next dispatch. The server can only update its own URL (enforced by the <code>verify.server.api_key</code> middleware — the token identifies the server).</p>
+      </div>
+    </div>
+
+    <!-- ── 04 Sample Status Lifecycle ── -->
+    <div class="accordion-item" id="s4">
+      <button class="accordion-trigger" onclick="toggle(this)">
+        <span class="section-num">04</span>
+        <span class="section-title">Sample Status Lifecycle</span>
+        <span class="section-tag">samples table</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="accordion-body">
+
+        <h3>Tiling Status (<code>tiling_status</code>)</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Value</th><th>Meaning</th><th>Set By</th></tr></thead>
+          <tbody>
+            <tr><td><code>null</code></td><td>Not yet started</td><td>Default on sample creation</td></tr>
+            <tr><td><code>processing</code></td><td>PatchExtractionJob running</td><td><code>PatchExtractionJob::handle()</code> start</td></tr>
+            <tr><td><code>done</code></td><td>patches.tar.gz uploaded to Drive</td><td><code>PatchExtractionJob::handle()</code> success</td></tr>
+            <tr><td><code>failed</code></td><td>Extraction or upload failed</td><td><code>PatchExtractionJob::handle()</code> catch block</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Feature Extraction Status (<code>feature_extraction_status</code>)</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Value</th><th>Meaning</th><th>Set By</th></tr></thead>
+          <tbody>
+            <tr><td><code>null</code></td><td>Not yet dispatched</td><td>Default</td></tr>
+            <tr><td><code>processing</code></td><td>Job dispatched to RunPod, waiting for results</td><td><code>FeatureExtractionJob::handle()</code> after successful POST</td></tr>
+            <tr><td><code>processing</code></td><td>RunPod sending intermediate progress report</td><td><code>POST /report</code> with <code>status=processing</code></td></tr>
+            <tr><td><code>completed</code></td><td>RunPod uploaded HDF5 and confirmed success</td><td><code>POST /report</code> with <code>status=completed</code></td></tr>
+            <tr><td><code>failed</code></td><td>RunPod reported error, or dispatch failed</td><td><code>POST /report</code> with <code>status=failed</code>, or <code>FeatureExtractionJob::fail()</code></td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>All Feature Extraction Fields in <code>samples</code> Table</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Column</th><th>Type</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>feature_extraction_status</code></td><td>string/enum</td><td>Current pipeline status</td></tr>
+            <tr><td><code>feature_extraction_ai_model_id</code></td><td>FK → ai_models</td><td>Which AI model was used</td></tr>
+            <tr><td><code>feature_extraction_server_id</code></td><td>FK → servers_names</td><td>Which RunPod server handled the job</td></tr>
+            <tr><td><code>feature_extraction_completed_at</code></td><td>timestamp</td><td>When RunPod reported completion</td></tr>
+            <tr><td><code>feature_extraction_error</code></td><td>text</td><td>Error message (max 2000 chars)</td></tr>
+            <tr><td><code>features_gdrive_path</code></td><td>string</td><td>Google Drive folder path of HDF5 output</td></tr>
+            <tr><td><code>features_gdrive_folder_id</code></td><td>string</td><td>Google Drive folder ID for direct access</td></tr>
+            <tr><td><code>features_runpod_path</code></td><td>string</td><td>Path inside RunPod container workspace</td></tr>
+            <tr><td><code>features_patch_count</code></td><td>integer</td><td>Patches successfully embedded</td></tr>
+            <tr><td><code>features_failed_patch_count</code></td><td>integer</td><td>Patches that failed during embedding</td></tr>
+            <tr><td><code>features_model_version</code></td><td>string</td><td>Version string from RunPod (e.g. "TITAN-v1")</td></tr>
+            <tr><td><code>tiles_gdrive_path</code></td><td>string</td><td>Where patches.tar.gz lives (input to RunPod)</td></tr>
+            <tr><td><code>tiles_gdrive_folder_id</code></td><td>string</td><td>Drive folder ID of the patches folder</td></tr>
+            <tr><td><code>tile_count</code></td><td>integer</td><td>Number of patches in the archive</td></tr>
+            <tr><td><code>tile_size_px</code></td><td>integer</td><td>Patch dimension in pixels</td></tr>
+            <tr><td><code>tiling_status</code></td><td>enum</td><td>Patch extraction stage status</td></tr>
+            <tr><td><code>tiling_completed_at</code></td><td>timestamp</td><td>When patch extraction finished</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <!-- ── 05 Patch Extraction Pipeline ── -->
+    <div class="accordion-item" id="s5">
+      <button class="accordion-trigger" onclick="toggle(this)">
+        <span class="section-num">05</span>
+        <span class="section-title">Patch Extraction Pipeline (Hostinger Side)</span>
+        <span class="section-tag">PatchExtractionJob.php</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="accordion-body">
+
+        <h3>Job Overview</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Property</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td>File</td><td><code>app/Jobs/PatchExtractionJob.php</code></td></tr>
+            <tr><td>Queue</td><td><code>operations</code></td></tr>
+            <tr><td>Timeout</td><td><code>86,400</code> seconds (24 hours) — large slides can take very long</td></tr>
+            <tr><td>Tries</td><td><code>1</code> — retry manually from the Operations page</td></tr>
+            <tr><td>Constructor Args</td><td><code>sampleId</code>, <code>serverId</code>, <code>patchSizeId</code>, <code>magnificationId</code></td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Pipeline Steps (in order)</h3>
+        <div class="step-flow">
+          <div class="step">
+            <div class="step-num">1</div>
+            <div class="step-content">
+              <strong>Set <code>tiling_status = processing</code></strong>
+              <p>Sample is immediately marked as processing. Also saves <code>patch_size_id</code> and <code>patch_server_id</code>.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">2</div>
+            <div class="step-content">
+              <strong>Download WSI from Google Drive</strong>
+              <p>Uses <code>GoogleDriveService::downloadToLocal()</code>. Priority order for locating the file:</p>
+              <ol>
+                <li><code>samples.wsi_remote_path</code> — direct Drive path to the <code>.svs</code> file (most reliable)</li>
+                <li><code>samples.storage_path</code> — only used if its basename has a WSI extension (.svs, .tif, etc.)</li>
+                <li><code>samples.file_id</code> — Google Drive file ID fallback via <code>--drive-root-folder-id</code></li>
+              </ol>
+              <p>Downloaded to temp dir: <code>storage/app/patch_extraction/{sampleId}_{timestamp}/wsi/</code></p>
+              <p>Uses 8 parallel rclone HTTP-range streams (<code>--multi-thread-streams=8</code>) for fast large-file downloads.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">3</div>
+            <div class="step-content">
+              <strong>Run <code>patch_extract.py</code></strong>
+              <p>Executes <code>scripts/patch_extract.py</code> via PHP <code>Process</code>. Parameters passed as CLI arguments:</p>
+              <pre>python3 scripts/patch_extract.py \
+  --input         /path/to/slide.svs \
+  --output_dir    /path/to/patches/ \
+  --patch_size    256 \
+  --level         {patchSize.wsi_level} \
+  --overlap       {patchSize.overlap_px} \
+  --format        png \
+  --tissue_threshold 0.5 \
+  --workers       2 \
+  --save_coords \
+  --overview</pre>
+              <p>Outputs: PNG patch files, <code>patch_coords.csv</code>, <code>overview.png</code>. Script returns JSON on last line of stdout.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">4</div>
+            <div class="step-content">
+              <strong>Compress patches → <code>patches.tar.gz</code></strong>
+              <p>All patches are compressed into a single archive: <code>tar -czf patches.tar.gz -C {patchesDir} .</code></p>
+              <p>This reduces thousands of rclone API calls to a single upload call, dramatically improving performance.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">5</div>
+            <div class="step-content">
+              <strong>Upload archive to Google Drive</strong>
+              <p>Uses <code>GoogleDriveService::uploadFile()</code>. Target path built by <code>buildGdrivePath()</code>.</p>
+              <p>The <code>tiles_gdrive_path</code> is saved to DB <em>before</em> uploading (for recovery if process is killed).</p>
+              <p>rclone mkdir + copy. Timeout: 3600 seconds.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">6</div>
+            <div class="step-content">
+              <strong>Update sample record</strong>
+              <p>Writes: <code>tiling_status=done</code>, <code>tile_count</code>, <code>tile_size_px</code>, <code>tiles_gdrive_path</code>, <code>tiles_gdrive_folder_id</code>, <code>tiling_completed_at</code>, <code>magnification_id</code>, <code>patch_size_id</code>.</p>
+              <p>DB connection is reconnected before this write to handle long-running jobs (large slides can take 10+ minutes).</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">7</div>
+            <div class="step-content">
+              <strong>Cleanup temp directory</strong>
+              <p>Always executed in <code>finally</code> block. Recursively deletes the temp folder regardless of success or failure.</p>
+            </div>
+          </div>
+        </div>
+
+        <h3>patch_extract.py Output JSON</h3>
+        <pre>{
+  <span class="key">"patches_extracted"</span>: <span class="num">3420</span>,
+  <span class="key">"patches_skipped"</span>:   <span class="num">12</span>,
+  <span class="key">"tissue_area_ratio"</span>: <span class="num">0.87</span>
+}
+<span class="comment">// On failure:</span>
+{ <span class="key">"error"</span>: <span class="str">"OpenSlide error: cannot open file…"</span> }</pre>
+
+        <h3>Python Environment Requirements</h3>
+        <p>Set <code>PYTHON_PATH</code> in <code>.env</code> to the absolute path of a Python interpreter with these packages:</p>
+        <ul>
+          <li><code>openslide-python</code></li>
+          <li><code>opencv-python-headless</code></li>
+          <li><code>numpy</code></li>
+          <li><code>Pillow</code></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ── 06 Google Drive Architecture ── -->
+    <div class="accordion-item" id="s6">
+      <button class="accordion-trigger" onclick="toggle(this)">
+        <span class="section-num">06</span>
+        <span class="section-title">Google Drive Architecture &amp; Operations</span>
+        <span class="section-tag">GoogleDriveService.php</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="accordion-body">
+
+        <h3>Service Configuration</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>config key</th><th>.env key</th><th>Default</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>gdrive.rclone_path</code></td><td><code>GDRIVE_RCLONE_PATH</code></td><td><code>rclone</code></td><td>Absolute path to rclone binary</td></tr>
+            <tr><td><code>gdrive.rclone_config</code></td><td><code>GDRIVE_RCLONE_CONFIG</code></td><td>—</td><td>Path to rclone.conf with OAuth credentials</td></tr>
+            <tr><td><code>gdrive.remote_name</code></td><td><code>GDRIVE_REMOTE_NAME</code></td><td><code>alhayah</code></td><td>rclone remote name (defined in rclone.conf)</td></tr>
+            <tr><td><code>gdrive.root_folder</code></td><td><code>GDRIVE_ROOT_FOLDER</code></td><td><code>samples</code></td><td>Root folder on Google Drive for all data</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Available Operations</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Method</th><th>rclone command</th><th>Purpose</th><th>Timeout</th></tr></thead>
+          <tbody>
+            <tr><td><code>uploadLocalFile()</code></td><td>mkdir + copy</td><td>Upload single WSI file</td><td>7200s</td></tr>
+            <tr><td><code>uploadFile()</code></td><td>mkdir + copy</td><td>Upload single file (e.g. patches.tar.gz)</td><td>3600s</td></tr>
+            <tr><td><code>uploadBulkFolder()</code></td><td>mkdir + copy (recursive)</td><td>Upload TCGA folder structure</td><td>7200s</td></tr>
+            <tr><td><code>copyFromSharedFileId()</code></td><td>copy with <code>--drive-root-folder-id</code></td><td>Copy from shared Drive link by file ID</td><td>7200s</td></tr>
+            <tr><td><code>downloadToLocal()</code></td><td>copy with <code>--multi-thread-streams=8</code></td><td>Download WSI to local temp dir</td><td>7200s</td></tr>
+            <tr><td><code>fetchFileMeta()</code></td><td>lsjson --no-traverse</td><td>Get file metadata (Name, Size, MimeType, ID)</td><td>—</td></tr>
+            <tr><td><code>getShareableLink()</code></td><td>link</td><td>Generate shareable Google Drive URL</td><td>—</td></tr>
+            <tr><td><code>findWsiFilesInFolder()</code></td><td>lsjson --recursive --files-only</td><td>List .svs/.tif/.tiff files in folder</td><td>—</td></tr>
+            <tr><td><code>getFileInfoFromDriveId()</code></td><td>lsjson with <code>--drive-root-folder-id</code></td><td>Get name+size by file ID</td><td>—</td></tr>
+            <tr><td><code>extractFileIdFromUrl()</code></td><td>PHP regex</td><td>Parse Drive file ID from sharing URL</td><td>—</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>WSI File Detection Logic</h3>
+        <p>When scanning a folder for WSI files (TCGA bulk uploads), these rules apply:</p>
+        <ul>
+          <li>Extensions accepted: <code>.svs</code>, <code>.tiff</code>, <code>.tif</code></li>
+          <li>Excluded paths: anything containing <code>/logs/</code>, <code>/log/</code>, <code>/metadata/</code>, <code>/.</code> (hidden), <code>__pycache__</code></li>
+          <li>Depth limit: files at path depth 1 (direct child) or depth 2 (one subfolder deep) only</li>
+        </ul>
+
+        <h3>Download Performance Flags</h3>
+        <pre>--drive-acknowledge-abuse
+--multi-thread-streams=8     <span class="comment"># 8 parallel HTTP-range streams per file</span>
+--buffer-size=256M           <span class="comment"># read-ahead buffer</span>
+--timeout=300s               <span class="comment"># per-HTTP-request timeout</span>
+--retries=3                  <span class="comment"># rclone-level retries</span></pre>
+      </div>
+    </div>
+
+    <!-- ── 07 Google Drive Folder Naming ── -->
+    <div class="accordion-item" id="s7">
+      <button class="accordion-trigger" onclick="toggle(this)">
+        <span class="section-num">07</span>
+        <span class="section-title">Google Drive Folder Naming Architecture</span>
+        <span class="section-tag">Critical — Feature Extraction</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="accordion-body">
+
+        <h3>Root Folder</h3>
+        <p>All data lives under one root folder, configured via <code>GDRIVE_ROOT_FOLDER</code>. The default value is <code>samples</code>.</p>
+
+        <h3>Pattern 1 — WSI Single Upload</h3>
+        <p>When a single WSI file is uploaded through the dashboard:</p>
+        <div class="path-box">
+          <div class="path-label">Pattern</div>
+          {root}/{data_source}/{category}/{data_source}-{category}-{sampleName}-{UUID}/
+        </div>
+        <div class="path-box">
+          <div class="path-label">Example</div>
+          samples/tcga/tumor/tcga-tumor-TCGA-A1-A0SK-01Z-00-DX1-550e8400-e29b-41d4-a716-446655440000/
+        </div>
+        <ul>
+          <li><code>{data_source}</code> — Sanitized slug of <code>data_sources.name</code></li>
+          <li><code>{category}</code> — Sanitized slug of <code>categories.label_en</code>. Defaults to <code>uncategorized</code></li>
+          <li><code>{sampleName}</code> — <code>samples.entity_submitter_id</code> if set, otherwise <code>sample</code></li>
+          <li><code>{UUID}</code> — Always appended to guarantee uniqueness</li>
+          <li>No username in the folder name (removed in current version)</li>
+        </ul>
+
+        <h3>Pattern 2 — Bulk Upload (TCGA Folders)</h3>
+        <p>Preserves the original folder structure from the source without modification:</p>
+        <div class="path-box">
+          <div class="path-label">Pattern</div>
+          {root}/{data_source}/{category}/{original_folder_name}/
+        </div>
+        <div class="path-box">
+          <div class="path-label">Example</div>
+          samples/tcga/tumor/TCGA-A1-A0SK/
+        </div>
+        <p>The internal file structure inside <code>{original_folder_name}</code> is <strong>not modified</strong>.</p>
+
+        <h3>Pattern 3 — Patch Archive (sliced_slides)</h3>
+        <p>Output of <code>PatchExtractionJob</code>. This is the input path for RunPod feature extraction:</p>
+        <div class="path-box">
+          <div class="path-label">Pattern</div>
+          {root}/sliced_slides/{magnification}/{data_source}/{category}/{case_id}/sample_{id}_{size}px/
+        </div>
+        <div class="path-box">
+          <div class="path-label">Example</div>
+          samples/sliced_slides/20x/tcga/tumor/TCGA-A1-A0SK/sample_42_256px/
+        </div>
+        <ul>
+          <li><code>{root}</code> — Value of <code>GDRIVE_ROOT_FOLDER</code> (default: <code>samples</code>)</li>
+          <li><code>{magnification}</code> — <code>magnifications.folder_name</code> (e.g. <code>20x</code>, <code>40x</code>)</li>
+          <li><code>{data_source}</code> — <code>Str::slug(data_sources.name)</code></li>
+          <li><code>{category}</code> — <code>Str::slug(categories.label_en)</code></li>
+          <li><code>{case_id}</code> — <code>patient_cases.case_id</code>. Falls back to <code>no_case</code></li>
+          <li><code>{id}</code> — <code>samples.id</code> (database primary key)</li>
+          <li><code>{size}px</code> — <code>patch_sizes.size_px</code> (e.g. <code>256px</code>, <code>512px</code>)</li>
+        </ul>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>File inside folder</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>patches.tar.gz</code></td><td>Compressed archive of all PNG patch files</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Pattern 4 — Feature Extraction Output (features) ⭐</h3>
+        <p>This is the output path that RunPod must write to after feature extraction. This path is computed by Laravel and sent in the job payload as <code>gdrive_output_path</code>.</p>
+        <div class="path-box">
+          <div class="path-label">Pattern</div>
+          {root}/features/{ModelFolder}/{magnification}/{data_source}/{category}/{case_id}/sample_{id}_{size}px/
+        </div>
+        <div class="path-box">
+          <div class="path-label">Example — TITAN model</div>
+          samples/features/TITAN/20x/tcga/tumor/TCGA-A1-A0SK/sample_42_256px/
+        </div>
+        <div class="path-box">
+          <div class="path-label">Example — Virchow2 model</div>
+          samples/features/Virchow2/20x/tcga/tumor/TCGA-A1-A0SK/sample_42_256px/
+        </div>
+        <ul>
+          <li><code>{root}</code> — Value of <code>GDRIVE_ROOT_FOLDER</code> (default: <code>samples</code>)</li>
+          <li><code>{ModelFolder}</code> — <code>ai_models.name</code> (original case preserved, e.g. <code>TITAN</code>, <code>Virchow2</code>)</li>
+          <li><code>{magnification}</code> — <code>magnifications.folder_name</code> (same as sliced_slides)</li>
+          <li><code>{data_source}</code> — <code>Str::slug(data_sources.name)</code> (same as sliced_slides)</li>
+          <li><code>{category}</code> — <code>Str::slug(categories.label_en)</code> (same as sliced_slides)</li>
+          <li><code>{case_id}</code> — <code>patient_cases.case_id</code> (same as sliced_slides)</li>
+          <li><code>sample_{id}_{size}px</code> — Mirrors the patch folder name for 1:1 traceability</li>
+        </ul>
+
+        <div class="alert warning">
+          <strong>Key Design Rule:</strong> The <code>features/</code> hierarchy is an exact mirror of <code>sliced_slides/</code>,
+          only the root segment changes from <code>sliced_slides</code> to <code>features/{ModelName}</code>.
+          This allows every feature set to be directly traced back to its patch archive and original WSI.
+        </div>
+
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Expected file inside features folder</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>features.h5</code></td><td>HDF5 file containing the embedding vectors</td></tr>
+            <tr><td><code>manifest.json</code></td><td>Metadata: model name, version, patch count, timestamps</td></tr>
+            <tr><td><code>patch_coords.csv</code></td><td>Mapping of patch index → (x, y) coordinates on the slide</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Full Drive Tree Visualization</h3>
+        <pre>
+samples/                               ← GDRIVE_ROOT_FOLDER
+│
+├── tcga/                              ← data_source
+│   ├── tumor/                         ← category
+│   │   ├── tcga-tumor-TCGA-A1-A0SK-{UUID}/
+│   │   │   └── slide.svs              ← WSI file (single upload)
+│   │   └── TCGA-A1-A0SK/             ← bulk upload folder
+│   │       └── TCGA-A1-A0SK-01Z.svs
+│   └── normal/
+│       └── …
+│
+├── sliced_slides/
+│   └── 20x/                           ← magnification
+│       └── tcga/                      ← data_source slug
+│           └── tumor/                 ← category slug
+│               └── TCGA-A1-A0SK/      ← case_id
+│                   └── sample_42_256px/
+│                       └── patches.tar.gz
+│
+└── features/
+    ├── TITAN/                         ← ai_models.name (original case)
+    │   └── 20x/
+    │       └── tcga/
+    │           └── tumor/
+    │               └── TCGA-A1-A0SK/
+    │                   └── sample_42_256px/
+    │                       ├── features.h5
+    │                       ├── manifest.json
+    │                       └── patch_coords.csv
+    │
+    └── Virchow2/                      ← new model — same hierarchy
+        └── 20x/
+            └── tcga/
+                └── tumor/
+                    └── TCGA-A1-A0SK/
+                        └── sample_42_256px/
+                            ├── features.h5
+                            ├── manifest.json
+                            └── patch_coords.csv
+</pre>
+      </div>
+    </div>
+
+    <!-- ── 08 rclone Operations ── -->
+    <div class="accordion-item" id="s8">
+      <button class="accordion-trigger" onclick="toggle(this)">
+        <span class="section-num">08</span>
+        <span class="section-title">rclone Operations Reference</span>
+        <span class="section-tag">rclone / Google Drive</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="accordion-body">
+
+        <h3>Common rclone Commands Used by the System</h3>
+
+        <h4>Create remote folder</h4>
+        <pre>rclone mkdir alhayah:{remote_folder_path} --config=/path/to/rclone.conf</pre>
+
+        <h4>Upload a single file</h4>
+        <pre>rclone copy /local/path/patches.tar.gz alhayah:{remote_folder_path} --config=…</pre>
+
+        <h4>Upload a folder (bulk)</h4>
+        <pre>rclone copy /local/folder/ alhayah:{remote_folder_path} --config=…</pre>
+
+        <h4>Download a file by path</h4>
+        <pre>rclone copy alhayah:{remote_file_path} /local/dest/dir/ \
+  --no-traverse \
+  --multi-thread-streams=8 \
+  --buffer-size=256M \
+  --drive-acknowledge-abuse \
+  --config=…</pre>
+
+        <h4>Download a file by Drive file ID</h4>
+        <pre>rclone copy alhayah: /local/dest/ \
+  --drive-root-folder-id={fileId} \
+  --no-traverse \
+  --multi-thread-streams=8 \
+  --config=…</pre>
+
+        <h4>List files as JSON</h4>
+        <pre>rclone lsjson alhayah:{remote_folder_path} --no-traverse --config=…</pre>
+
+        <h4>List files recursively as JSON</h4>
+        <pre>rclone lsjson alhayah:{remote_folder_path} --recursive --files-only --config=…</pre>
+
+        <h4>Get shareable link</h4>
+        <pre>rclone link alhayah:{remote_path} --config=…</pre>
+
+        <h3>rclone.conf Remote Setup</h3>
+        <p>The remote named <code>alhayah</code> (configurable via <code>GDRIVE_REMOTE_NAME</code>) must be configured in <code>rclone.conf</code> with OAuth2 credentials for the Google Drive account:</p>
+        <pre>[alhayah]
+type = drive
+client_id = YOUR_CLIENT_ID
+client_secret = YOUR_CLIENT_SECRET
+scope = drive
+token = {"access_token":"…","token_type":"Bearer","refresh_token":"…","expiry":"…"}
+</pre>
+
+        <h3>RunPod Side — rclone Commands</h3>
+        <p>The RunPod container must also have rclone configured with the same Google Drive account. Recommended setup:</p>
+        <pre><span class="comment"># Pull patches from Google Drive</span>
+rclone copy alhayah:{gdrive_input_path}/patches.tar.gz /workspace/input/ --config=/workspace/rclone.conf
+
+<span class="comment"># Push feature results back to Google Drive</span>
+rclone copy /workspace/output/ alhayah:{gdrive_output_path}/ --config=/workspace/rclone.conf</pre>
+        <p>The rclone config file should be mounted into the RunPod container as a persistent volume or provided as a base64-encoded environment variable.</p>
+      </div>
+    </div>
+
+    <!-- ── 09 API Endpoints ── -->
+    <div class="accordion-item" id="s9">
+      <button class="accordion-trigger" onclick="toggle(this)">
+        <span class="section-num">09</span>
+        <span class="section-title">API Endpoints Reference</span>
+        <span class="section-tag">routes/api.php</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="accordion-body">
+
+        <h3>All Endpoints</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><span class="badge-inline badge-get">GET</span></td>
+              <td><code>/api/health</code></td>
+              <td>None</td>
+              <td>Public health check. No authentication needed. Use for connectivity tests.</td>
+            </tr>
+            <tr>
+              <td><span class="badge-inline badge-get">GET</span></td>
+              <td><code>/api/v1/health</code></td>
+              <td>Bearer token</td>
+              <td>Authenticated health check. Returns server name and timestamp.</td>
+            </tr>
+            <tr>
+              <td><span class="badge-inline badge-post">POST</span></td>
+              <td><code>/api/v1/feature-extraction/report</code></td>
+              <td>Bearer token</td>
+              <td>Unified status report from RunPod. Main callback endpoint.</td>
+            </tr>
+            <tr>
+              <td><span class="badge-inline badge-get">GET</span></td>
+              <td><code>/api/v1/feature-extraction/jobs/{sample}</code></td>
+              <td>Bearer token</td>
+              <td>Read current feature extraction state of a sample. RunPod can use to resume after restart.</td>
+            </tr>
+            <tr>
+              <td><span class="badge-inline badge-post">POST</span></td>
+              <td><code>/api/v1/servers/{serverId}/update-url</code></td>
+              <td>Bearer token</td>
+              <td>Server self-registration. RunPod calls this on boot to update its <code>api_url</code> in Laravel DB.</td>
+            </tr>
+          </tbody>
+        </table></div>
+
+        <h3>GET /api/health — Public Health Check</h3>
+        <pre>GET /api/health</pre>
+        <p>Response (200 OK):</p>
+        <pre>{
+  <span class="key">"success"</span>: <span class="kw">true</span>,
+  <span class="key">"service"</span>: <span class="str">"histopathology-management-api"</span>,
+  <span class="key">"time"</span>:    <span class="str">"2026-05-23T12:00:00+00:00"</span>
+}</pre>
+
+        <h3>GET /api/v1/health — Authenticated Health Check</h3>
+        <pre>GET /api/v1/health
+Authorization: Bearer {server.api_key}</pre>
+        <p>Response (200 OK):</p>
+        <pre>{
+  <span class="key">"success"</span>: <span class="kw">true</span>,
+  <span class="key">"server"</span>:  <span class="str">"RunPod-TITAN"</span>,
+  <span class="key">"time"</span>:    <span class="str">"2026-05-23T12:00:00+00:00"</span>
+}</pre>
+
+        <h3>POST /api/v1/feature-extraction/report — Status Report</h3>
+        <p>See <strong>Section 03</strong> for full request/response documentation.</p>
+
+        <h3>POST /api/v1/servers/{serverId}/update-url — Self-Registration</h3>
+        <pre>POST /api/v1/servers/1/update-url
+Authorization: Bearer {server.api_key}
+Content-Type: application/json
+
+{
+  <span class="key">"api_url"</span>: <span class="str">"https://150.230.10.5:8080"</span>
+}</pre>
+        <p>Response (200 OK):</p>
+        <pre>{
+  <span class="key">"success"</span>:   <span class="kw">true</span>,
+  <span class="key">"api_url"</span>:   <span class="str">"https://150.230.10.5:8080"</span>,
+  <span class="key">"server_id"</span>: <span class="num">1</span>
+}</pre>
+        <div class="alert warning">
+          <strong>Note:</strong> The <code>{serverId}</code> in the URL is ignored. Laravel determines which server to update
+          from the Bearer token itself (the token uniquely identifies the server). This prevents a server from updating
+          another server's URL.
+        </div>
+
+        <h3>Error Responses</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>HTTP Status</th><th>Meaning</th><th>Example</th></tr></thead>
+          <tbody>
+            <tr><td>401</td><td>Missing or invalid Bearer token</td><td><code>{"error": "Unauthorized"}</code></td></tr>
+            <tr><td>422</td><td>Validation failure</td><td><code>{"message": "…", "errors": {…}}</code></td></tr>
+            <tr><td>404</td><td>sample_id not found</td><td>Laravel default 404 JSON</td></tr>
+            <tr><td>500</td><td>Server-side error</td><td>Laravel error JSON</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <!-- ── 10 Authentication & Security ── -->
+    <div class="accordion-item" id="s10">
+      <button class="accordion-trigger" onclick="toggle(this)">
+        <span class="section-num">10</span>
+        <span class="section-title">Authentication &amp; Security</span>
+        <span class="section-tag">verify.server.api_key middleware</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="accordion-body">
+
+        <h3>Authentication Flow</h3>
+        <p>All authenticated API endpoints use a single shared-secret mechanism between Laravel and RunPod:</p>
+        <div class="step-flow">
+          <div class="step">
+            <div class="step-num">1</div>
+            <div class="step-content">
+              <strong>Server record in <code>servers_names</code> table</strong>
+              <p>Each RunPod server has a record with <code>api_key</code> (a strong random string), <code>api_url</code> (current endpoint), and <code>type = 'external'</code>.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">2</div>
+            <div class="step-content">
+              <strong>Laravel → RunPod dispatch</strong>
+              <p>Laravel POSTs to <code>{server.api_url}/jobs/start</code> using <code>Authorization: Bearer {server.api_key}</code>.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">3</div>
+            <div class="step-content">
+              <strong>RunPod → Laravel callback</strong>
+              <p>RunPod reads the <code>callback.token</code> from the job payload (which equals <code>server.api_key</code>) and uses it as the Bearer token when POSTing back to Laravel.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="step-num">4</div>
+            <div class="step-content">
+              <strong><code>verify.server.api_key</code> middleware</strong>
+              <p>Extracts the Bearer token from the incoming request, looks up the matching server in <code>servers_names</code> table, and injects the server model as <code>$request->attributes->get('server')</code>. Uses <code>hash_equals()</code> to prevent timing attacks.</p>
+            </div>
+          </div>
+        </div>
+
+        <h3>Key Security Properties</h3>
+        <ul>
+          <li><strong>Timing-safe comparison:</strong> <code>hash_equals()</code> used for token comparison (prevents timing attacks)</li>
+          <li><strong>HTTPS only:</strong> All traffic must be over HTTPS (both Laravel on Hostinger and RunPod container)</li>
+          <li><strong>No hardcoded secrets:</strong> <code>api_key</code> stored in database, loaded per-request; never in code or Docker image</li>
+          <li><strong>Token = identity:</strong> The Bearer token uniquely identifies which server is calling, not just if the caller is authorized</li>
+          <li><strong>RunPod API key isolation:</strong> <code>RUNPOD_API_KEY</code> (for GraphQL) is separate from the <code>server.api_key</code> (for webhook auth)</li>
+        </ul>
+
+        <h3>RunPod Side — Required Environment Variables</h3>
+        <pre><span class="comment"># Laravel callback</span>
+LARAVEL_API_URL=https://your-server.com/api/v1
+LARAVEL_API_KEY=same-value-as-servers_names.api_key   <span class="comment"># Used as Bearer token</span>
+
+<span class="comment"># Google Drive access</span>
+RCLONE_CONFIG_BASE64=base64_encoded_rclone_conf        <span class="comment"># Or mount as file</span>
+GDRIVE_REMOTE_NAME=alhayah
+GDRIVE_ROOT_FOLDER=samples
+
+<span class="comment"># HuggingFace model download</span>
+HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+<span class="comment"># Optional: model config</span>
+MODEL_VERSION=TITAN-v1
+REPORT_INTERVAL=100                                    <span class="comment"># Send progress every N patches</span>
+</pre>
+      </div>
+    </div>
+
+    <!-- ── 11 Queue & Job Configuration ── -->
+    <div class="accordion-item" id="s11">
+      <button class="accordion-trigger" onclick="toggle(this)">
+        <span class="section-num">11</span>
+        <span class="section-title">Queue &amp; Job Configuration</span>
+        <span class="section-tag">Laravel Queue / Horizon</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="accordion-body">
+
+        <h3>Queue Names</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Queue</th><th>Jobs</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>operations</code></td><td><code>PatchExtractionJob</code>, <code>FeatureExtractionJob</code></td><td>All long-running server-side processing jobs</td></tr>
+            <tr><td><code>default</code></td><td>General-purpose jobs</td><td>Standard Laravel queue</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Job Settings</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Job</th><th>Queue</th><th>Timeout</th><th>Tries</th><th>Reason</th></tr></thead>
+          <tbody>
+            <tr><td><code>PatchExtractionJob</code></td><td><code>operations</code></td><td>86,400s (24h)</td><td>1</td><td>Large SVS files can take very long to download and tile</td></tr>
+            <tr><td><code>FeatureExtractionJob</code></td><td><code>operations</code></td><td>300s (5m)</td><td>1</td><td>Only the HTTP dispatch phase; actual processing is async on RunPod</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Starting the Queue Worker</h3>
+        <pre><span class="comment"># Process the operations queue on Hostinger</span>
+php artisan queue:work --queue=operations --timeout=90000 --tries=1</pre>
+
+        <div class="alert info">
+          <strong>Note on retries:</strong> Both jobs use <code>$tries = 1</code>. If a job fails, it must be
+          manually re-triggered from the Operations page in the admin dashboard. This is intentional —
+          automatic retries on large-file operations can cause duplicate uploads or partial data states.
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 12 Environment Variables ── -->
+    <div class="accordion-item" id="s12">
+      <button class="accordion-trigger" onclick="toggle(this)">
+        <span class="section-num">12</span>
+        <span class="section-title">Environment Variables Reference</span>
+        <span class="section-tag">.env / RunPod env</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="accordion-body">
+
+        <h3>Laravel (.env on Hostinger)</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Variable</th><th>Required</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>APP_URL</code></td><td>Yes</td><td>Public URL of the Laravel server. Used to build the callback URL in job payloads.</td></tr>
+            <tr><td><code>GDRIVE_RCLONE_PATH</code></td><td>No</td><td>Path to rclone binary. Default: <code>rclone</code> (must be in PATH)</td></tr>
+            <tr><td><code>GDRIVE_RCLONE_CONFIG</code></td><td>Yes</td><td>Absolute path to <code>rclone.conf</code> with Google Drive OAuth tokens</td></tr>
+            <tr><td><code>GDRIVE_REMOTE_NAME</code></td><td>No</td><td>rclone remote name. Default: <code>alhayah</code></td></tr>
+            <tr><td><code>GDRIVE_ROOT_FOLDER</code></td><td>No</td><td>Root folder on Google Drive. Default: <code>samples</code></td></tr>
+            <tr><td><code>PYTHON_PATH</code></td><td>No</td><td>Path to Python interpreter with openslide-python. Default: <code>python3</code></td></tr>
+            <tr><td><code>PATCH_WORKERS</code></td><td>No</td><td>Parallel workers for patch_extract.py. Default: <code>2</code></td></tr>
+            <tr><td><code>QUEUE_CONNECTION</code></td><td>Yes</td><td>Set to <code>database</code> or <code>redis</code> for async queue processing</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>RunPod Container Environment Variables</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Variable</th><th>Required</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>LARAVEL_API_URL</code></td><td>Yes</td><td>Base URL of the Laravel API: <code>https://domain.com/api/v1</code></td></tr>
+            <tr><td><code>LARAVEL_API_KEY</code></td><td>Yes</td><td>Bearer token for authenticating with Laravel. Must match <code>servers_names.api_key</code>.</td></tr>
+            <tr><td><code>LARAVEL_SERVER_ID</code></td><td>Yes</td><td>The server's <code>id</code> in <code>servers_names</code> table. Used for self-registration.</td></tr>
+            <tr><td><code>HF_TOKEN</code></td><td>Yes</td><td>HuggingFace access token for downloading gated models (TITAN, Virchow2, etc.)</td></tr>
+            <tr><td><code>RCLONE_REMOTE_NAME</code></td><td>Yes</td><td>rclone remote name (must match Hostinger's config). Default: <code>alhayah</code></td></tr>
+            <tr><td><code>GDRIVE_ROOT_FOLDER</code></td><td>Yes</td><td>Must match Laravel's <code>GDRIVE_ROOT_FOLDER</code>. Default: <code>samples</code></td></tr>
+            <tr><td><code>MODEL_NAME</code></td><td>Yes</td><td>Name of the AI model (e.g. <code>TITAN</code>, <code>Virchow2</code>). Used in folder paths and report payloads.</td></tr>
+            <tr><td><code>MODEL_VERSION</code></td><td>No</td><td>Model version string (e.g. <code>TITAN-v1</code>). Reported back to Laravel.</td></tr>
+            <tr><td><code>REPORT_INTERVAL</code></td><td>No</td><td>Send progress report every N batches. Default: <code>100</code></td></tr>
+            <tr><td><code>RUNPOD_POD_ID</code></td><td>Auto</td><td>Injected by RunPod automatically. Available as <code>RUNPOD_POD_ID</code>.</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>servers_names Table — Key Columns</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Column</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>id</code></td><td>Primary key. Passed to RunPod as <code>LARAVEL_SERVER_ID</code>.</td></tr>
+            <tr><td><code>name</code></td><td>Human-readable server name (e.g. "RunPod-TITAN")</td></tr>
+            <tr><td><code>type</code></td><td>Must be <code>external</code> for RunPod servers</td></tr>
+            <tr><td><code>api_url</code></td><td>Current HTTP endpoint of the RunPod container. Updated via self-registration.</td></tr>
+            <tr><td><code>api_key</code></td><td>Shared secret. Used bidirectionally: Laravel → RunPod and RunPod → Laravel.</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Integration Checklist for Adding a New Model (e.g. Virchow2)</h3>
+        <ol>
+          <li>Create a new record in <code>ai_models</code> table: name = <code>Virchow2</code>, huggingface_url, embedding_dim, input_resolution, version</li>
+          <li>Create a new record in <code>servers_names</code> table: type = <code>external</code>, generate a strong <code>api_key</code></li>
+          <li>Deploy a new RunPod container with <code>MODEL_NAME=Virchow2</code> and <code>LARAVEL_API_KEY</code> set to the new server's <code>api_key</code></li>
+          <li>Container calls <code>POST /api/v1/servers/{id}/update-url</code> on boot to register its endpoint</li>
+          <li>Dispatch <code>FeatureExtractionJob</code> with <code>serverId</code> = new server ID and <code>aiModelId</code> = Virchow2 model ID</li>
+          <li>Features are written to: <code>samples/features/Virchow2/{mag}/{src}/{cat}/{case}/sample_{id}_{px}px/</code></li>
+        </ol>
+      </div>
+    </div>
+
+  </div><!-- /.accordion -->
+
+  <!-- ════════════════ FOOTER ════════════════ -->
+  <footer class="page-footer">
+    <span>Histopathology Management System — API Documentation</span>
+    <span>histopathology_laravel102 · May 2026</span>
+  </footer>
+
+</div><!-- /.page-wrapper -->
+
+<script>
+  function toggle(btn) {
+    const item = btn.closest('.accordion-item');
+    item.classList.toggle('open');
+  }
+</script>
+</body>
+</html>
