@@ -503,6 +503,7 @@
       <li><a href="#s10"><span class="toc-num">10</span> Authentication &amp; Security</a></li>
       <li><a href="#s11"><span class="toc-num">11</span> Queue &amp; Job Configuration</a></li>
       <li><a href="#s12"><span class="toc-num">12</span> Environment Variables</a></li>
+      <li><a href="#s13"><span class="toc-num">13</span> Operation Gateway &amp; RunPod Sample Storage (rclone)</a></li>
     </ul>
   </div>
 
@@ -1612,6 +1613,304 @@ php artisan queue:work --queue=operations --timeout=90000 --tries=1</pre>
         </ol>
       </div>
     </div>
+
+    <!-- ── 13 Operation Gateway & RunPod Sample Storage ── -->
+    <div class="accordion-item open" id="s13">
+      <button class="accordion-trigger" onclick="toggle(this)">
+        <span class="section-num">13</span>
+        <span class="section-title">Operation Gateway &amp; RunPod Sample Storage (rclone)</span>
+        <span class="section-tag">RunPod · rclone · Google Drive</span>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      <div class="accordion-body">
+
+        <!-- ─────────── PART 1: Operation Gateway ─────────── -->
+        <h3>1 — Sending an Operation to the RunPod Gateway</h3>
+        <p>
+          When an admin triggers feature extraction, <code>FeatureExtractionJob</code> dispatches the job to the
+          RunPod container by sending a single HTTP POST to the server's <em>operation gateway</em>:
+        </p>
+        <div class="path-box">
+          <div class="path-label">Operation Gateway Endpoint (RunPod side)</div>
+          POST {server.api_url}/jobs/start
+        </div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Header</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td><code>Authorization</code></td><td><code>Bearer {server.api_key}</code></td></tr>
+            <tr><td><code>Content-Type</code></td><td><code>application/json</code></td></tr>
+            <tr><td><code>Accept</code></td><td><code>application/json</code></td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Full Operation Payload (JSON sent to RunPod)</h3>
+        <pre>{
+  <span class="comment">// ── Sample identification ──────────────────────────────────────────</span>
+  <span class="key">"sample_id"</span>:              <span class="num">42</span>,
+  <span class="key">"slide_id"</span>:               <span class="str">"TCGA-A1-A0SK-01Z-00-DX1.svs"</span>,
+  <span class="key">"patch_size_px"</span>:          <span class="num">256</span>,
+  <span class="key">"magnification"</span>:          <span class="str">"20x"</span>,
+  <span class="key">"magnification_folder"</span>:   <span class="str">"20x"</span>,
+
+  <span class="comment">// ── Google Drive input (patches archive) ──────────────────────────</span>
+  <span class="key">"gdrive_input_path"</span>:      <span class="str">"samples/sliced_slides/20x/tcga/tumor/TCGA-A1-A0SK/sample_42_256px"</span>,
+  <span class="key">"gdrive_input_archive"</span>:   <span class="str">"patches.tar.gz"</span>,
+
+  <span class="comment">// ── Google Drive output (feature HDF5 destination) ────────────────</span>
+  <span class="key">"gdrive_output_path"</span>:     <span class="str">"samples/features/TITAN/20x/tcga/tumor/TCGA-A1-A0SK/sample_42_256px"</span>,
+
+  <span class="comment">// ── AI model specification ────────────────────────────────────────</span>
+  <span class="key">"ai_model"</span>: {
+    <span class="key">"id"</span>:                <span class="num">1</span>,
+    <span class="key">"name"</span>:              <span class="str">"TITAN"</span>,
+    <span class="key">"slug"</span>:              <span class="str">"titan"</span>,
+    <span class="key">"huggingface"</span>:       <span class="str">"MahmoodLab/TITAN"</span>,
+    <span class="key">"version"</span>:           <span class="str">"v1"</span>,
+    <span class="key">"embedding_dim"</span>:     <span class="num">768</span>,
+    <span class="key">"input_resolution"</span>:  <span class="num">224</span>
+  },
+
+  <span class="comment">// ── Callback — where RunPod must POST its result ──────────────────</span>
+  <span class="key">"callback"</span>: {
+    <span class="key">"url"</span>:     <span class="str">"https://ai.histopathology.cloud/api/v1/feature-extraction/report"</span>,
+    <span class="key">"token"</span>:   <span class="str">"&lt;same value as server.api_key&gt;"</span>,
+    <span class="key">"method"</span>:  <span class="str">"POST"</span>
+  },
+
+  <span class="key">"dispatched_at"</span>: <span class="str">"2026-05-23T12:00:00+00:00"</span>
+}</pre>
+
+        <h3>Payload Field Reference</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Field</th><th>Source</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>sample_id</code></td><td><code>samples.id</code></td><td>Primary key of the sample in the Laravel database.</td></tr>
+            <tr><td><code>slide_id</code></td><td><code>samples.file_name</code></td><td>Original WSI filename. Falls back to <code>sample_{id}</code> if null.</td></tr>
+            <tr><td><code>patch_size_px</code></td><td><code>patch_sizes.size_px</code></td><td>Pixel size of each extracted patch (e.g. <code>256</code>).</td></tr>
+            <tr><td><code>magnification</code></td><td><code>magnifications.label</code></td><td>Human-readable magnification label (e.g. <code>20x</code>).</td></tr>
+            <tr><td><code>magnification_folder</code></td><td><code>magnifications.folder_name</code></td><td>Folder-safe magnification string used inside Google Drive paths.</td></tr>
+            <tr><td><code>gdrive_input_path</code></td><td><code>samples.tiles_gdrive_path</code></td><td>Google Drive folder containing <code>patches.tar.gz</code>. Produced by <code>PatchExtractionJob</code>.</td></tr>
+            <tr><td><code>gdrive_input_archive</code></td><td>hardcoded</td><td>Always <code>patches.tar.gz</code>.</td></tr>
+            <tr><td><code>gdrive_output_path</code></td><td>computed by job</td><td>Target Google Drive path where the HDF5 feature file must be uploaded. Naming convention described in Part 3 below.</td></tr>
+            <tr><td><code>ai_model.*</code></td><td><code>ai_models</code> table</td><td>Full model descriptor including HuggingFace ID, embedding dimension, and input resolution.</td></tr>
+            <tr><td><code>callback.url</code></td><td><code>config('app.url')</code></td><td>Always points to <code>https://ai.histopathology.cloud/api/v1/feature-extraction/report</code>.</td></tr>
+            <tr><td><code>callback.token</code></td><td><code>server.api_key</code></td><td>RunPod authenticates back to Laravel using this shared Bearer token.</td></tr>
+            <tr><td><code>dispatched_at</code></td><td>runtime</td><td>ISO-8601 timestamp of when the job was sent.</td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Expected Response from RunPod (HTTP 200)</h3>
+        <pre>{
+  <span class="key">"status"</span>:   <span class="str">"accepted"</span>,
+  <span class="key">"job_id"</span>:   <span class="str">"runpod-job-abc123"</span>   <span class="comment">// optional — for tracing</span>
+}</pre>
+        <p>Any non-2xx response causes the job to mark the sample as <code>feature_extraction_status = failed</code>.</p>
+
+        <hr style="margin: 2rem 0; border-color: var(--border);">
+
+        <!-- ─────────── PART 2: Status Callback API ─────────── -->
+        <h3>2 — Operation Status Callback API (RunPod → Laravel)</h3>
+        <p>
+          Once the feature extraction completes (or fails), the RunPod container <strong>must</strong> POST
+          a status report to Laravel. This is the only mechanism that updates the sample's final state
+          in the database.
+        </p>
+        <div class="path-box">
+          <div class="path-label">Laravel Callback Endpoint</div>
+          POST https://ai.histopathology.cloud/api/v1/feature-extraction/report
+        </div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Header</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td><code>Authorization</code></td><td><code>Bearer {server.api_key}</code> — same key issued when the operation was dispatched</td></tr>
+            <tr><td><code>Content-Type</code></td><td><code>application/json</code></td></tr>
+          </tbody>
+        </table></div>
+
+        <h3>Callback Payload (JSON sent by RunPod)</h3>
+        <pre>{
+  <span class="comment">// ── Required fields ───────────────────────────────────────────────</span>
+  <span class="key">"sample_id"</span>:                  <span class="num">42</span>,
+  <span class="key">"slide_id"</span>:                   <span class="str">"TCGA-A1-A0SK-01Z-00-DX1.svs"</span>,
+  <span class="key">"status"</span>:                     <span class="str">"completed"</span>,   <span class="comment">// "processing" | "completed" | "failed"</span>
+  <span class="key">"model_name"</span>:                 <span class="str">"TITAN"</span>,
+
+  <span class="comment">// ── Populated only on "completed" ─────────────────────────────────</span>
+  <span class="key">"runpod_output_path"</span>:         <span class="str">"/workspace/output/features/sample_42_256px"</span>,
+  <span class="key">"features_gdrive_path"</span>:       <span class="str">"samples/features/TITAN/20x/tcga/tumor/TCGA-A1-A0SK/sample_42_256px"</span>,
+  <span class="key">"features_gdrive_folder_id"</span>:  <span class="str">"1aBcDeFgHiJkLmNoPqRsTuVwXyZ"</span>,
+  <span class="key">"patch_count"</span>:                <span class="num">1024</span>,
+  <span class="key">"failed_patch_count"</span>:         <span class="num">0</span>,
+  <span class="key">"model_version"</span>:              <span class="str">"TITAN-v1"</span>,
+
+  <span class="comment">// ── Populated only on "failed" ────────────────────────────────────</span>
+  <span class="key">"error_message"</span>:              <span class="str">""</span>
+}</pre>
+
+        <h3>Status Values &amp; Their Effect on the Sample Record</h3>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>status value</th><th>Effect on <code>samples</code> table</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>processing</code></td>
+              <td>Sets <code>feature_extraction_status = processing</code>. Used for mid-job progress pings. No path columns are written.</td>
+            </tr>
+            <tr>
+              <td><code>completed</code></td>
+              <td>
+                Sets <code>feature_extraction_status = completed</code>.<br>
+                Writes: <code>features_gdrive_path</code>, <code>features_gdrive_folder_id</code>, <code>features_runpod_path</code>, <code>features_patch_count</code>, <code>features_failed_patch_count</code>, <code>features_model_version</code>, <code>feature_extraction_completed_at</code>.<br>
+                Clears <code>feature_extraction_error</code>.
+              </td>
+            </tr>
+            <tr>
+              <td><code>failed</code></td>
+              <td>Sets <code>feature_extraction_status = failed</code>. Writes <code>error_message</code> to <code>feature_extraction_error</code>.</td>
+            </tr>
+          </tbody>
+        </table></div>
+
+        <h3>Successful Response from Laravel (HTTP 200)</h3>
+        <pre>{
+  <span class="key">"success"</span>: <span class="bool">true</span>,
+  <span class="key">"message"</span>: <span class="str">"Status updated."</span>,
+  <span class="key">"sample"</span>: {
+    <span class="key">"id"</span>:     <span class="num">42</span>,
+    <span class="key">"status"</span>: <span class="str">"completed"</span>
+  }
+}</pre>
+        <p>
+          <strong>Authentication failure</strong> returns HTTP <code>401 Unauthorized</code>.<br>
+          <strong>Validation failure</strong> returns HTTP <code>422 Unprocessable Entity</code> with a <code>errors</code> object.<br>
+          The middleware that validates the Bearer token is <code>verify.server.api_key</code> — it looks up
+          <code>api_key</code> in the <code>servers_names</code> table.
+        </p>
+
+        <h3>Read-Back Endpoint — Check Current Operation Status</h3>
+        <p>RunPod can also query the current state of a sample at any time (e.g. after a container restart to decide whether to resume or skip):</p>
+        <div class="path-box">
+          <div class="path-label">Status Query Endpoint</div>
+          GET https://ai.histopathology.cloud/api/v1/feature-extraction/jobs/{sample_id}
+        </div>
+        <pre>{
+  <span class="key">"success"</span>: <span class="bool">true</span>,
+  <span class="key">"sample"</span>: {
+    <span class="key">"id"</span>:                              <span class="num">42</span>,
+    <span class="key">"slide_id"</span>:                        <span class="str">"TCGA-A1-A0SK-01Z-00-DX1.svs"</span>,
+    <span class="key">"feature_extraction_status"</span>:       <span class="str">"completed"</span>,
+    <span class="key">"feature_extraction_completed_at"</span>: <span class="str">"2026-05-23T14:30:00+00:00"</span>,
+    <span class="key">"features_gdrive_path"</span>:            <span class="str">"samples/features/TITAN/20x/tcga/tumor/TCGA-A1-A0SK/sample_42_256px"</span>,
+    <span class="key">"features_gdrive_folder_id"</span>:       <span class="str">"1aBcDeFgHiJkLmNoPqRsTuVwXyZ"</span>,
+    <span class="key">"features_runpod_path"</span>:            <span class="str">"/workspace/output/features/sample_42_256px"</span>,
+    <span class="key">"features_patch_count"</span>:            <span class="num">1024</span>,
+    <span class="key">"features_failed_patch_count"</span>:     <span class="num">0</span>,
+    <span class="key">"features_model_version"</span>:          <span class="str">"TITAN-v1"</span>,
+    <span class="key">"feature_extraction_error"</span>:        <span class="bool">null</span>
+  }
+}</pre>
+
+        <hr style="margin: 2rem 0; border-color: var(--border);">
+
+        <!-- ─────────── PART 3: rclone Storage on RunPod ─────────── -->
+        <h3>3 — How RunPod Stores the Sample Using rclone → Google Drive</h3>
+
+        <h4>rclone Remote Name on RunPod</h4>
+        <p>
+          The rclone remote configured inside the RunPod container is named <strong><code>gdrive</code></strong>
+          (set via the RunPod environment variable <code>RCLONE_REMOTE=gdrive</code>).
+          This is distinct from the local development / Hostinger remote which may use a different name.
+          All rclone commands on RunPod must reference this remote as <code>gdrive:</code>.
+        </p>
+        <div class="callout callout-warn" style="background:var(--accent-bg);border-left:4px solid var(--accent);padding:0.75rem 1rem;border-radius:4px;margin-bottom:1rem;">
+          <strong>Important:</strong> Do not confuse the local rclone remote name with the RunPod one.
+          The RunPod container always uses <code>gdrive:</code> as its Google Drive remote.
+        </div>
+
+        <h4>Sample Folder Naming Convention</h4>
+        <p>Every sample maps to a deterministic folder name in Google Drive:</p>
+        <div class="path-box">
+          <div class="path-label">Sample Folder Name</div>
+          sample_{sample_id}_{patch_size_px}px<br>
+          <span style="color:var(--muted);font-size:0.85em;">Example: sample_42_256px</span>
+        </div>
+
+        <h4>Full Google Drive Path for Feature Output</h4>
+        <div class="path-box">
+          <div class="path-label">Feature Output Path Pattern</div>
+          samples/features/{model_name}/{magnification}/{data_source}/{category}/{case_id}/sample_{id}_{px}px/
+        </div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Segment</th><th>Example</th><th>Source</th></tr></thead>
+          <tbody>
+            <tr><td><code>samples</code></td><td><code>samples</code></td><td>Root folder — <code>GDRIVE_ROOT_FOLDER</code> env var (default: <code>samples</code>)</td></tr>
+            <tr><td><code>features</code></td><td><code>features</code></td><td>Hardcoded sub-folder separating features from raw slides and patches</td></tr>
+            <tr><td><code>{model_name}</code></td><td><code>TITAN</code></td><td><code>ai_models.name</code> — original casing preserved</td></tr>
+            <tr><td><code>{magnification}</code></td><td><code>20x</code></td><td><code>magnifications.folder_name</code></td></tr>
+            <tr><td><code>{data_source}</code></td><td><code>tcga</code></td><td><code>data_sources.name</code> slugified</td></tr>
+            <tr><td><code>{category}</code></td><td><code>tumor</code></td><td><code>categories.label_en</code> slugified</td></tr>
+            <tr><td><code>{case_id}</code></td><td><code>TCGA-A1-A0SK</code></td><td><code>patient_cases.case_id</code></td></tr>
+            <tr><td><code>sample_{id}_{px}px</code></td><td><code>sample_42_256px</code></td><td>Composed from <code>samples.id</code> + <code>patch_sizes.size_px</code></td></tr>
+          </tbody>
+        </table></div>
+
+        <h4>rclone Commands Executed by RunPod</h4>
+        <p><strong>Step 1 — Pull patches archive from Google Drive to the local container workspace:</strong></p>
+        <pre><span class="comment"># Download the patches archive produced by PatchExtractionJob</span>
+rclone copy \
+  gdrive:samples/sliced_slides/20x/tcga/tumor/TCGA-A1-A0SK/sample_42_256px/patches.tar.gz \
+  /workspace/input/sample_42_256px/ \
+  --config /workspace/rclone.conf \
+  --progress</pre>
+
+        <p><strong>Step 2 — Feature extraction runs locally in <code>/workspace/output/features/sample_42_256px/</code></strong></p>
+
+        <p><strong>Step 3 — Push the resulting HDF5 feature file back to Google Drive:</strong></p>
+        <pre><span class="comment"># Upload HDF5 feature file + optional manifest to Google Drive</span>
+rclone sync \
+  /workspace/output/features/sample_42_256px/ \
+  gdrive:samples/features/TITAN/20x/tcga/tumor/TCGA-A1-A0SK/sample_42_256px/ \
+  --config /workspace/rclone.conf \
+  --progress</pre>
+
+        <h4>rclone Configuration on RunPod</h4>
+        <p>
+          The <code>rclone.conf</code> file must be present at <code>/workspace/rclone.conf</code> inside the container.
+          It is provided by storing the base64-encoded config as a RunPod Pod secret / environment variable
+          (<code>RCLONE_CONFIG_BASE64</code>) and decoding it on container start:
+        </p>
+        <pre><span class="comment"># In the container entrypoint / run_extract.sh:</span>
+echo "$RCLONE_CONFIG_BASE64" | base64 -d > /workspace/rclone.conf
+chmod 600 /workspace/rclone.conf</pre>
+        <p>
+          The decoded file contains a <code>[gdrive]</code> section (type = <code>drive</code>) with
+          the OAuth2 credentials for the project's Google Drive account. The remote is referenced
+          in all rclone commands as <code>gdrive:</code>.
+        </p>
+
+        <h4>End-to-End Storage Flow Summary</h4>
+        <div class="path-box" style="white-space:pre;line-height:1.8;">
+[PatchExtractionJob — Hostinger]
+  └─► uploads  →  gdrive:samples/sliced_slides/{mag}/{src}/{cat}/{case}/sample_{id}_{px}px/patches.tar.gz
+
+[FeatureExtractionJob — Laravel]
+  └─► dispatches operation payload to RunPod gateway  →  POST {server.api_url}/jobs/start
+
+[RunPod Container]
+  ├─ rclone copy  ←  gdrive:samples/sliced_slides/…/patches.tar.gz  →  /workspace/input/
+  ├─ TITAN.extract(patches)  →  /workspace/output/features/sample_{id}_{px}px/features.h5
+  ├─ rclone sync  →  gdrive:samples/features/{model}/{mag}/{src}/{cat}/{case}/sample_{id}_{px}px/
+  └─ POST  →  https://ai.histopathology.cloud/api/v1/feature-extraction/report
+
+[Laravel — callback received]
+  └─► updates samples.feature_extraction_status = completed
+      writes  samples.features_gdrive_path, features_gdrive_folder_id, features_patch_count …
+        </div>
+
+      </div>
+    </div>
+    <!-- ── /13 ── -->
 
   </div><!-- /.accordion -->
 
