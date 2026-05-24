@@ -67,8 +67,72 @@ class ShowRunpodApiGuide extends Command
         $this->line('  AI Model  : ' . $model->name . ' (ID ' . $model->id . ')');
         $this->printDivider();
 
+        // ══ SECTION 0 — All System Keys ══════════════════════════════════════
+        $this->printSection('0 — All System Keys & Configuration');
+
+        // Laravel
+        $this->line('  <fg=white;options=bold>▶ Laravel</>');
+        $this->table(['Variable', 'Value'], [
+            ['APP_URL',              env('APP_URL')],
+            ['APP_KEY',              env('APP_KEY')],
+            ['APP_ENV',              env('APP_ENV')],
+        ]);
+
+        // Database
+        $this->line('  <fg=white;options=bold>▶ Database</>');
+        $this->table(['Variable', 'Value'], [
+            ['DB_CONNECTION', env('DB_CONNECTION')],
+            ['DB_HOST',       env('DB_HOST')],
+            ['DB_PORT',       env('DB_PORT')],
+            ['DB_DATABASE',   env('DB_DATABASE')],
+            ['DB_USERNAME',   env('DB_USERNAME')],
+            ['DB_PASSWORD',   env('DB_PASSWORD') ?: '(empty)'],
+        ]);
+
+        // Queue / Cache
+        $this->line('  <fg=white;options=bold>▶ Queue & Cache</>');
+        $this->table(['Variable', 'Value'], [
+            ['QUEUE_CONNECTION', env('QUEUE_CONNECTION')],
+            ['CACHE_STORE',      env('CACHE_STORE')],
+            ['SESSION_DRIVER',   env('SESSION_DRIVER')],
+        ]);
+
+        // Google Drive / rclone
+        $this->line('  <fg=white;options=bold>▶ Google Drive / rclone</>');
+        $this->table(['Variable', 'Value'], [
+            ['GDRIVE_RCLONE_PATH',   env('GDRIVE_RCLONE_PATH')],
+            ['GDRIVE_RCLONE_CONFIG', env('GDRIVE_RCLONE_CONFIG')],
+            ['GDRIVE_REMOTE_NAME',   env('GDRIVE_REMOTE_NAME')],
+            ['GDRIVE_ROOT_FOLDER',   env('GDRIVE_ROOT_FOLDER')],
+        ]);
+
+        // Servers from DB
+        $this->line('  <fg=white;options=bold>▶ Servers (servers_names table — all)</>');
+        $allServers = ServerName::withoutGlobalScopes()->orderBy('id')->get();
+        $this->table(
+            ['ID', 'Name', 'Type', 'Active', 'API URL', 'API Key', 'RunPod API Key', 'RunPod Volume ID', 'RunPod Template ID'],
+            $allServers->map(fn ($s) => [
+                $s->id,
+                $s->name,
+                $s->type,
+                $s->is_active ? '<fg=green>yes</>' : '<fg=red>no</>',
+                $s->api_url              ?? '—',
+                $s->api_key              ?? '—',
+                $s->runpod_api_key       ?? '—',
+                $s->runpod_network_volume_id ?? '—',
+                $s->runpod_template_id   ?? '—',
+            ])->toArray()
+        );
+
+        // Python / Workers
+        $this->line('  <fg=white;options=bold>▶ Processing</>');
+        $this->table(['Variable', 'Value'], [
+            ['PYTHON_PATH',    env('PYTHON_PATH', 'python')],
+            ['PATCH_WORKERS',  env('PATCH_WORKERS', 2)],
+        ]);
+
         // ══ SECTION 1 — Credentials ══════════════════════════════════════════
-        $this->printSection('1 — Credentials');
+        $this->printSection('1 — API Credentials (RunPod Integration)');
 
         $this->table(['Key', 'Value'], [
             ['Laravel Base URL',  $appUrl],
@@ -218,6 +282,33 @@ class ShowRunpodApiGuide extends Command
         $this->line('  <fg=white>Remote name inside RunPod container:</>  <fg=green>gdrive</>');
         $this->line('  (set via env var: RCLONE_REMOTE=gdrive)');
         $this->newLine();
+
+        // ── Build the rclone.conf for RunPod (remote renamed to [gdrive]) ─────
+        $rcloneConfigPath = config('gdrive.rclone_config');
+        if ($rcloneConfigPath && file_exists($rcloneConfigPath)) {
+            // Read local config and rename remote section to [gdrive] for RunPod
+            $localRemote  = config('gdrive.remote_name', 'alhayah');
+            $rcloneConf   = file_get_contents($rcloneConfigPath);
+            $runpodConf   = preg_replace('/^\[' . preg_quote($localRemote, '/') . '\]/m', '[gdrive]', $rcloneConf);
+            $base64Conf   = base64_encode($runpodConf);
+
+            $this->line('  <fg=white;options=bold>── rclone.conf content (remote renamed to [gdrive] for RunPod) ──</>');
+            $this->newLine();
+            $this->line($runpodConf);
+            $this->newLine();
+            $this->line('  <fg=white;options=bold>── RCLONE_CONFIG_BASE64  (set this as RunPod env var) ──</>');
+            $this->newLine();
+            $this->line('<fg=green>' . $base64Conf . '</>');
+            $this->newLine();
+            $this->line('  <fg=white>Usage — set on RunPod pod / template:</>');
+            $this->line('  <fg=yellow>RCLONE_CONFIG_BASE64=' . $base64Conf . '</>');
+            $this->newLine();
+        } else {
+            $this->line('  <fg=red>rclone.conf not found at: ' . ($rcloneConfigPath ?? 'GDRIVE_RCLONE_CONFIG not set') . '</>');
+            $this->line('  Run this command on the machine that has the rclone.conf file.');
+            $this->newLine();
+        }
+
         $this->line('  <fg=white>Decode rclone config on container start:</>');
         $this->line('  <fg=yellow>echo "$RCLONE_CONFIG_BASE64" | base64 -d > /workspace/rclone.conf</>');
         $this->line('  <fg=yellow>chmod 600 /workspace/rclone.conf</>');
