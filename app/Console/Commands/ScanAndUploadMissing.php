@@ -236,7 +236,7 @@ class ScanAndUploadMissing extends Command
         if (!$dryRun) {
             Sample::whereNotNull('wsi_remote_path')
                 ->whereIn('storage_status', ['corrupted', 'upload_failed'])
-                ->update(['storage_status' => 'uploaded']);
+                ->update(['storage_status' => 'available']);
 
             Log::info("[ScanAndUploadMissing] Phase 0c: reset storage_status='uploaded' on {$affected->count()} sample(s).");
         }
