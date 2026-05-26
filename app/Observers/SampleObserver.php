@@ -2,6 +2,7 @@
 
 namespace App\Observers;
 
+use App\Jobs\DeleteWsiFromDriveJob;
 use App\Jobs\UploadWsiToDriveJob;
 use App\Models\Sample;
 use Illuminate\Support\Facades\Log;
@@ -101,6 +102,29 @@ class SampleObserver
             $sample->id,
             $reason,
             $delaySecs,
+        ));
+    }
+
+    /**
+     * Fires after a Sample row is deleted.
+     *
+     * If the sample had a file on Google Drive (wsi_remote_path is set),
+     * we queue a job to purge the remote folder so Drive stays clean.
+     * The job is fire-and-forget (1 try) — if Drive is unreachable the
+     * operator can clean up manually; the DB row is already gone.
+     */
+    public function deleted(Sample $sample): void
+    {
+        if (empty($sample->wsi_remote_path)) {
+            return;
+        }
+
+        DeleteWsiFromDriveJob::dispatch($sample->wsi_remote_path, $sample->id);
+
+        Log::info(sprintf(
+            '[SampleObserver] Sample #%d: queued Drive folder deletion for %s',
+            $sample->id,
+            $sample->wsi_remote_path,
         ));
     }
 }

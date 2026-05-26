@@ -76,6 +76,14 @@ class ScanAndUploadMissing extends Command
         // Fix: copy wsi_remote_path → slide_verifications.file_path and reset to pending.
         $this->repairStaleFilePaths($dryRun);
 
+        // ── Phase 0c: Repair storage_status='corrupted' for files on Drive ────
+        // Samples that were already on Drive when UploadWsiToDriveJob ran, but
+        // persistRemotePath() previously didn't set storage_status='uploaded'.
+        // These show a red "corrupted" badge in the UI even though the file IS there.
+        // Fix: set storage_status='uploaded' for any sample that has wsi_remote_path
+        //      but still carries 'corrupted' (or 'upload_failed') storage_status.
+        $this->repairCorruptedStatus($dryRun);
+
         // ── Operational limit: queue depth guard ──────────────────────────────
         $pendingUploads = DB::table('jobs')->where('queue', 'uploads')->count();
         $this->info("  Queue depth now : {$pendingUploads} / {$maxQueueDepth}");
@@ -203,6 +211,34 @@ class ScanAndUploadMissing extends Command
                 ->update(['storage_status' => null]);
 
             Log::warning("[ScanAndUploadMissing] Self-healing: reset {$staleCount} upload_failed sample(s) for retry.");
+        }
+
+        $this->info('');
+    }
+
+    private function repairCorruptedStatus(bool $dryRun): void
+    {
+        // Samples that have wsi_remote_path (file IS on Drive) but still carry
+        // a 'corrupted' or 'upload_failed' storage_status — a symptom of the
+        // old persistRemotePath() that forgot to set storage_status='uploaded'.
+        $affected = Sample::whereNotNull('wsi_remote_path')
+            ->whereIn('storage_status', ['corrupted', 'upload_failed'])
+            ->get(['id', 'wsi_remote_path', 'storage_status']);
+
+        if ($affected->isEmpty()) {
+            $this->info('  Phase 0c (repair corrupted status): nothing to fix.');
+            $this->info('');
+            return;
+        }
+
+        $this->warn("  Phase 0c (repair corrupted status): {$affected->count()} sample(s) have wsi_remote_path set but storage_status=corrupted/upload_failed — fixing.");
+
+        if (!$dryRun) {
+            Sample::whereNotNull('wsi_remote_path')
+                ->whereIn('storage_status', ['corrupted', 'upload_failed'])
+                ->update(['storage_status' => 'uploaded']);
+
+            Log::info("[ScanAndUploadMissing] Phase 0c: reset storage_status='uploaded' on {$affected->count()} sample(s).");
         }
 
         $this->info('');

@@ -170,6 +170,7 @@ class UploadWsiToDriveJob implements ShouldQueue, ShouldBeUnique
     {
         $sample->wsi_remote_path = $remotePath;
         $sample->storage_path    = $storageDir;
+        $sample->storage_status  = 'uploaded';   // ← clear any prior 'corrupted' / 'upload_failed'
         $sample->save();
 
         // Reset verification AND immediately fix file_path so the "File exists"
