@@ -39,6 +39,9 @@ return new class extends Migration
         // If a Sample with entity_submitter_id = slide_id exists AND
         // that sample does not already have its own verification row,
         // we can safely adopt the orphan by filling in its sample_id.
+        // MySQL error 1093: cannot reference the UPDATE target table directly
+        // in a subquery. Workaround: wrap in a derived table so MySQL treats
+        // it as a separate temporary result and allows the self-join.
         DB::statement("
             UPDATE slide_verifications sv
             INNER JOIN samples s
@@ -46,11 +49,12 @@ return new class extends Migration
             SET sv.sample_id = s.id
             WHERE sv.sample_id IS NULL
               AND sv.slide_id  IS NOT NULL
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM   slide_verifications sv2
-                  WHERE  sv2.sample_id = s.id
-                    AND  sv2.id        != sv.id
+              AND s.id NOT IN (
+                  SELECT sample_id FROM (
+                      SELECT sample_id
+                      FROM   slide_verifications
+                      WHERE  sample_id IS NOT NULL
+                  ) AS existing_samples
               )
         ");
 

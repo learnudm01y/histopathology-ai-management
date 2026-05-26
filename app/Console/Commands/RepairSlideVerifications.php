@@ -103,6 +103,8 @@ class RepairSlideVerifications extends Command
                 // ── Step 1: Rescue orphans that can be linked to a sample ─────
                 // An orphan with a slide_id matching a sample's entity_submitter_id
                 // and no competing row for that sample can be safely claimed.
+                // MySQL error 1093 workaround: wrap the self-referencing subquery
+                // in a derived table so MySQL allows the UPDATE.
                 DB::statement("
                     UPDATE slide_verifications sv
                     INNER JOIN samples s
@@ -110,10 +112,12 @@ class RepairSlideVerifications extends Command
                     SET sv.sample_id = s.id
                     WHERE sv.sample_id IS NULL
                       AND sv.slide_id  IS NOT NULL
-                      AND NOT EXISTS (
-                          SELECT 1 FROM slide_verifications sv2
-                          WHERE  sv2.sample_id = s.id
-                            AND  sv2.id        != sv.id
+                      AND s.id NOT IN (
+                          SELECT sample_id FROM (
+                              SELECT sample_id
+                              FROM   slide_verifications
+                              WHERE  sample_id IS NOT NULL
+                          ) AS existing_samples
                       )
                 ");
                 $rescued = DB::affectedRows() ?: 0;
