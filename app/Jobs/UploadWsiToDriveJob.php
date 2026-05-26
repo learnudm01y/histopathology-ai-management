@@ -204,4 +204,24 @@ class UploadWsiToDriveJob implements ShouldQueue, ShouldBeUnique
 
         Log::info("[UploadWsiToDriveJob] Sample #{$sample->id}: wsi_remote_path → {$remotePath}");
     }
+
+    /**
+     * Called automatically by Laravel after all $tries are exhausted.
+     *
+     * Marks storage_status = 'upload_failed' on the sample so:
+     *   • SampleObserver won't re-queue it in a loop
+     *   • wsi:scan-and-upload skips it (prevents hammering a broken upload)
+     *   • The monitoring query  SELECT * FROM samples WHERE storage_status = 'upload_failed'
+     *     surfaces it immediately for manual investigation
+     */
+    public function failed(\Throwable $exception): void
+    {
+        Log::error(sprintf(
+            '[UploadWsiToDriveJob] Sample #%d: ALL retries exhausted — marking storage_status=upload_failed. Error: %s',
+            $this->sampleId,
+            $exception->getMessage(),
+        ));
+
+        Sample::where('id', $this->sampleId)->update(['storage_status' => 'upload_failed']);
+    }
 }
