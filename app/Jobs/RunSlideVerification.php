@@ -7,6 +7,7 @@ use App\Services\SlideVerificationService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
@@ -25,7 +26,16 @@ class RunSlideVerification implements ShouldQueue, ShouldBeUnique
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public int $timeout = 300;
-    public int $tries   = 2;
+
+    /**
+     * Only 1 attempt — the verify pipeline is idempotent (it always upserts),
+     * so retrying a failed job would just re-run the same logic that failed.
+     * With the DB transaction + lockForUpdate fix in place, the only remaining
+     * failure mode is a genuine data problem (missing sample, bad file path),
+     * which a retry will not fix. Setting tries=1 eliminates the second wave
+     * of duplicate errors that the retry loop was generating.
+     */
+    public int $tries = 1;
 
     /**
      * The unique key that prevents duplicate jobs in the queue.
@@ -59,6 +69,13 @@ class RunSlideVerification implements ShouldQueue, ShouldBeUnique
 
         try {
             $service->verify($sample);
+        } catch (UniqueConstraintViolationException $e) {
+            // This should no longer happen now that verify() uses a DB
+            // transaction with lockForUpdate, but keep as a final safety net.
+            // If two workers somehow still race, the second attempt will simply
+            // re-run verify() which will find the existing row and UPDATE it.
+            Log::warning("[RunSlideVerification] Sample #{$this->sampleId}: race condition caught — re-verifying via update path.");
+            $service->verify($sample->fresh());
         } catch (\Throwable $e) {
             Log::error("[RunSlideVerification] Sample #{$this->sampleId} failed: " . $e->getMessage());
             throw $e;

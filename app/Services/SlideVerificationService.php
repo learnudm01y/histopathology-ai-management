@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\ClinicalCaseInformation;
 use App\Models\Sample;
 use App\Models\SlideVerification;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\Process\Exception\ProcessFailedException;
 use Symfony\Component\Process\Process;
@@ -82,54 +83,82 @@ class SlideVerificationService
         // (with WSI metrics but no identity fields) instead of this one.
         $data['sample_id'] = $sample->id;
 
-        $existing = SlideVerification::where('sample_id', $sample->id)->first();
-
-        if ($existing) {
-            // Numeric fields: keep the existing value when $data is null.
-            $preserveIfNull = [
-                'level_count', 'slide_width', 'slide_height',
-                'mpp_x', 'mpp_y', 'magnification_power',
-                'tissue_area_percent', 'background_ratio',
-                'tissue_patch_count', 'artifact_score', 'blur_score',
-            ];
-            foreach ($preserveIfNull as $field) {
-                if (($data[$field] ?? null) === null && $existing->{$field} !== null) {
-                    $data[$field] = $existing->{$field};
-                }
-            }
-            // Status fields: preserve 'passed'/'failed' when PHP can only say
-            // 'not_checked' (file on Drive, no local path accessible this run).
-            foreach (['open_slide_status', 'file_integrity_status', 'read_test_status'] as $col) {
-                if (($data[$col] ?? 'not_checked') === 'not_checked'
-                    && in_array($existing->{$col}, ['passed', 'failed'], true)) {
-                    $data[$col] = $existing->{$col};
-                }
-            }
-        }
-
-        // ── Remove orphan rows that share the same slide_id ─────────────────
-        // A previous verify run may have keyed a row by slide_id alone,
-        // leaving an orphan that triggers a UNIQUE constraint violation when
-        // we now try to set slide_id on the row keyed by sample_id.
+        // ══════════════════════════════════════════════════════════════════════
+        //  RACE-CONDITION-PROOF UPSERT
+        // ══════════════════════════════════════════════════════════════════════
+        // Problem: with multiple Queue Workers running concurrently, two workers
+        // can both read "no existing row" for the same sample_id, both delete
+        // the orphan, and both attempt an INSERT — the second INSERT crashes with
+        // a UNIQUE constraint violation on slide_id (48,000 errors in the log).
         //
-        // CRITICAL FIX: MySQL evaluates (NULL != $sample->id) as NULL, not TRUE.
-        // So orphan rows with sample_id = NULL were never deleted by the old
-        // `->where('sample_id', '!=', $sample->id)` condition, causing every
-        // subsequent INSERT to crash with a UNIQUE constraint violation on slide_id.
-        // We must explicitly include NULL via whereNull() OR clause.
-        if (!empty($data['slide_id'])) {
-            SlideVerification::where('slide_id', $data['slide_id'])
-                ->where(function ($q) use ($sample) {
-                    $q->whereNull('sample_id')
-                      ->orWhere('sample_id', '!=', $sample->id);
-                })
-                ->delete();
-        }
+        // Solution: wrap the entire read-delete-upsert sequence inside a
+        // DB::transaction with lockForUpdate(). This acquires an exclusive row
+        // lock (or a gap lock when the row does not yet exist). Worker B blocks
+        // at the SELECT ... FOR UPDATE until Worker A commits, then re-reads and
+        // finds the row already created — taking the UPDATE path, not INSERT.
+        //
+        // DB::transaction also rolls back automatically on any exception, so
+        // partial writes never leave the database in an inconsistent state.
+        $verification = DB::transaction(function () use ($sample, $data) {
 
-        $verification = SlideVerification::updateOrCreate(
-            ['sample_id' => $sample->id],
-            $data,
-        );
+            // Acquire an exclusive lock on this sample's row.
+            // When the row does not exist yet, InnoDB creates a *gap lock*
+            // on the sample_id unique index range, blocking any concurrent
+            // INSERT for the same sample_id until we commit.
+            $existing = SlideVerification::where('sample_id', $sample->id)
+                ->lockForUpdate()
+                ->first();
+
+            // Work on a local copy of $data so the outer scope is untouched.
+            $localData = $data;
+
+            if ($existing) {
+                // Numeric fields: keep the existing Python-computed value when
+                // the current run produced NULL (file is on Drive, not local).
+                $preserveIfNull = [
+                    'level_count', 'slide_width', 'slide_height',
+                    'mpp_x', 'mpp_y', 'magnification_power',
+                    'tissue_area_percent', 'background_ratio',
+                    'tissue_patch_count', 'artifact_score', 'blur_score',
+                ];
+                foreach ($preserveIfNull as $field) {
+                    if (($localData[$field] ?? null) === null && $existing->{$field} !== null) {
+                        $localData[$field] = $existing->{$field};
+                    }
+                }
+                // Status fields: a metadata-only run cannot improve on values
+                // that a prior OpenSlide run already set to passed/failed.
+                foreach (['open_slide_status', 'file_integrity_status', 'read_test_status'] as $col) {
+                    if (($localData[$col] ?? 'not_checked') === 'not_checked'
+                        && in_array($existing->{$col}, ['passed', 'failed'], true)) {
+                        $localData[$col] = $existing->{$col};
+                    }
+                }
+            }
+
+            // ── Remove orphan rows that share the same slide_id ──────────────
+            // Lock orphans before deleting so a concurrent worker cannot sneak
+            // an INSERT between our DELETE and our own INSERT/UPDATE.
+            //
+            // NULL-AWARE WHERE (the original bug fix):
+            //   MySQL evaluates (NULL != $id) as NULL — not TRUE.
+            //   A plain `!=` silently skips rows where sample_id IS NULL.
+            //   The explicit whereNull() OR clause makes the match correct.
+            if (!empty($localData['slide_id'])) {
+                SlideVerification::where('slide_id', $localData['slide_id'])
+                    ->where(function ($q) use ($sample) {
+                        $q->whereNull('sample_id')
+                          ->orWhere('sample_id', '!=', $sample->id);
+                    })
+                    ->lockForUpdate()
+                    ->delete();
+            }
+
+            return SlideVerification::updateOrCreate(
+                ['sample_id' => $sample->id],
+                $localData,
+            );
+        });
 
         // Now compute the aggregate verification_status (passed/failed/pending).
         $verification = $this->finalize($verification);

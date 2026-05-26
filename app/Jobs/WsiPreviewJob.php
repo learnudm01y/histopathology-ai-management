@@ -12,6 +12,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\Process\Process;
 
@@ -389,10 +390,18 @@ class WsiPreviewJob implements ShouldQueue
             }
         }
 
-        $verification = SlideVerification::updateOrCreate(
-            ['sample_id' => $sampleId],
-            $verificationData,
-        );
+        $verification = DB::transaction(function () use ($sampleId, $verificationData) {
+            // Lock the row so concurrent WsiPreviewJob runs (phase-1 and
+            // phase-2 both call _persistVerification) don't race each other.
+            SlideVerification::where('sample_id', $sampleId)
+                ->lockForUpdate()
+                ->first();
+
+            return SlideVerification::updateOrCreate(
+                ['sample_id' => $sampleId],
+                $verificationData,
+            );
+        });
 
         // Auto-assign stain to the sample when detect_stain is enabled and
         // the Python script returned a normalised stain name.
