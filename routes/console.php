@@ -28,6 +28,17 @@ Schedule::command('patch:recover-stuck --fix')
     ->withoutOverlapping(5)
     ->runInBackground();
 
+// ─── Upload locally-downloaded WSI files that are missing from Drive ──
+// Root-cause fix: whenever GDC downloads a file to /var/www/HISTO_AI/ameer/
+// but the Drive upload job never ran (or failed silently), this command
+// discovers those samples and re-queues an UploadWsiToDriveJob for each.
+// ShouldBeUnique on the job prevents duplicate uploads.
+// Overlap lock of 90 min prevents a new scan from firing mid-upload-batch.
+Schedule::command('wsi:scan-and-upload --limit=200')
+    ->hourly()
+    ->withoutOverlapping(90)
+    ->runInBackground();
+
 // ─── Clean orphaned slide_verifications rows ──────────────────────────
 // Removes rows whose parent sample no longer exists in the samples table.
 // These stale rows block re-import because of the UNIQUE constraint on
