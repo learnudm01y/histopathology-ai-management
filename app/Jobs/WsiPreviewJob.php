@@ -169,8 +169,28 @@ class WsiPreviewJob implements ShouldQueue
                         timeout:    12_000,
                     );
                 } catch (\Throwable $e) {
-                    Log::error("[WsiPreviewJob] Download failed: " . $e->getMessage());
-                    $this->_cacheError($cacheKey, 'Download failed: ' . $e->getMessage());
+                    $errMsg  = $e->getMessage();
+                    $is404   = str_starts_with($errMsg, 'DRIVE_NOT_FOUND:');
+
+                    Log::error("[WsiPreviewJob] Download failed: {$errMsg}");
+                    $this->_cacheError($cacheKey, 'Download failed: ' . $errMsg);
+
+                    if ($is404) {
+                        // The file no longer exists on Google Drive — mark the
+                        // verification record as permanently failed so the
+                        // scheduler does not keep re-queueing this sample.
+                        Log::warning("[WsiPreviewJob] Sample #{$this->sampleId}: remote file not found on Drive — marking verification as failed.");
+                        SlideVerification::where('sample_id', $this->sampleId)
+                            ->update([
+                                'open_slide_status'     => 'failed',
+                                'file_integrity_status' => 'failed',
+                                'verification_status'   => 'failed',
+                                'notes'                 => 'Remote WSI file not found on Google Drive (404). '
+                                    . 'Check wsi_remote_path or file_id for sample #' . $this->sampleId . '.',
+                                'verified_at'           => now(),
+                            ]);
+                    }
+
                     return;
                 }
                 Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: download complete → {$wsiPath}");

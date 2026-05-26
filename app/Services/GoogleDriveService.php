@@ -345,8 +345,15 @@ class GoogleDriveService
         // Performance flags — multi-threaded HTTP-range download for large WSI files.
         // rclone defaults to 1 stream per file; for a 1-5GB slide on a fast
         // connection this leaves a lot of bandwidth on the table.
+        //
+        // NOTE: --retries is set to 1 here (not the global default of 5).
+        // 404 "File not found" errors are permanent — rclone should not waste
+        // time retrying them. Transient network errors are handled by the
+        // PHP-level retry loop in rclone() which retries up to 3× on real
+        // network failures (dial tcp, lookup, TLS timeout, etc.).
         $perfFlags = [
             '--drive-acknowledge-abuse',
+            '--retries', '1',                    // 404 = permanent; PHP loop retries network errors
             '--multi-thread-streams=8',          // 8 parallel HTTP-range streams
             '--multi-thread-cutoff=64M',         // engage multi-thread for files > 64MB
             '--drive-chunk-size=64M',            // larger chunks → fewer API roundtrips
@@ -432,6 +439,20 @@ class GoogleDriveService
             }
 
             $stderr = trim($process->getErrorOutput());
+
+            // ── Detect permanent Drive errors — do NOT retry these ──────
+            // A 404 means the file/folder was deleted from Drive. rclone would
+            // retry internally if --retries > 1, but we set --retries 1 for
+            // download calls precisely to avoid this waste. Throw immediately
+            // with a recognisable prefix so callers can handle it specifically.
+            if (str_contains($stderr, 'notFound')
+                || str_contains($stderr, 'File not found')
+                || str_contains($stderr, 'Error 404')) {
+                throw new \RuntimeException(
+                    'DRIVE_NOT_FOUND: Remote file/folder does not exist on Google Drive. '
+                    . 'rclone stderr: ' . $stderr
+                );
+            }
 
             $isNetworkError = str_contains($stderr, 'dial tcp')
                 || str_contains($stderr, 'lookup ')
