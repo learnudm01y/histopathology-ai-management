@@ -111,9 +111,18 @@ class SlideVerificationService
         // A previous verify run may have keyed a row by slide_id alone,
         // leaving an orphan that triggers a UNIQUE constraint violation when
         // we now try to set slide_id on the row keyed by sample_id.
+        //
+        // CRITICAL FIX: MySQL evaluates (NULL != $sample->id) as NULL, not TRUE.
+        // So orphan rows with sample_id = NULL were never deleted by the old
+        // `->where('sample_id', '!=', $sample->id)` condition, causing every
+        // subsequent INSERT to crash with a UNIQUE constraint violation on slide_id.
+        // We must explicitly include NULL via whereNull() OR clause.
         if (!empty($data['slide_id'])) {
             SlideVerification::where('slide_id', $data['slide_id'])
-                ->where('sample_id', '!=', $sample->id)
+                ->where(function ($q) use ($sample) {
+                    $q->whereNull('sample_id')
+                      ->orWhere('sample_id', '!=', $sample->id);
+                })
                 ->delete();
         }
 
