@@ -122,12 +122,8 @@ def main() -> None:
         result["read_test_status"]      = "failed"
         _save_and_exit(2, output_dir)
 
-    # ── MD5 (streaming) ──────────────────────────────────────────────────────
-    try:
-        result["checksum_md5"] = _compute_md5(wsi_path)
-    except Exception as exc:
-        result["error"] = f"MD5 computation failed: {exc}"
-        # Not fatal — continue with the rest of the checks.
+    # MD5 checksum computation disabled — skipped for performance.
+    result["checksum_md5"] = None
 
     # ── Import dependencies ──────────────────────────────────────────────────
     try:

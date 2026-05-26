@@ -7,6 +7,7 @@ use App\Models\SlideVerification;
 use App\Services\GoogleDriveService;
 use App\Services\SlideVerificationService;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -38,7 +39,7 @@ use Symfony\Component\Process\Process;
  *                 magnification_power, tissue_area_percent, background_ratio }
  * }
  */
-class WsiPreviewJob implements ShouldQueue
+class WsiPreviewJob implements ShouldQueue, ShouldBeUnique
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
@@ -47,6 +48,12 @@ class WsiPreviewJob implements ShouldQueue
 
     /** No automatic retries — user can re-click the button. */
     public int $tries = 1;
+
+    /**
+     * Unique lock held for 2 hours — long enough to cover any download.
+     * Prevents duplicate verify jobs being stacked in the queue every 2 min.
+     */
+    public int $uniqueFor = 7200;
 
     private const CACHE_TTL = 7200; // seconds
 
@@ -62,6 +69,12 @@ class WsiPreviewJob implements ShouldQueue
         public readonly bool   $detectStain = true,
     ) {
         $this->onQueue('previews');
+    }
+
+    /** Unique key: one verify job AND one preview job per sample at a time. */
+    public function uniqueId(): string
+    {
+        return "{$this->sampleId}:{$this->mode}";
     }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -902,7 +902,6 @@
     var MSGS_PHASE2 = [
         'Downloading slide from Google Drive…',
         'Transferring slide data…',
-        'Computing MD5 checksum…',
         'Opening slide with OpenSlide…',
         'Testing reads from multiple regions…',
         'Computing quality metrics…',
@@ -1585,7 +1584,6 @@
         var msgs = [
             'Downloading from Google Drive…',
             'Transferring slide data…',
-            'Computing MD5 checksum…',
             'Opening slide with OpenSlide…',
             'Testing reads from multiple regions…',
             'Generating preview thumbnail…',
