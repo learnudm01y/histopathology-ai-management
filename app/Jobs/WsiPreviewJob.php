@@ -68,7 +68,10 @@ class WsiPreviewJob implements ShouldQueue, ShouldBeUnique
         public readonly string $mode = 'preview',
         public readonly bool   $detectStain = true,
     ) {
-        $this->onQueue('previews');
+        // User-triggered previews go on the high-priority 'previews' queue.
+        // Automated verify jobs go on 'previews-verify' so they never block
+        // a user waiting for a manual preview to load.
+        $this->onQueue($this->mode === 'preview' ? 'previews' : 'previews-verify');
     }
 
     /** Unique key: one verify job AND one preview job per sample at a time. */
