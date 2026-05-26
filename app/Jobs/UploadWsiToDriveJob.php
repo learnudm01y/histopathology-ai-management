@@ -172,10 +172,14 @@ class UploadWsiToDriveJob implements ShouldQueue, ShouldBeUnique
         $sample->storage_path    = $storageDir;
         $sample->save();
 
-        // Reset verification so WsiPreviewJob (verify mode) can now run the
-        // full OpenSlide check that was previously skipped due to 404.
+        // Reset verification AND immediately fix file_path so the "File exists"
+        // check passes right away — without waiting for the next full re-run.
+        // Previously, file_path stayed NULL (set to NULL when wsi_remote_path was
+        // not yet known), causing the check to show "Failed" in the UI even after
+        // a successful upload.
         SlideVerification::where('sample_id', $sample->id)
             ->update([
+                'file_path'             => $remotePath,   // ← fixes "File exists" instantly
                 'open_slide_status'     => 'not_checked',
                 'file_integrity_status' => 'not_checked',
                 'read_test_status'      => 'not_checked',

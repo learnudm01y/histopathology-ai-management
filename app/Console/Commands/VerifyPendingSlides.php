@@ -46,6 +46,12 @@ class VerifyPendingSlides extends Command
         // only, to avoid re-processing failures on every scheduler tick.
         $samples = Sample::query()
             ->leftJoin('slide_verifications as sv', 'sv.sample_id', '=', 'samples.id')
+            // Only attempt verification for samples that have a known Drive path.
+            // Samples with no wsi_remote_path will always fail with a 404 because
+            // the fallback uses the GDC UUID (file_id) as a Drive folder ID — which
+            // is not valid. They must wait until UploadWsiToDriveJob populates the path.
+            ->whereNotNull('samples.wsi_remote_path')
+            ->where('samples.wsi_remote_path', '!=', '')
             ->where(function ($q) use ($cutoff) {
                 $q->whereNull('sv.id')                            // never verified yet
                   ->orWhere('sv.verification_status', 'pending')  // stuck in pending

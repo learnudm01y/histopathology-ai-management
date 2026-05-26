@@ -96,8 +96,14 @@ class WsiPreviewJob implements ShouldQueue
         $fileId     = $sample->file_id ?: null;
         $fileName   = $sample->file_name;
 
-        if (!$remotePath && !$fileId) {
-            $this->_cacheError($cacheKey, 'No Google Drive path or file ID available for this sample.');
+        // Guard: wsi_remote_path must be set before verification can run.
+        // file_id in this system holds a GDC UUID — NOT a Google Drive folder ID.
+        // Using it as --drive-root-folder-id triggers a 404 and an infinite
+        // fail → pending → fail loop. Bail out early so the job is a clean no-op
+        // and UploadWsiToDriveJob can populate wsi_remote_path without interference.
+        if (!$remotePath) {
+            $this->_cacheError($cacheKey, 'No Google Drive path set for this sample. Waiting for upload to complete.');
+            Log::warning("[WsiPreviewJob] Sample #{$this->sampleId}: wsi_remote_path is empty — skipping verification until upload populates it.");
             return;
         }
 

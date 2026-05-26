@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Jobs\UploadWsiToDriveJob;
 use App\Models\Sample;
+use App\Models\SlideVerification;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -65,8 +66,15 @@ class ScanAndUploadMissing extends Command
         $this->info("  Dispatch limit  : {$limit}  |  Max queue depth: {$maxQueueDepth}");
         $this->info('');
 
-        // ── Phase 0: Self-healing reset ───────────────────────────────────────
+        // ── Phase 0a: Self-healing reset ─────────────────────────────────────
         $this->runSelfHealingReset($dryRun);
+
+        // ── Phase 0b: Repair stale "File exists" failures ─────────────────────
+        // Samples already on Drive (wsi_remote_path set) whose slide_verifications
+        // row still has file_path = NULL from a run that pre-dated the upload.
+        // These show "File exists — Failed" in the UI even though the file IS there.
+        // Fix: copy wsi_remote_path → slide_verifications.file_path and reset to pending.
+        $this->repairStaleFilePaths($dryRun);
 
         // ── Operational limit: queue depth guard ──────────────────────────────
         $pendingUploads = DB::table('jobs')->where('queue', 'uploads')->count();
@@ -195,6 +203,50 @@ class ScanAndUploadMissing extends Command
                 ->update(['storage_status' => null]);
 
             Log::warning("[ScanAndUploadMissing] Self-healing: reset {$staleCount} upload_failed sample(s) for retry.");
+        }
+
+        $this->info('');
+    }
+
+    /**
+     * Phase 0b: Fix slide_verifications rows that show "File exists — Failed"
+     * even though the sample is already on Drive.
+     *
+     * Root cause: verification ran when wsi_remote_path was NULL → file_path was
+     * stored as NULL.  After a successful upload, wsi_remote_path gets set on
+     * samples but the old NULL in slide_verifications is never corrected unless
+     * a full re-verify fires.  This method copies wsi_remote_path → file_path
+     * directly so the check passes immediately.
+     */
+    private function repairStaleFilePaths(bool $dryRun): void
+    {
+        // Find samples that are on Drive but whose verification still has a NULL file_path.
+        $staleIds = Sample::whereNotNull('wsi_remote_path')
+            ->whereHas('slideVerification', function ($q) {
+                $q->whereNull('file_path');
+            })
+            ->pluck('id', 'wsi_remote_path');  // [sample_id => wsi_remote_path]
+
+        if ($staleIds->isEmpty()) {
+            $this->info('  Phase 0b (repair file_path): nothing to fix.');
+            $this->info('');
+            return;
+        }
+
+        $this->warn("  Phase 0b (repair file_path): {$staleIds->count()} verification(s) have file_path=NULL despite wsi_remote_path being set — fixing.");
+
+        if (!$dryRun) {
+            foreach ($staleIds as $remotePath => $sampleId) {
+                SlideVerification::where('sample_id', $sampleId)
+                    ->whereNull('file_path')
+                    ->update([
+                        'file_path'           => $remotePath,
+                        'verification_status' => 'pending',
+                        'verified_at'         => null,
+                    ]);
+            }
+
+            Log::info("[ScanAndUploadMissing] Phase 0b: patched file_path on {$staleIds->count()} slide_verifications row(s).");
         }
 
         $this->info('');
