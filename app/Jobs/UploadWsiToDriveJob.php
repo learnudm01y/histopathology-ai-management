@@ -143,7 +143,7 @@ class UploadWsiToDriveJob implements ShouldQueue, ShouldBeUnique
         $meta = $drive->fetchFileMeta($remotePath);
         if (!empty($meta['Name'])) {
             Log::info("[UploadWsiToDriveJob] Sample #{$this->sampleId}: already on Drive at {$remotePath} — updating DB only.");
-            $this->persistRemotePath($sample, $remotePath, $remoteFolderPath . '/');
+            $this->persistRemotePath($sample, $remotePath, $remoteFolderPath . '/', $meta);
             return;
         }
 
@@ -159,18 +159,39 @@ class UploadWsiToDriveJob implements ShouldQueue, ShouldBeUnique
 
         Log::info("[UploadWsiToDriveJob] Sample #{$this->sampleId}: upload complete.");
 
-        $this->persistRemotePath($sample, $remotePath, $remoteFolderPath . '/');
+        // Fetch metadata after upload to populate file size and Drive link
+        $uploadedMeta = $drive->fetchFileMeta($remotePath);
+        $this->persistRemotePath($sample, $remotePath, $remoteFolderPath . '/', $uploadedMeta);
     }
 
     /**
      * Set wsi_remote_path on the Sample and reset its verification record
      * so the verification scheduler will pick it up for a full WSI check.
      */
-    private function persistRemotePath(Sample $sample, string $remotePath, string $storageDir): void
+    /**
+     * @param  array $meta  rclone lsjson metadata for the remote file.
+     *                      When provided, populates file_size_bytes, file_size_gb,
+     *                      and storage_link (view URL built from Drive file ID).
+     */
+    private function persistRemotePath(Sample $sample, string $remotePath, string $storageDir, array $meta = []): void
     {
         $sample->wsi_remote_path = $remotePath;
         $sample->storage_path    = $storageDir;
         $sample->storage_status  = 'available';  // ← clear any prior 'corrupted' / 'upload_failed'
+
+        // Populate file size from Drive metadata (only if not already set in the DB)
+        if (!empty($meta['Size']) && $sample->file_size_bytes === null) {
+            $bytes = (int) $meta['Size'];
+            $sample->file_size_bytes = $bytes;
+            $sample->file_size_gb    = round($bytes / (1024 ** 3), 3);
+        }
+
+        // Build a permanent view link from the Drive file ID — no extra API call,
+        // no sharing-permission changes.  Format: drive.google.com/file/d/{id}/view
+        if (!empty($meta['ID']) && empty($sample->storage_link)) {
+            $sample->storage_link = 'https://drive.google.com/file/d/' . $meta['ID'] . '/view';
+        }
+
         $sample->save();
 
         // Reset verification AND immediately fix file_path so the "File exists"

@@ -84,6 +84,16 @@ class ScanAndUploadMissing extends Command
         //      but still carries 'corrupted' (or 'upload_failed') storage_status.
         $this->repairCorruptedStatus($dryRun);
 
+        // ── Phase 0d: Rescue stuck pending verifications ──────────────────────
+        // Samples whose wsi_remote_path IS NULL but slide_verifications row
+        // has verification_status='pending' — this is caused by WsiPreviewJob
+        // being dispatched when only file_id was set (GDC UUID, not a Drive path).
+        // The job found no remote path, returned silently, and left the DB in
+        // 'pending' forever → VerifyPendingSlides re-dispatches it every 2 min.
+        // Fix: reset verification_status = 'not_checked' (or NULL) so the row
+        // is skipped until wsi_remote_path is populated by UploadWsiToDriveJob.
+        $this->repairStuckPendingVerifications($dryRun);
+
         // ── Operational limit: queue depth guard ──────────────────────────────
         $pendingUploads = DB::table('jobs')->where('queue', 'uploads')->count();
         $this->info("  Queue depth now : {$pendingUploads} / {$maxQueueDepth}");
@@ -238,7 +248,50 @@ class ScanAndUploadMissing extends Command
                 ->whereIn('storage_status', ['corrupted', 'upload_failed'])
                 ->update(['storage_status' => 'available']);
 
-            Log::info("[ScanAndUploadMissing] Phase 0c: reset storage_status='uploaded' on {$affected->count()} sample(s).");
+            Log::info("[ScanAndUploadMissing] Phase 0c: reset storage_status='available' on {$affected->count()} sample(s).");
+        }
+
+        $this->info('');
+    }
+
+    private function repairStuckPendingVerifications(bool $dryRun): void
+    {
+        // Find slide_verifications rows where:
+        //   - verification_status = 'pending'  (scheduler keeps re-dispatching)
+        //   - sample has NO wsi_remote_path    (WsiPreviewJob will always bail early)
+        //
+        // Root cause: the old "has drive source" guard included file_id (GDC UUID)
+        // so WsiPreviewJob was dispatched for every TCGA sample regardless of
+        // whether the file was on Google Drive.  The job found no remote path,
+        // returned without updating the DB, and left verification_status='pending'
+        // forever.  Fix: reset to NULL so the scheduler ignores these rows until
+        // UploadWsiToDriveJob later sets wsi_remote_path.
+        $stuck = DB::table('slide_verifications as sv')
+            ->join('samples as s', 's.id', '=', 'sv.sample_id')
+            ->whereNull('s.wsi_remote_path')
+            ->whereNull('s.storage_path')
+            ->where('sv.verification_status', 'pending')
+            ->select('sv.id', 'sv.sample_id')
+            ->get();
+
+        if ($stuck->isEmpty()) {
+            $this->info('  Phase 0d (repair stuck verifications): nothing to fix.');
+            $this->info('');
+            return;
+        }
+
+        $this->warn("  Phase 0d (repair stuck verifications): {$stuck->count()} verification row(s) stuck at 'pending' with no Drive path — resetting to NULL.");
+
+        if (!$dryRun) {
+            $ids = $stuck->pluck('id')->toArray();
+            DB::table('slide_verifications')
+                ->whereIn('id', $ids)
+                ->update([
+                    'verification_status' => null,
+                    'notes'               => 'Reset by ScanAndUploadMissing: no wsi_remote_path available at dispatch time.',
+                ]);
+
+            Log::info("[ScanAndUploadMissing] Phase 0d: reset verification_status on {$stuck->count()} stuck row(s).");
         }
 
         $this->info('');

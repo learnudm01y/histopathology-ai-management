@@ -85,9 +85,12 @@ class RunSlideVerification implements ShouldQueue, ShouldBeUnique
         // WSI-derived checks (open_slide, level_count, mpp, tissue %) require
         // OpenSlide. Dispatch WsiPreviewJob (mode='verify') so those checks run
         // and quality_status can advance to 'passed' or 'rejected'.
-        $hasSource = $sample->file_id
-            || $sample->wsi_remote_path
-            || $sample->storage_path;
+        //
+        // IMPORTANT: file_id is a GDC UUID — NOT a Google Drive path.
+        // Using it here caused WsiPreviewJob to be dispatched for every sample
+        // that had a GDC file_id but no wsi_remote_path, which triggered a
+        // DRIVE_NOT_FOUND 404 loop.  Only dispatch when the file IS on Drive.
+        $hasSource = (bool) ($sample->wsi_remote_path ?: $sample->storage_path);
 
         // Skip if deep checks already exist (open_slide_status was set by a
         // previous run) — avoids re-downloading a file we already inspected.

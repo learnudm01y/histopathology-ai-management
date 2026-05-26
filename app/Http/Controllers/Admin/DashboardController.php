@@ -949,7 +949,9 @@ class DashboardController extends Controller
         }
 
         // ── Phase 2: deep WSI inspection via queue job ────────────────────────
-        $hasDriveSource = $sample->file_id || $sample->wsi_remote_path || $sample->storage_path;
+        // file_id is a GDC UUID — not a Google Drive path.
+        // Only queue Phase 2 when the file is actually reachable on Drive.
+        $hasDriveSource = (bool) ($sample->wsi_remote_path ?: $sample->storage_path);
         $phase2Queued   = false;
 
         if ($hasDriveSource) {

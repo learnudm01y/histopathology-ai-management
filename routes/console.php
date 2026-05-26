@@ -39,6 +39,16 @@ Schedule::command('wsi:scan-and-upload --limit=200')
     ->withoutOverlapping(90)
     ->runInBackground();
 
+// ─── WSI metadata enrichment ──────────────────────────────────────────
+// Backfills file_size_bytes, file_size_gb, and storage_link for samples
+// that are on Drive but were uploaded before metadata tracking was added.
+// Runs every 4 hours in batches of 50 to avoid hammering the Drive API.
+// Once all samples are enriched, this becomes a no-op automatically.
+Schedule::command('wsi:enrich-metadata --limit=50')
+    ->everyFourHours()
+    ->withoutOverlapping(60)
+    ->runInBackground();
+
 // ─── Clean orphaned slide_verifications rows ──────────────────────────
 // Removes rows whose parent sample no longer exists in the samples table.
 // These stale rows block re-import because of the UNIQUE constraint on

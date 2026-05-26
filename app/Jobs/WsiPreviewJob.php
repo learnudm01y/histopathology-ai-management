@@ -240,12 +240,24 @@ class WsiPreviewJob implements ShouldQueue
 
         if (!is_array($fastData)) {
             Log::error("[WsiPreviewJob] Could not parse openslide_inspect output for sample #{$this->sampleId}. stdout=[{$fastStdout}]");
+            // Persist failed health checks to DB so the scheduler stops re-queuing.
+            SlideVerification::where('sample_id', $this->sampleId)
+                ->update([
+                    'open_slide_status'     => 'failed',
+                    'file_integrity_status' => 'failed',
+                    'read_test_status'      => 'failed',
+                    'verification_status'   => 'failed',
+                    'notes'                 => 'Python inspection script returned non-JSON output.',
+                    'verified_at'           => now(),
+                ]);
             $this->_cacheError($cacheKey, 'WSI inspection script returned unexpected output.');
             return;
         }
 
         if (!empty($fastData['error']) && ($fastData['open_slide_status'] ?? '') === 'failed') {
             Log::error("[WsiPreviewJob] openslide_inspect error for sample #{$this->sampleId}: {$fastData['error']}");
+            // Persist the failed status so the scheduler stops re-queuing.
+            $this->_persistVerification($fastData, $this->sampleId);
             $this->_cacheError($cacheKey, $fastData['error']);
             return;
         }
@@ -379,6 +391,21 @@ class WsiPreviewJob implements ShouldQueue
         $cacheKey = "wsi_preview:{$this->sampleId}";
         $this->_cacheError($cacheKey, $exception->getMessage());
         Log::error("[WsiPreviewJob] Job failed for sample #{$this->sampleId}: " . $exception->getMessage());
+
+        // ── Critical: mark verification_status='failed' in DB ────────────────
+        // Without this, VerifyPendingSlides re-dispatches this sample every
+        // 2 minutes forever, creating an infinite job loop.
+        // 'failed' tells the scheduler to STOP re-queuing it automatically.
+        // The user can manually re-trigger verification from the sample page.
+        SlideVerification::where('sample_id', $this->sampleId)
+            ->update([
+                'open_slide_status'     => 'failed',
+                'file_integrity_status' => 'failed',
+                'verification_status'   => 'failed',
+                'notes'                 => '[WsiPreviewJob] Job failed: ' . substr($exception->getMessage(), 0, 500),
+                'verified_at'           => now(),
+            ]);
+
         // Clean up any partially-downloaded files. FUSE paths are never inside
         // storage/app/wsi_previews, so this is always safe to call.
         $this->_deleteTempDir($this->sampleId);
@@ -443,6 +470,19 @@ class WsiPreviewJob implements ShouldQueue
         }
 
         app(SlideVerificationService::class)->recomputeStatus($verification);
+
+        // ── Save computed MD5 to samples.md5sum (preview mode only) ──────────
+        // wsi_preview_generate.py computes the MD5 hash of the full file.
+        // Previously this value was discarded — now we persist it on the Sample
+        // so 'MD5 Verified' can be set and duplicate detection can work.
+        // md5_verified stays false — it will be set to true once the hash is
+        // cross-checked against the GDC manifest or a known-good reference.
+        if (!empty($pyData['checksum_md5'])) {
+            Sample::where('id', $sampleId)
+                ->whereNull('md5sum')
+                ->update(['md5sum' => $pyData['checksum_md5']]);
+            Log::info("[WsiPreviewJob] Sample #{$sampleId}: md5sum saved → {$pyData['checksum_md5']}");
+        }
     }
 
     private function resolveRemotePath(Sample $sample): ?string

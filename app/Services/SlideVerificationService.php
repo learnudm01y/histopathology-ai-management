@@ -99,9 +99,14 @@ class SlideVerificationService
         //
         // DB::transaction also rolls back automatically on any exception, so
         // partial writes never leave the database in an inconsistent state.
+        //
+        // The second argument (3) tells Laravel to retry up to 3 times when a
+        // DeadlockException (SQLSTATE[40001] / errno 1213) is thrown. This
+        // happens when 50 concurrent RunSlideVerification jobs all INSERT into
+        // slide_verifications simultaneously — InnoDB gap locks conflict and one
+        // transaction is chosen as a deadlock victim. With $attempts=3, that
+        // transaction is automatically retried instead of propagating as an error.
         $verification = DB::transaction(function () use ($sample, $data) {
-
-            // Acquire an exclusive lock on this sample's row.
             // When the row does not exist yet, InnoDB creates a *gap lock*
             // on the sample_id unique index range, blocking any concurrent
             // INSERT for the same sample_id until we commit.
@@ -158,7 +163,7 @@ class SlideVerificationService
                 ['sample_id' => $sample->id],
                 $localData,
             );
-        });
+        }, 3); // retry up to 3× on DeadlockException (InnoDB gap-lock, errno 1213)
 
         // Now compute the aggregate verification_status (passed/failed/pending).
         $verification = $this->finalize($verification);
