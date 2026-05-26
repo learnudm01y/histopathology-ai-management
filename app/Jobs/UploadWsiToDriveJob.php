@@ -17,28 +17,42 @@ use Illuminate\Support\Facades\Log;
  * Uploads a locally-downloaded WSI file to Google Drive and updates
  * the sample record with the resulting wsi_remote_path.
  *
- * Trigger points:
- *   • ScanAndUploadMissing command (scheduled hourly) — bulk discovery
- *   • Anywhere else in the codebase when a new GDC download completes
+ * ════════════════════════════════════════════════════════════════════════
+ *  CLASSIFICATION GUARANTEE
+ * ════════════════════════════════════════════════════════════════════════
+ * Path is ALWAYS derived from the database relationships:
  *
- * ShouldBeUnique ensures only ONE upload job per sampleId is ever in
- * the queue at a time, preventing race conditions and duplicate uploads.
+ *   GoogleDriveService::buildBulkFolderPath($sample, $sample->file_id)
+ *       → {root}/{dataSource->name}/{category->label_en}/{file_id}/
+ *       → e.g. samples/TCGA-BRCA/tumor/8191fa1b-.../
+ *
+ * If dataSource or category is not set in the DB, the job REFUSES to upload
+ * and marks storage_status='classification_error' — it will NOT place files
+ * into unknown_source/ or uncategorized/ folders that corrupt the structure.
+ *
+ * ════════════════════════════════════════════════════════════════════════
+ *  OPERATIONAL LIMITS
+ * ════════════════════════════════════════════════════════════════════════
+ * • timeout   = 7200 s  (2 h per file — enough for 4 GB on a slow link)
+ * • tries     = 3       (3 total attempts)
+ * • backoff   = [60, 300, 900]  (1 min → 5 min → 15 min between retries)
+ * • uniqueFor = 10800 s (unique lock for 3 h — prevents duplicate jobs)
+ * • ShouldBeUnique — only one job per sampleId in the queue at any time
  */
 class UploadWsiToDriveJob implements ShouldQueue, ShouldBeUnique
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    /** 2 hours — enough for even the largest 4-GB WSI files on a slow link. */
-    public int $timeout = 7200;
+    public int   $timeout  = 7200;
+    public int   $tries    = 3;
+    public array $backoff  = [60, 300, 900];
+    public int   $uniqueFor = 10800;
 
-    /** Retry once after a transient network failure. */
-    public int $tries = 2;
-
-    /** Wait 60 s before the retry (token refresh, network recovery). */
-    public int $backoff = 60;
-
-    /** ShouldBeUnique lock lives for 3 hours (covers upload + retry window). */
-    public int $uniqueFor = 10800;
+    /**
+     * Placeholder values that buildBulkFolderPath emits when a relationship is null.
+     * If the resolved path contains any of these, the upload is aborted.
+     */
+    private const INVALID_SLUGS = ['unknown_source', 'uncategorized'];
 
     public function uniqueId(): string
     {
@@ -53,27 +67,59 @@ class UploadWsiToDriveJob implements ShouldQueue, ShouldBeUnique
 
     public function handle(GoogleDriveService $drive): void
     {
-        $sample = Sample::find($this->sampleId);
+        // ── 1. Load sample WITH classification relationships ───────────────────
+        // Eager-load dataSource and category to avoid N+1 and to ensure the
+        // path builder has accurate data before we decide anything.
+        $sample = Sample::with(['dataSource', 'category'])->find($this->sampleId);
 
         if (!$sample) {
-            Log::warning("[UploadWsiToDriveJob] Sample #{$this->sampleId} not found — skipping.");
+            Log::warning("[UploadWsiToDriveJob] Sample #{$this->sampleId}: not found in DB — discarding.");
             return;
         }
 
-        // ── Already uploaded? ─────────────────────────────────────────────────
         if (!empty($sample->wsi_remote_path)) {
-            Log::info("[UploadWsiToDriveJob] Sample #{$this->sampleId} already has wsi_remote_path — nothing to do.");
+            Log::info("[UploadWsiToDriveJob] Sample #{$this->sampleId}: already uploaded — skipping.");
             return;
         }
 
         if (empty($sample->file_id) || empty($sample->file_name)) {
-            Log::warning("[UploadWsiToDriveJob] Sample #{$this->sampleId}: missing file_id or file_name — cannot locate local file.");
+            Log::warning("[UploadWsiToDriveJob] Sample #{$this->sampleId}: missing file_id or file_name.");
             return;
         }
 
-        // ── Locate local file ─────────────────────────────────────────────────
-        // GDC download client stores files as:
-        //   {LOCAL_BASE}/{file_id}/{file_name}
+        // ── 2. Resolve & validate the Drive path (DB-driven) ──────────────────
+        //
+        // buildBulkFolderPath uses:
+        //   $sample->dataSource->name       → e.g. "TCGA-BRCA"
+        //   $sample->category->label_en     → e.g. "tumor" | "normal"
+        //   $sample->file_id                → e.g. "8191fa1b-..."
+        //
+        // This produces: samples/TCGA-BRCA/tumor/8191fa1b-.../
+        // which is the SAME structure used by all other uploads in the system.
+        $remoteFolderPath = $drive->buildBulkFolderPath($sample, $sample->file_id);
+        $remotePath       = $remoteFolderPath . '/' . $sample->file_name;
+
+        // Guard: refuse to upload if the path contains unresolved placeholders.
+        // A path like "samples/unknown_source/uncategorized/..." means the DB
+        // record is incomplete. Uploading there would corrupt the Drive structure.
+        foreach (self::INVALID_SLUGS as $invalid) {
+            if (str_contains($remoteFolderPath, $invalid)) {
+                $error = sprintf(
+                    'Classification incomplete: path "%s" contains "%s". ' .
+                    'dataSource=%s, category=%s — fix the sample record first.',
+                    $remoteFolderPath,
+                    $invalid,
+                    $sample->dataSource?->name ?? 'NULL',
+                    $sample->category?->label_en ?? 'NULL',
+                );
+                Log::error("[UploadWsiToDriveJob] Sample #{$this->sampleId}: {$error}");
+                // Call fail() directly — retrying won't fix a DB data problem
+                $this->fail(new \RuntimeException($error));
+                return;
+            }
+        }
+
+        // ── 3. Locate local file ──────────────────────────────────────────────
         $localBase = rtrim(config('gdrive.local_wsi_base', env('HISTO_AI_LOCAL_BASE', '/var/www/HISTO_AI/ameer')), '/');
         $localDir  = $localBase . '/' . $sample->file_id;
         $localPath = $localDir  . '/' . $sample->file_name;
@@ -83,101 +129,37 @@ class UploadWsiToDriveJob implements ShouldQueue, ShouldBeUnique
             return;
         }
 
-        // Skip files that are still being downloaded (.parcel companion = incomplete)
-        $parcelFile = $localDir . '/logs/' . $sample->file_name . '.parcel';
-        if (is_file($parcelFile)) {
-            $parcelAge = time() - filemtime($parcelFile);
-            if ($parcelAge < 3600) {
-                // Modified within the last hour — download still in progress
-                Log::info("[UploadWsiToDriveJob] Sample #{$this->sampleId}: .parcel file is fresh ({$parcelAge}s) — download still in progress, will retry later.");
-                $this->release(600); // re-queue in 10 minutes
-                return;
-            }
+        // Skip files still being downloaded (.parcel companion = GDC download in progress)
+        $parcelPath = $localDir . '/logs/' . $sample->file_name . '.parcel';
+        if (is_file($parcelPath) && (time() - filemtime($parcelPath)) < 3600) {
+            Log::info("[UploadWsiToDriveJob] Sample #{$this->sampleId}: download in progress (.parcel fresh) — re-queuing in 10 min.");
+            $this->release(600);
+            return;
         }
 
-        // ── Resolve Drive destination ─────────────────────────────────────────
-        // Pattern: {root_folder}/TCGA-BRCA/{tumor|normal}/{file_id}/{file_name}
-        // The TCGA-BRCA and tumor/normal parts are derived from the barcode.
-        $driveType    = $this->resolveDriveType($sample->file_name, $sample->entity_submitter_id ?? '');
-        $driveProject = $this->resolveProjectSlug($sample);
-        $remoteFolderPath = implode('/', [
-            rtrim(config('gdrive.root_folder', 'samples'), '/'),
-            $driveProject,
-            $driveType,
-            $sample->file_id,
-        ]);
-        $remotePath = $remoteFolderPath . '/' . $sample->file_name;
-
-        // ── Check if already on Drive (idempotent) ────────────────────────────
+        // ── 4. Idempotent guard — check if already on Drive ───────────────────
+        // If the file is already there (e.g. from a previous partial run),
+        // skip the rclone copy and just update the DB.
         $meta = $drive->fetchFileMeta($remotePath);
         if (!empty($meta['Name'])) {
-            Log::info("[UploadWsiToDriveJob] Sample #{$this->sampleId}: file already exists on Drive at {$remotePath} — updating DB only.");
+            Log::info("[UploadWsiToDriveJob] Sample #{$this->sampleId}: already on Drive at {$remotePath} — updating DB only.");
             $this->persistRemotePath($sample, $remotePath, $remoteFolderPath . '/');
             return;
         }
 
-        // ── Upload ────────────────────────────────────────────────────────────
-        Log::info("[UploadWsiToDriveJob] Sample #{$this->sampleId}: uploading {$sample->file_name} → {$remotePath}");
+        // ── 5. Upload ─────────────────────────────────────────────────────────
+        Log::info(sprintf(
+            '[UploadWsiToDriveJob] Sample #%d: uploading %s → %s',
+            $this->sampleId,
+            $sample->file_name,
+            $remotePath,
+        ));
 
         $drive->uploadLocalFile($localPath, $remoteFolderPath);
 
         Log::info("[UploadWsiToDriveJob] Sample #{$this->sampleId}: upload complete.");
 
         $this->persistRemotePath($sample, $remotePath, $remoteFolderPath . '/');
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Determine whether the WSI belongs to the tumor or normal Drive subfolder.
-     *
-     * TCGA sample-type code is the 4th dash-delimited segment of the barcode:
-     *   TCGA-XX-XXXX-[01A]-01-BSA.uuid.svs   → 01x = Primary Tumor
-     *   TCGA-XX-XXXX-[11B]-02-TSB.uuid.svs   → 11x = Solid Normal Tissue
-     *   01–09  = tumour variants
-     *   10–19  = normal variants
-     */
-    private function resolveDriveType(string $fileName, string $submitterId): string
-    {
-        // Prefer entity_submitter_id (the TCGA slide barcode) if available
-        $barcode = $submitterId ?: (strstr($fileName, '.', true) ?: $fileName);
-        $parts   = explode('-', $barcode);
-        $typeCode = $parts[3] ?? '';
-
-        if ($typeCode !== '') {
-            $numeric = (int) substr($typeCode, 0, 2);
-            return $numeric >= 10 ? 'normal' : 'tumor';
-        }
-
-        // Fallback: look for common TCGA normal indicators in filename
-        if (preg_match('/-1[0-9][A-Z]-/', $fileName)) {
-            return 'normal';
-        }
-
-        return 'tumor';
-    }
-
-    /**
-     * Resolve the project slug for the Drive path (e.g. "TCGA-BRCA").
-     * Uses the sample's project_id when available; falls back to "TCGA-BRCA".
-     */
-    private function resolveProjectSlug(Sample $sample): string
-    {
-        // project_id on Sample (e.g. "TCGA-BRCA")
-        if (!empty($sample->project_id)) {
-            return preg_replace('/[^a-zA-Z0-9\-_]/', '_', $sample->project_id);
-        }
-
-        // Derive from entity_submitter_id / file_name: "TCGA-XX-..." → "TCGA-XX"
-        $barcode = $sample->entity_submitter_id ?: strstr($sample->file_name, '.', true) ?: '';
-        $parts   = explode('-', $barcode);
-        if (count($parts) >= 2 && strtoupper($parts[0]) === 'TCGA') {
-            // Map TCGA project code from BRCA barcode prefix
-            // For now return the configured default — extend this map as needed
-            return config('gdrive.tcga_project', 'TCGA-BRCA');
-        }
-
-        return 'unknown_project';
     }
 
     /**

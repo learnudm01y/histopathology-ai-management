@@ -5,83 +5,108 @@ namespace App\Console\Commands;
 use App\Jobs\UploadWsiToDriveJob;
 use App\Models\Sample;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * php artisan wsi:scan-and-upload [--dry-run] [--limit=N] [--force-requeue]
+ * php artisan wsi:scan-and-upload [--dry-run] [--limit=N]
  *
  * ════════════════════════════════════════════════════════════════════════
- *  PERMANENT PREVENTION COMMAND
+ *  SELF-HEALING UPLOAD GAP DETECTOR  (runs hourly via scheduler)
  * ════════════════════════════════════════════════════════════════════════
  *
- * Scans for samples whose WSI file:
- *   A. Exists locally in {HISTO_AI_LOCAL_BASE}/{file_id}/{file_name}
- *   B. Has NOT yet been uploaded to Google Drive (wsi_remote_path IS NULL)
+ * Phase 0 — Self-healing:
+ *   Samples stuck as storage_status='upload_failed' for > 24 h are
+ *   automatically reset to NULL. The system retries them on its own —
+ *   no human command required.
  *
- * For every such sample, dispatches UploadWsiToDriveJob onto the 'uploads'
- * queue. The job is ShouldBeUnique, so re-running this command is safe —
- * it will not double-queue the same sample.
+ * Phase 1 — DB scan:
+ *   Samples with file_id but no wsi_remote_path whose local file exists
+ *   → dispatch UploadWsiToDriveJob. Classification comes from the DB
+ *   (dataSource + category), NOT from filename guessing.
  *
- * SCHEDULED: every hour (see routes/console.php).
- * MANUAL:    php artisan wsi:scan-and-upload --dry-run   (preview)
- *            php artisan wsi:scan-and-upload             (dispatch jobs)
- *            php artisan wsi:scan-and-upload --limit=100 (batch of 100)
+ * Phase 2 — Filesystem scan:
+ *   SVS files in the local download directory with no DB record → logged
+ *   as orphans for investigation.
  *
- * Additionally scans the filesystem for SVS files that exist locally but
- * are NOT in the database at all — these are logged as orphan files for
- * manual investigation.
+ * Operational limits:
+ *   • --limit=200          jobs dispatched per run
+ *   • max_upload_queue_depth (config/gdrive.php)  prevents queue flooding
+ *   • ShouldBeUnique on the job prevents duplicate queue entries
  */
 class ScanAndUploadMissing extends Command
 {
     protected $signature = 'wsi:scan-and-upload
-                            {--dry-run   : Show what would be dispatched without queuing anything}
-                            {--limit=500 : Maximum number of upload jobs to dispatch per run}
-                            {--force-requeue : Re-queue even samples already in pending upload state}';
+                            {--dry-run   : Show what would happen without making any changes}
+                            {--limit=200 : Maximum number of upload jobs to dispatch per run}';
 
-    protected $description = 'Find WSI files downloaded locally but not yet uploaded to Drive, and dispatch upload jobs';
+    protected $description = 'Self-healing: find locally-downloaded WSI files not yet on Drive and dispatch upload jobs';
 
     public function handle(): int
     {
-        $dryRun       = (bool) $this->option('dry-run');
-        $limit        = (int)  $this->option('limit');
-
+        $dryRun    = (bool) $this->option('dry-run');
+        $limit     = (int)  $this->option('limit');
         $localBase = rtrim(config('gdrive.local_wsi_base', env('HISTO_AI_LOCAL_BASE', '/var/www/HISTO_AI/ameer')), '/');
+
+        // Hard ceiling: never exceed this many pending upload jobs in the queue.
+        // Prevents each hourly run from stacking 200 more on top of the previous 200.
+        $maxQueueDepth = (int) config('gdrive.max_upload_queue_depth', 400);
 
         $this->info('');
         $this->info('╔═══════════════════════════════════════════════════════════╗');
-        $this->info('║  wsi:scan-and-upload — Drive upload gap detector         ║');
+        $this->info('║  wsi:scan-and-upload — self-healing upload gap detector  ║');
         $this->info('╚═══════════════════════════════════════════════════════════╝');
 
         if ($dryRun) {
-            $this->warn('  ⚠  DRY-RUN — no jobs will be queued.');
+            $this->warn('  ⚠  DRY-RUN — no changes will be made.');
         }
 
-        $this->info("  Local base: {$localBase}");
+        $this->info("  Local base      : {$localBase}");
+        $this->info("  Dispatch limit  : {$limit}  |  Max queue depth: {$maxQueueDepth}");
+        $this->info('');
+
+        // ── Phase 0: Self-healing reset ───────────────────────────────────────
+        $this->runSelfHealingReset($dryRun);
+
+        // ── Operational limit: queue depth guard ──────────────────────────────
+        $pendingUploads = DB::table('jobs')->where('queue', 'uploads')->count();
+        $this->info("  Queue depth now : {$pendingUploads} / {$maxQueueDepth}");
+
+        if ($pendingUploads >= $maxQueueDepth) {
+            $this->warn("  Queue is at capacity — skipping dispatch this run. Worker will drain before next scan.");
+            Log::info("[ScanAndUploadMissing] Queue at capacity ({$pendingUploads}/{$maxQueueDepth}) — skipping dispatch.");
+            return self::SUCCESS;
+        }
+
+        // Dispatch only as many jobs as there are free slots.
+        $available = min($limit, $maxQueueDepth - $pendingUploads);
+        $this->info("  Available slots : {$available}");
         $this->info('');
 
         // ── Phase 1: DB-driven scan ───────────────────────────────────────────
-        // Find samples that have file_id + file_name but no wsi_remote_path.
-        // These are samples the GDC client downloaded but the upload job
-        // either never ran or failed silently.
         $this->info('Phase 1: DB scan — samples with file_id but no wsi_remote_path...');
 
+        // Exclude upload_failed here — Phase 0 handles resetting those.
+        // If they were reset this run, they will appear here with storage_status=NULL.
         $candidates = Sample::query()
             ->whereNotNull('file_id')
             ->whereNotNull('file_name')
             ->whereNull('wsi_remote_path')
+            ->where(fn ($q) => $q->whereNull('storage_status')
+                ->orWhere('storage_status', '!=', 'upload_failed'))
             ->select(['id', 'file_id', 'file_name'])
             ->orderBy('id')
-            ->limit($limit * 2) // fetch extra; we filter by local-file-exists below
+            ->limit($available * 3) // over-fetch; filter by local-file-exists below
             ->get();
 
-        $this->info("  Found {$candidates->count()} DB candidates (limit fetch: " . ($limit * 2) . ").");
+        $this->info("  DB candidates : {$candidates->count()}");
 
-        $dispatched   = 0;
-        $notFound     = 0;
-        $stillParceling = 0;
+        $dispatched       = 0;
+        $notFound         = 0;
+        $stillDownloading = 0;
 
         foreach ($candidates as $sample) {
-            if ($dispatched >= $limit) {
+            if ($dispatched >= $available) {
                 break;
             }
 
@@ -95,28 +120,27 @@ class ScanAndUploadMissing extends Command
 
             // Skip files still downloading (fresh .parcel = in-progress)
             if (is_file($parcelPath) && (time() - filemtime($parcelPath)) < 3600) {
-                $stillParceling++;
-                $this->line("  <comment>SKIP #{$sample->id}</comment> — download still in progress (.parcel)");
+                $stillDownloading++;
                 continue;
             }
 
             if (!$dryRun) {
                 UploadWsiToDriveJob::dispatch($sample->id);
                 $dispatched++;
-                Log::info("[ScanAndUploadMissing] Dispatched upload job for sample #{$sample->id}");
+                Log::info("[ScanAndUploadMissing] Dispatched UploadWsiToDriveJob for sample #{$sample->id}");
             } else {
                 $dispatched++;
-                $this->line("  <info>WOULD DISPATCH</info> sample #{$sample->id} — {$sample->file_name}");
+                $this->line("  <info>WOULD DISPATCH</info> #{$sample->id} — {$sample->file_name}");
             }
         }
 
         $this->table(
             ['Metric', 'Count'],
             [
-                ['DB candidates (no wsi_remote_path)',       $candidates->count()],
-                [$dryRun ? 'Would dispatch' : 'Dispatched', $dispatched],
-                ['Local file not found (not downloaded yet)', $notFound],
-                ['Still downloading (.parcel active)',        $stillParceling],
+                ['DB candidates (no wsi_remote_path)',        $candidates->count()],
+                [$dryRun ? 'Would dispatch' : 'Dispatched',  $dispatched],
+                ['Local file not found (not yet downloaded)', $notFound],
+                ['Still downloading (.parcel active)',         $stillDownloading],
             ]
         );
 
@@ -144,38 +168,60 @@ class ScanAndUploadMissing extends Command
 
     // ─────────────────────────────────────────────────────────────────────────
 
-    private function runFilesystemScan(string $localBase, bool $dryRun): void
+    /**
+     * Phase 0: reset samples stuck as upload_failed for > 24 h.
+     *
+     * This makes the system self-healing: a Drive API outage causes failures,
+     * but 24 h later the system automatically retries without human intervention.
+     * The 24-h gate prevents hammering a persistently broken connection.
+     */
+    private function runSelfHealingReset(bool $dryRun): void
     {
-        $orphanCount    = 0;
-        $knownCount     = 0;
-        $dirs           = glob($localBase . '/*', GLOB_ONLYDIR);
+        $staleCount = Sample::where('storage_status', 'upload_failed')
+            ->where('updated_at', '<', now()->subHours(24))
+            ->count();
 
-        if ($dirs === false || count($dirs) === 0) {
-            $this->info('  No subdirectories found.');
+        if ($staleCount === 0) {
+            $this->info('  Phase 0 (self-healing): no stale upload_failed samples.');
+            $this->info('');
             return;
         }
 
+        $this->warn("  Phase 0 (self-healing): {$staleCount} sample(s) stuck as upload_failed for > 24 h — resetting for retry.");
+
+        if (!$dryRun) {
+            Sample::where('storage_status', 'upload_failed')
+                ->where('updated_at', '<', now()->subHours(24))
+                ->update(['storage_status' => null]);
+
+            Log::warning("[ScanAndUploadMissing] Self-healing: reset {$staleCount} upload_failed sample(s) for retry.");
+        }
+
+        $this->info('');
+    }
+
+    private function runFilesystemScan(string $localBase): void
+    {
+        $orphanCount = 0;
+        $knownCount  = 0;
+        $dirs        = glob($localBase . '/*', GLOB_ONLYDIR) ?: [];
+
         foreach ($dirs as $dir) {
             $fileId = basename($dir);
-            $svs    = glob($dir . '/*.svs');
-
-            if (empty($svs)) {
-                continue;
-            }
+            $svs    = glob($dir . '/*.svs') ?: [];
 
             foreach ($svs as $svsPath) {
                 $fileName = basename($svsPath);
-                $sample   = Sample::where('file_id', $fileId)
+                $exists   = Sample::where('file_id', $fileId)
                     ->where('file_name', $fileName)
-                    ->first();
+                    ->exists();
 
-                if (!$sample) {
+                if (!$exists) {
                     $orphanCount++;
                     if ($orphanCount <= 10) {
-                        // Only show first 10 to avoid flooding the output
                         $this->warn("  ORPHAN (not in DB): {$svsPath}");
                     }
-                    Log::warning("[ScanAndUploadMissing] Orphan SVS (no DB record): {$svsPath}");
+                    Log::warning("[ScanAndUploadMissing] Orphan SVS file (no DB record): {$svsPath}");
                 } else {
                     $knownCount++;
                 }
@@ -183,7 +229,7 @@ class ScanAndUploadMissing extends Command
         }
 
         if ($orphanCount > 10) {
-            $this->warn("  ... and " . ($orphanCount - 10) . " more orphan files (see laravel.log for full list).");
+            $this->warn("  ... and " . ($orphanCount - 10) . " more orphan files — see laravel.log.");
         }
 
         $this->table(
