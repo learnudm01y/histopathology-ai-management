@@ -69,6 +69,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::get('workflow', [DashboardController::class, 'workflow'])->name('workflow');
         Route::post('workflow/dispatch/patch-extraction', [OperationsController::class, 'dispatchPatchExtraction'])->name('workflow.dispatch.patch-extraction');
         Route::post('workflow/dispatch/feature-extraction', [OperationsController::class, 'dispatchFeatureExtraction'])->name('workflow.dispatch.feature-extraction');
+        Route::post('workflow/dispatch/training', [OperationsController::class, 'dispatchTraining'])->name('workflow.dispatch.training');
         Route::get('output', [DashboardController::class, 'output'])->name('output');
 
         // Cases (patients) — clinical case browser

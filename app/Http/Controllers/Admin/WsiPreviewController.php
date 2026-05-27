@@ -43,18 +43,27 @@ class WsiPreviewController extends Controller
 
         $cacheKey = "wsi_preview:{$sample->id}";
 
-        // If a previous result is still cached and ready, return it immediately
-        // so the user doesn't have to wait for a full re-download.
-        $existing = Cache::get($cacheKey);
-        if (is_array($existing) && ($existing['status'] ?? '') === 'ready') {
+        // Only serve from cache when the previous preview run fully completed
+        // (has a real thumbnail on disk). A 'ready' cache left by verify mode
+        // has no thumbnail and the temp WSI file has already been deleted, so
+        // serving it would result in a black screen for the user.
+        $existing   = Cache::get($cacheKey);
+        $thumbReady = is_array($existing)
+            && ($existing['status'] ?? '') === 'ready'
+            && !empty($existing['thumb_rel'])
+            && is_file(storage_path('app/' . $existing['thumb_rel']));
+
+        if ($thumbReady) {
             return response()->json([
-                'success'   => true,
-                'status'    => 'ready',
-                'from_cache'=> true,
+                'success'    => true,
+                'status'     => 'ready',
+                'from_cache' => true,
             ]);
         }
 
-        // Mark as pending
+        // Clear any stale cache left by a previous verify run before dispatching
+        // a fresh preview job, so polling starts from a clean 'pending' state.
+        Cache::forget($cacheKey);
         Cache::put($cacheKey, ['status' => 'pending'], 7200);
 
         WsiPreviewJob::dispatch($sample->id, 'preview');

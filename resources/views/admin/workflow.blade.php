@@ -61,8 +61,9 @@
                                         {{ ($filters['operation_type'] ?? '') === 'feature_extraction' ? 'selected' : '' }}>
                                         📊 Feature Extraction (RunPod)
                                     </option>
-                                    <option value="training" disabled>
-                                        🧠 Model Training (coming soon)
+                                    <option value="training"
+                                        {{ ($filters['operation_type'] ?? '') === 'training' ? 'selected' : '' }}>
+                                        🧠 Model Training
                                     </option>
                                     <option value="inference" disabled>
                                         🔍 Inference / Prediction (coming soon)
@@ -230,43 +231,271 @@
         </div>
     </div>
 
-    <script>
-        // Operation type switcher: shows/hides the matching section
-        (function () {
-            const sel  = document.getElementById('operationTypeSelect');
-            const psec = document.getElementById('serverSelectionSection');
-            const fsec = document.getElementById('featureExtractionSection');
-            if (sel) {
-                sel.addEventListener('change', function () {
-                    if (psec) psec.classList.toggle('d-none', this.value !== 'patch_extraction');
-                    if (fsec) fsec.classList.toggle('d-none', this.value !== 'feature_extraction');
-                });
-            }
+    {{-- ─── TRAINING SECTION ──────────────────────────────────────────────────── --}}
+    <div class="row {{ ($filters['operation_type'] ?? '') !== 'training' ? 'd-none' : '' }}"
+         id="trainingSection">
+        <div class="col-12 grid-margin">
+            <div class="card border-warning">
+                <div class="card-header bg-warning text-dark py-2">
+                    <h5 class="mb-0">
+                        <span class="badge badge-dark mr-2">2</span>
+                        <i class="mdi mdi-brain mr-1"></i>
+                        Model Training — CLAM (Multiple Instance Learning)
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <p class="card-description">
+                        Train a <strong>CLAM</strong> MIL classification head on pre-extracted features.
+                        Only samples with <code>feature_extraction_status = completed</code> and a
+                        GDrive features path are eligible. Select at least <strong>2 samples</strong>.
+                    </p>
 
-            // Feature-extraction selection tracker
-            const feAll  = document.getElementById('feSelectAll');
-            const feCbs  = document.querySelectorAll('.fe-sample-cb');
-            const feBtn  = document.getElementById('feExecuteBtn');
-            const feCnt  = document.getElementById('feSelectedCount');
-            const feSrv  = document.getElementById('feSelectServer');
-            const feMod  = document.getElementById('feSelectModel');
+                    <form method="POST" action="{{ route('admin.workflow.dispatch.training') }}" id="trainingForm">
+                        @csrf
+                        {{-- Hidden field for serialised label map --}}
+                        <input type="hidden" name="label_map" id="labelMapJson" value="">
 
-            function feUpdate() {
-                const checked = Array.from(feCbs).filter(cb => cb.checked).length;
-                if (feCnt) feCnt.textContent = String(checked);
-                const serverOk = feSrv ? feSrv.value : false; // no select = no external servers
-                if (feBtn) feBtn.disabled = !(checked > 0 && serverOk && feMod?.value);
-            }
-            feAll?.addEventListener('change', e => {
-                feCbs.forEach(cb => cb.checked = e.target.checked);
-                feUpdate();
-            });
-            feCbs.forEach(cb => cb.addEventListener('change', feUpdate));
-            feSrv?.addEventListener('change', feUpdate);
-            feMod?.addEventListener('change', feUpdate);
-            feUpdate();
-        })();
-    </script>
+                        <div class="row">
+                            {{-- Server --}}
+                            <div class="col-md-3">
+                                <div class="form-group">
+                                    <label for="trSelectServer">
+                                        <i class="mdi mdi-server mr-1"></i>Training Server
+                                    </label>
+                                    @php $clamServers = $servers->where('type', 'external'); @endphp
+                                    @if($clamServers->isEmpty())
+                                        <div class="alert alert-warning py-2 px-3 mb-1" style="font-size:.85rem;">
+                                            No external servers configured.
+                                            <a href="{{ route('admin.settings.servers.create') }}">Add one →</a>
+                                        </div>
+                                        <input type="hidden" name="server_id" value="">
+                                    @else
+                                        <select name="server_id" id="trSelectServer" class="form-control" required>
+                                            <option value="">— Choose server —</option>
+                                            @foreach($clamServers as $srv)
+                                                <option value="{{ $srv->id }}">{{ $srv->name }}</option>
+                                            @endforeach
+                                        </select>
+                                    @endif
+                                </div>
+                            </div>
+
+                            {{-- Training head (CLAM model) --}}
+                            <div class="col-md-3">
+                                <div class="form-group">
+                                    <label for="trSelectHead">
+                                        <i class="mdi mdi-brain mr-1"></i>Training Head
+                                    </label>
+                                    @php $trainingHeads = $aiModels->where('model_type', 'classification'); @endphp
+                                    <select name="training_head_id" id="trSelectHead" class="form-control" required>
+                                        <option value="">— Choose head —</option>
+                                        @foreach($trainingHeads as $m)
+                                            <option value="{{ $m->id }}">{{ $m->name }} ({{ $m->version ?? 'v1' }})</option>
+                                        @endforeach
+                                    </select>
+                                    <small class="form-text text-muted">MIL classification model (e.g. CLAM-SB)</small>
+                                </div>
+                            </div>
+
+                            {{-- Feature model used --}}
+                            <div class="col-md-3">
+                                <div class="form-group">
+                                    <label for="trSelectFeat">
+                                        <i class="mdi mdi-flask-outline mr-1"></i>Feature Model
+                                    </label>
+                                    @php $foundationModels = $aiModels->where('model_type', 'foundation'); @endphp
+                                    <select name="feature_model_id" id="trSelectFeat" class="form-control" required>
+                                        <option value="">— Choose feature model —</option>
+                                        @foreach($foundationModels as $m)
+                                            <option value="{{ $m->id }}" {{ $m->is_default ? 'selected' : '' }}>{{ $m->name }}</option>
+                                        @endforeach
+                                    </select>
+                                    <small class="form-text text-muted">Which embeddings were used for these samples</small>
+                                </div>
+                            </div>
+
+                            {{-- Architecture --}}
+                            <div class="col-md-3">
+                                <div class="form-group">
+                                    <label for="trModelType">Architecture</label>
+                                    <select name="model_type" id="trModelType" class="form-control">
+                                        <option value="clam_sb" selected>CLAM-SB (single branch)</option>
+                                        <option value="clam_mb">CLAM-MB (multi branch)</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            {{-- Label type --}}
+                            <div class="col-md-2">
+                                <div class="form-group">
+                                    <label for="trLabelType">Label Source</label>
+                                    <select name="label_type" id="trLabelType" class="form-control" required>
+                                        <option value="category">Category</option>
+                                        <option value="disease_type">Disease Type</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            {{-- Epochs --}}
+                            <div class="col-md-2">
+                                <div class="form-group">
+                                    <label for="trEpochs">Epochs</label>
+                                    <input type="number" name="epochs" id="trEpochs" class="form-control"
+                                           value="20" min="1" max="200" required>
+                                </div>
+                            </div>
+
+                            {{-- LR --}}
+                            <div class="col-md-2">
+                                <div class="form-group">
+                                    <label for="trLR">Learning Rate</label>
+                                    <input type="text" name="learning_rate" id="trLR" class="form-control"
+                                           value="0.0001" required>
+                                </div>
+                            </div>
+
+                            {{-- Bag size --}}
+                            <div class="col-md-2">
+                                <div class="form-group">
+                                    <label for="trBagSize">Bag Size</label>
+                                    <input type="number" name="bag_size" id="trBagSize" class="form-control"
+                                           value="-1" min="-1" required>
+                                    <small class="form-text text-muted">-1 = all patches</small>
+                                </div>
+                            </div>
+
+                            {{-- n_classes --}}
+                            <div class="col-md-2">
+                                <div class="form-group">
+                                    <label for="trNClasses">Num Classes</label>
+                                    <input type="number" name="n_classes" id="trNClasses" class="form-control"
+                                           value="2" min="2" max="10" required>
+                                </div>
+                            </div>
+
+                            {{-- GDrive output --}}
+                            <div class="col-md-2">
+                                <div class="form-group">
+                                    <label for="trGDriveOut">GDrive Output Dir</label>
+                                    <input type="text" name="gdrive_output_dir" id="trGDriveOut" class="form-control"
+                                           placeholder="training/CLAM/run_...">
+                                    <small class="form-text text-muted">Leave blank for auto</small>
+                                </div>
+                            </div>
+                        </div>
+
+                        {{-- Label map builder --}}
+                        <div class="card bg-light mt-2 mb-3">
+                            <div class="card-body py-2 px-3">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <strong><i class="mdi mdi-tag-multiple mr-1"></i>Class Label Map</strong>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" id="addLabelRow">
+                                        + Add Class
+                                    </button>
+                                </div>
+                                <small class="text-muted d-block mb-2">
+                                    Map numeric class index (0, 1, …) to human-readable label.
+                                    The label must match the value in the <code>label_type</code> column for each sample.
+                                </small>
+                                <div id="labelMapContainer">
+                                    <div class="input-group mb-1 label-map-row" data-idx="0">
+                                        <div class="input-group-prepend"><span class="input-group-text">0</span></div>
+                                        <input type="text" class="form-control label-map-text" placeholder="e.g. Normal" required>
+                                        <div class="input-group-append">
+                                            <button class="btn btn-outline-danger btn-sm remove-label-row" type="button">✕</button>
+                                        </div>
+                                    </div>
+                                    <div class="input-group mb-1 label-map-row" data-idx="1">
+                                        <div class="input-group-prepend"><span class="input-group-text">1</span></div>
+                                        <input type="text" class="form-control label-map-text" placeholder="e.g. Malignant" required>
+                                        <div class="input-group-append">
+                                            <button class="btn btn-outline-danger btn-sm remove-label-row" type="button">✕</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {{-- Eligible samples table (feature_extraction_status = completed) --}}
+                        <div class="table-responsive mt-3" style="max-height:400px; overflow-y:auto;">
+                            <table class="table table-sm table-hover">
+                                <thead class="thead-light">
+                                    <tr>
+                                        <th style="width:40px;">
+                                            <input type="checkbox" id="trSelectAll" title="Select all">
+                                        </th>
+                                        <th>#</th>
+                                        <th>File</th>
+                                        <th>Case</th>
+                                        <th>Category</th>
+                                        <th>Disease Type</th>
+                                        <th>Feature Model</th>
+                                        <th>GDrive Features</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @php
+                                        $trainingEligible = \App\Models\Sample::with([
+                                                'patientCase:id,case_id,disease_type',
+                                                'category:id,label_en',
+                                                'featureExtractionAiModel:id,name',
+                                            ])
+                                            ->where('feature_extraction_status', 'completed')
+                                            ->whereNotNull('features_gdrive_path')
+                                            ->orderByDesc('id')
+                                            ->limit(500)
+                                            ->get();
+                                    @endphp
+                                    @forelse($trainingEligible as $s)
+                                        <tr>
+                                            <td>
+                                                <input type="checkbox"
+                                                       name="sample_ids[]"
+                                                       value="{{ $s->id }}"
+                                                       class="tr-sample-cb">
+                                            </td>
+                                            <td>{{ $s->id }}</td>
+                                            <td class="text-truncate" style="max-width:180px;">{{ $s->file_name }}</td>
+                                            <td>{{ $s->patientCase?->case_id ?? '—' }}</td>
+                                            <td>{{ $s->category?->label_en ?? '—' }}</td>
+                                            <td>{{ $s->patientCase?->disease_type ?? '—' }}</td>
+                                            <td>
+                                                @if($s->featureExtractionAiModel)
+                                                    <span class="badge badge-info">{{ $s->featureExtractionAiModel->name }}</span>
+                                                @else
+                                                    <span class="text-muted">—</span>
+                                                @endif
+                                            </td>
+                                            <td class="text-truncate" style="max-width:200px;">
+                                                <small class="text-muted">{{ $s->features_gdrive_path ?? '—' }}</small>
+                                            </td>
+                                        </tr>
+                                    @empty
+                                        <tr>
+                                            <td colspan="8" class="text-center text-muted py-3">
+                                                No eligible samples.
+                                                Samples need <code>feature_extraction_status = completed</code>
+                                                and a GDrive features path.
+                                            </td>
+                                        </tr>
+                                    @endforelse
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="mt-3">
+                            <button type="submit" class="btn btn-warning btn-lg" id="trExecuteBtn" disabled>
+                                <i class="mdi mdi-brain mr-1"></i>
+                                🚀 Dispatch Training Run (<span id="trSelectedCount">0</span> samples)
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
 
     {{-- STEP 2 — Server & Patch-Size Selection --}}
     <div class="row {{ ($filters['operation_type'] ?? '') !== 'patch_extraction' ? 'd-none' : '' }}"
@@ -747,8 +976,13 @@
             }
         }
 
+        var featureSection = document.getElementById('featureExtractionSection');
+        var trainingSection = document.getElementById('trainingSection');
+
         function onOperationTypeChange() {
             var val = opTypeSelect ? opTypeSelect.value : '';
+
+            // patch extraction section
             if (val === 'patch_extraction') {
                 show(serverSection);
                 var allConfirmed = serverSelect && serverSelect.value
@@ -762,6 +996,18 @@
                 hide(serverSection);
                 hide(sampleFiltersSection);
                 hide(sampleTableSection);
+            }
+
+            // feature extraction section
+            if (featureSection) {
+                if (val === 'feature_extraction') { show(featureSection); }
+                else { hide(featureSection); }
+            }
+
+            // training section
+            if (trainingSection) {
+                if (val === 'training') { show(trainingSection); }
+                else { hide(trainingSection); }
             }
         }
 
@@ -818,6 +1064,105 @@
 
         onOperationTypeChange();
         refreshCheckboxState();
+
+        // ── Feature extraction selection tracker ──────────────────────────────
+        var feAll  = document.getElementById('feSelectAll');
+        var feCbs  = document.querySelectorAll('.fe-sample-cb');
+        var feBtn  = document.getElementById('feExecuteBtn');
+        var feCnt  = document.getElementById('feSelectedCount');
+        var feSrv  = document.getElementById('feSelectServer');
+        var feMod  = document.getElementById('feSelectModel');
+
+        function feUpdate() {
+            var checked = Array.from(feCbs).filter(function(cb){ return cb.checked; }).length;
+            if (feCnt) feCnt.textContent = String(checked);
+            var serverOk = feSrv ? feSrv.value : '';
+            if (feBtn) feBtn.disabled = !(checked > 0 && serverOk && feMod && feMod.value);
+        }
+        if (feAll) {
+            feAll.addEventListener('change', function(e) {
+                feCbs.forEach(function(cb){ cb.checked = e.target.checked; });
+                feUpdate();
+            });
+        }
+        feCbs.forEach(function(cb){ cb.addEventListener('change', feUpdate); });
+        if (feSrv) feSrv.addEventListener('change', feUpdate);
+        if (feMod) feMod.addEventListener('change', feUpdate);
+        feUpdate();
+
+        // ── Training selection tracker ────────────────────────────────────────
+        var trAll  = document.getElementById('trSelectAll');
+        var trCbs  = document.querySelectorAll('.tr-sample-cb');
+        var trBtn  = document.getElementById('trExecuteBtn');
+        var trCnt  = document.getElementById('trSelectedCount');
+        var trSrv  = document.getElementById('trSelectServer');
+        var trHead = document.getElementById('trSelectHead');
+        var trFeat = document.getElementById('trSelectFeat');
+
+        function trUpdate() {
+            var checked = Array.from(trCbs).filter(function(cb){ return cb.checked; }).length;
+            if (trCnt) trCnt.textContent = String(checked);
+            var ready = checked >= 2
+                     && trSrv  && trSrv.value
+                     && trHead && trHead.value
+                     && trFeat && trFeat.value;
+            if (trBtn) trBtn.disabled = !ready;
+        }
+        if (trAll) {
+            trAll.addEventListener('change', function(e) {
+                trCbs.forEach(function(cb){ cb.checked = e.target.checked; });
+                trUpdate();
+            });
+        }
+        trCbs.forEach(function(cb){ cb.addEventListener('change', trUpdate); });
+        if (trSrv)  trSrv.addEventListener('change',  trUpdate);
+        if (trHead) trHead.addEventListener('change', trUpdate);
+        if (trFeat) trFeat.addEventListener('change', trUpdate);
+        trUpdate();
+
+        // ── Label-map: serialise to JSON on submit ────────────────────────────
+        var trForm = document.getElementById('trainingForm');
+        if (trForm) {
+            trForm.addEventListener('submit', function() {
+                var rows = document.querySelectorAll('.label-map-row');
+                var map  = {};
+                rows.forEach(function(row) {
+                    var idx   = row.dataset.idx;
+                    var input = row.querySelector('.label-map-text');
+                    var label = input ? input.value.trim() : '';
+                    if (label) map[idx] = label;
+                });
+                var jsonField = document.getElementById('labelMapJson');
+                if (jsonField) jsonField.value = JSON.stringify(map);
+            });
+        }
+
+        // ── Label-map: add / remove rows dynamically ──────────────────────────
+        var addLabelBtn = document.getElementById('addLabelRow');
+        if (addLabelBtn) {
+            addLabelBtn.addEventListener('click', function() {
+                var container = document.getElementById('labelMapContainer');
+                var count = container.querySelectorAll('.label-map-row').length;
+                var row = document.createElement('div');
+                row.className = 'input-group mb-1 label-map-row';
+                row.dataset.idx = count;
+                row.innerHTML =
+                    '<div class="input-group-prepend"><span class="input-group-text">' + count + '</span></div>' +
+                    '<input type="text" class="form-control label-map-text" placeholder="Class label" required>' +
+                    '<div class="input-group-append"><button class="btn btn-outline-danger btn-sm remove-label-row" type="button">✕</button></div>';
+                container.appendChild(row);
+                row.querySelector('.remove-label-row').addEventListener('click', function(){ row.remove(); });
+            });
+        }
+
+        // Remove pre-existing label rows
+        document.addEventListener('click', function(e) {
+            if (e.target && e.target.classList.contains('remove-label-row')) {
+                var row = e.target.closest('.label-map-row');
+                if (row) row.remove();
+            }
+        });
+
     })();
     </script>
     @endpush

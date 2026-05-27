@@ -94,6 +94,11 @@ class Sample extends Model
         return $this->belongsTo(\App\Models\Magnification::class, 'magnification_id');
     }
 
+    public function featureExtractionAiModel(): BelongsTo
+    {
+        return $this->belongsTo(\App\Models\AiModel::class, 'feature_extraction_ai_model_id');
+    }
+
     // ── Helpers ─────────────────────────────────────────────
 
     public function getFileSizeHumanAttribute(): string

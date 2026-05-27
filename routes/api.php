@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\V1\FeatureExtractionApiController;
+use App\Http\Controllers\Api\V1\TrainingApiController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -47,4 +48,12 @@ Route::prefix('v1')
         // Server self-registration: RunPod calls this on boot to update its api_url.
         Route::post('/servers/{serverId}/update-url', [FeatureExtractionApiController::class, 'updateUrl'])
             ->name('api.servers.update-url');
+
+        // Training callbacks — called by RunPod CLAM server
+        Route::prefix('training')->group(function () {
+            Route::post('/progress', [TrainingApiController::class, 'progress'])
+                ->name('api.training.progress');
+            Route::post('/report', [TrainingApiController::class, 'report'])
+                ->name('api.training.report');
+        });
     });
