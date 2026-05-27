@@ -71,7 +71,7 @@ INSERT INTO servers_names (
     'external',
     'runpod.io',
     NULL,                                                   -- filled by pod at boot
-    '<CLAM_API_KEY_HERE>',                                  -- ← replace with generated key
+    '85aff342ec82334f17df791b5ade309ecc441b7983381379dcad59f74d9fb822', -- ← CLAM server api_key
     '<RUNPOD_API_KEY_HERE>',                                -- ← your RunPod management key (rpa_...)
     '<NETWORK_VOLUME_ID_HERE>',                             -- network volume
     '9wz7zcfaxb',                                           -- pod template

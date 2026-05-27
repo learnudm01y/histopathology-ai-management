@@ -98,11 +98,11 @@
                                     <label>RunPod Account API Key
                                         <span class="badge badge-warning ml-1" style="font-size:.7rem;">sensitive</span>
                                     </label>
-                                    <input type="password" name="runpod_api_key"
+                                    <input type="text" name="runpod_api_key"
                                            class="form-control @error('runpod_api_key') is-invalid @enderror"
-                                           value="{{ old('runpod_api_key') }}"
-                                           autocomplete="new-password"
-                                           placeholder="{{ $server->runpod_api_key ? '••••••••  (saved — leave blank to keep)' : 'rpa_…  (from RunPod account settings)' }}">
+                                           value="{{ old('runpod_api_key', $server->runpod_api_key) }}"
+                                           autocomplete="off"
+                                           placeholder="rpa_…  (from RunPod account settings)">
                                     @error('runpod_api_key')<div class="invalid-feedback">{{ $message }}</div>@enderror
                                     <small class="form-text text-muted">
                                         Your RunPod account key (starts with <code>rpa_</code>). Leave blank to keep existing value.
