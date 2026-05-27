@@ -303,7 +303,7 @@
                                     <label for="trSelectFeat">
                                         <i class="mdi mdi-flask-outline mr-1"></i>Feature Model
                                     </label>
-                                    @php $foundationModels = $aiModels->where('model_type', 'foundation'); @endphp
+                                    @php $foundationModels = $aiModels->whereIn('model_type', ['foundation', 'multimodal', 'other']); @endphp
                                     <select name="feature_model_id" id="trSelectFeat" class="form-control" required>
                                         <option value="">— Choose feature model —</option>
                                         @foreach($foundationModels as $m)
