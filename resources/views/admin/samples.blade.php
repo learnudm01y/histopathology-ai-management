@@ -184,32 +184,33 @@
                     </div>
                 @else
                 <div class="table-responsive">
-                    <table class="table table-hover table-sm" style="table-layout:fixed; width:100%;">
+                    <table class="table table-hover table-sm" style="table-layout:fixed; width:100%; min-width:1100px;">
                         <colgroup>
-                            <col style="width:40px;">
-                            <col style="width:260px;">{{-- File Name --}}
-                            <col style="width:82px;">
-                            <col style="width:74px;">
-                            <col style="width:62px;">
-                            <col style="width:100px;">
-                            <col style="width:78px;">
-                            <col style="width:62px;">
-                            <col style="width:62px;">
-                            <col style="width:80px;">
+                            <col style="width:44px;">{{-- # --}}
+                            <col style="width:230px;">{{-- File Name --}}
+                            <col style="width:80px;">{{-- Organ --}}
+                            <col style="width:72px;">{{-- Source --}}
+                            <col style="width:80px;">{{-- Category --}}
+                            <col style="width:90px;">{{-- Subtype --}}
+                            <col style="width:84px;">{{-- Size --}}
+                            <col style="width:96px;">{{-- Storage --}}
+                            <col style="width:140px;">{{-- Tiling --}}
+                            <col style="width:96px;">{{-- Quality --}}
+                            <col style="width:88px;">{{-- Actions --}}
                         </colgroup>
                         <thead class="thead-light">
                             <tr>
                                 <th style="padding:6px 8px;">#</th>
                                 <th style="padding:6px 8px;">File Name</th>
-                                <th style="padding:6px 4px;">Organ</th>
-                                <th style="padding:6px 4px;">Source</th>
-                                <th style="padding:6px 4px;">Category</th>
-                                <th style="padding:6px 4px;">Subtype</th>
-                                <th style="padding:6px 4px;">Size</th>
-                                <th style="padding:6px 14px;">Storage</th>
-                                <th style="padding:6px 14px;">Tiling</th>
-                                <th style="padding:6px 14px;">Quality</th>
-                                <th style="padding:6px 4px; text-align:right;">Actions</th>
+                                <th style="padding:6px 8px;">Organ</th>
+                                <th style="padding:6px 8px;">Source</th>
+                                <th style="padding:6px 8px;">Category</th>
+                                <th style="padding:6px 8px;">Subtype</th>
+                                <th style="padding:6px 8px;">Size</th>
+                                <th style="padding:6px 8px;">Storage</th>
+                                <th style="padding:6px 8px;">Tiling</th>
+                                <th style="padding:6px 8px;">Quality</th>
+                                <th style="padding:6px 8px; text-align:right;">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -250,15 +251,15 @@
                                 </td>
 
                                 {{-- Storage Status --}}
-                                <td style="padding:6px 14px;" class="align-middle">
+                                <td style="padding:6px 8px; white-space:nowrap;" class="align-middle">
                                     <span class="badge badge-{{ $sample->storage_status_badge }}">
                                         {{ str_replace('_', ' ', $sample->storage_status) }}
                                     </span>
                                 </td>
 
                                 {{-- Tiling Status --}}
-                                <td style="padding:6px 14px;" class="align-middle">
-                                    <span class="badge badge-{{ $sample->tiling_status_badge }}">
+                                <td style="padding:6px 8px; white-space:nowrap;" class="align-middle">
+                                    <span class="badge badge-{{ $sample->tiling_status_badge }} mr-1">
                                         {{ $sample->tiling_status }}
                                         @if($sample->tiling_status === 'done' && $sample->tile_count)
                                             ({{ number_format($sample->tile_count) }})
@@ -267,7 +268,7 @@
                                 </td>
 
                                 {{-- Quality Status --}}
-                                <td style="padding:6px 14px;" class="align-middle">
+                                <td style="padding:6px 8px; white-space:nowrap;" class="align-middle">
                                     <span class="badge badge-{{ $sample->quality_status_badge }}">
                                         {{ str_replace('_', ' ', $sample->quality_status) }}
                                     </span>

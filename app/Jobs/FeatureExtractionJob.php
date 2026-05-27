@@ -39,8 +39,18 @@ class FeatureExtractionJob implements ShouldQueue
     /** Plenty of time for HTTP dispatch + a wide network jitter window. */
     public int $timeout = 300;
 
-    /** A single dispatch attempt — retry from the UI if it fails. */
-    public int $tries = 1;
+    /**
+     * 3 attempts total:
+     *   attempt 1 → immediate
+     *   attempt 2 → 90 s later  (server may still be booting)
+     *   attempt 3 → 180 s later (last chance)
+     */
+    public int $tries = 3;
+
+    public function backoff(): array
+    {
+        return [90, 180];
+    }
 
     public function __construct(
         public readonly int $sampleId,
@@ -81,6 +91,34 @@ class FeatureExtractionJob implements ShouldQueue
             return;
         }
 
+        // ── Pre-dispatch health check ─────────────────────────────────────────
+        // Avoids burning a tries-slot on a server that is still booting.
+        // /health is unauthenticated on all RunPod services.
+        try {
+            $health = Http::timeout(10)->connectTimeout(5)
+                ->get(rtrim($server->api_url, '/') . '/health');
+
+            if (!$health->successful()) {
+                // Server exists but unhealthy — release back to queue for retry.
+                $this->release(60);
+                Log::warning('[FeatureExtractionJob] Server not healthy — releasing for retry', [
+                    'sample_id' => $sample->id,
+                    'server'    => $server->name,
+                    'status'    => $health->status(),
+                ]);
+                return;
+            }
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            // Cannot reach the server at all — could be booting, release for retry.
+            $this->release(90);
+            Log::warning('[FeatureExtractionJob] Server unreachable — releasing for retry', [
+                'sample_id' => $sample->id,
+                'server'    => $server->name,
+                'error'     => $e->getMessage(),
+            ]);
+            return;
+        }
+
         $payload = $this->buildPayload($sample, $server, $model, $patchSize, $magnification);
 
         Log::info('[FeatureExtractionJob] Dispatching', [
@@ -103,10 +141,21 @@ class FeatureExtractionJob implements ShouldQueue
                 ->post(rtrim($server->api_url, '/') . '/jobs/start', $payload);
 
             if (!$response->successful()) {
-                $this->fail(
-                    $sample,
-                    "RunPod returned HTTP {$response->status()}: " . substr($response->body(), 0, 500)
-                );
+                $status = $response->status();
+                $body   = substr($response->body(), 0, 500);
+
+                if ($status === 403 || $status === 401) {
+                    // Wrong API key — retrying is pointless, fail immediately.
+                    $this->fail($sample, "HTTP {$status} (API key mismatch on server '{$server->name}'). Update the key in Settings → Servers. Response: {$body}");
+                    return;
+                }
+
+                if ($status === 404 || $status >= 500) {
+                    // Server not ready / internal error — re-throw so the job retries.
+                    throw new \RuntimeException("RunPod returned HTTP {$status}: {$body}");
+                }
+
+                $this->fail($sample, "RunPod returned HTTP {$status}: {$body}");
                 return;
             }
 
