@@ -85,7 +85,7 @@
                     <h5 class="mb-0">
                         <span class="badge badge-light text-info mr-2">2</span>
                         <i class="mdi mdi-flask-outline mr-1"></i>
-                        Feature Extraction — RunPod GPU Server
+                        Feature Extraction — RunPod GPU Server (Virchow2 / TITAN)
                     </h5>
                 </div>
                 <div class="card-body">
