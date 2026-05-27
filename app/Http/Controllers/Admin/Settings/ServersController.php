@@ -12,7 +12,7 @@ class ServersController extends Controller
 {
     public function index(): View
     {
-        $servers = ServerName::withCount('samples')
+        $servers = ServerName::withCount(['samples', 'featureExtractionSamples'])
             ->orderBy('type')
             ->orderBy('name')
             ->get();

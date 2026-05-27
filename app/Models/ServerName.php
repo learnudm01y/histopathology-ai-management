@@ -34,6 +34,11 @@ class ServerName extends Model
         return $this->hasMany(Sample::class, 'patch_server_id');
     }
 
+    public function featureExtractionSamples(): HasMany
+    {
+        return $this->hasMany(Sample::class, 'feature_extraction_server_id');
+    }
+
     public function getTypeLabel(): string
     {
         return match ($this->type) {

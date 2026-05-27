@@ -83,7 +83,15 @@
                                         {{ $srv->description ?? '—' }}
                                     </td>
                                     <td class="text-center">
-                                        <span class="badge badge-light border">{{ $srv->samples_count }}</span>
+                                        @if($srv->type === 'external')
+                                            <span class="badge badge-light border" title="Feature Extraction jobs">
+                                                {{ $srv->feature_extraction_samples_count }}
+                                            </span>
+                                        @else
+                                            <span class="badge badge-light border" title="Patch extraction jobs">
+                                                {{ $srv->samples_count }}
+                                            </span>
+                                        @endif
                                     </td>
                                     <td class="text-center">
                                         @if($srv->is_active)
