@@ -68,11 +68,15 @@ class FeatureExtractionApiController extends Controller
 
         $sample->update($update);
 
-        Log::info('[API/feature-extraction] Sample #' . $sample->id . ' → ' . $data['status'], [
+        $logContext = [
             'server'  => $server?->name,
             'gdrive'  => $data['features_gdrive_path'] ?? null,
             'patches' => $data['patch_count'] ?? null,
-        ]);
+        ];
+        if (!empty($data['error_message'])) {
+            $logContext['error'] = $data['error_message'];
+        }
+        Log::info('[API/feature-extraction] Sample #' . $sample->id . ' → ' . $data['status'], $logContext);
 
         return response()->json([
             'success' => true,
