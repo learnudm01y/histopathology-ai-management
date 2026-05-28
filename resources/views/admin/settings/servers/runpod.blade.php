@@ -62,8 +62,9 @@
             $volumeId = $pod['networkVolume']['id'] ?? null;
             $hasVolume = $volumeId === '{{ config("runpod.network_volume_id", "") }}' || $volume;
             $uptime = $pod['runtime']['uptimeInSeconds'] ?? null;
-            $podProxy = 'https://' . $pod['id'] . '-8000.proxy.runpod.net';
-            $isSelected = $server->api_url === $podProxy;
+            $podPort  = $server->runpod_port ?: 8000;
+            $podProxy = 'https://' . $pod['id'] . '-' . $podPort . '.proxy.runpod.net';
+            $isSelected = rtrim($server->api_url ?? '', '/') === $podProxy;
         @endphp
         <div class="col-lg-6 col-xl-4 mb-4 pod-card" data-pod-id="{{ $pod['id'] }}" data-status="{{ $pod['desiredStatus'] }}">
             <div class="card h-100 {{ $isSelected ? 'border-success' : '' }}">
