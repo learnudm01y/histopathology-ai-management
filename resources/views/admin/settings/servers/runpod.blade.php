@@ -64,7 +64,8 @@
             $uptime = $pod['runtime']['uptimeInSeconds'] ?? null;
             $podPort  = $server->runpod_port ?: 8000;
             $podProxy = 'https://' . $pod['id'] . '-' . $podPort . '.proxy.runpod.net';
-            $isSelected = rtrim($server->api_url ?? '', '/') === $podProxy;
+            // api_url may be short or full format — match by pod ID presence
+            $isSelected = $server->api_url && str_contains($server->api_url, $pod['id'] . '-');
         @endphp
         <div class="col-lg-6 col-xl-4 mb-4 pod-card" data-pod-id="{{ $pod['id'] }}" data-status="{{ $pod['desiredStatus'] }}">
             <div class="card h-100 {{ $isSelected ? 'border-success' : '' }}">
