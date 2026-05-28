@@ -112,9 +112,10 @@ class RunPodController extends Controller
                 return response()->json(['success' => false, 'message' => 'Pod is not running yet. Start it first.'], 422);
             }
 
-            // Build the RunPod proxy URL from pod ID
-            // Format: https://{podId}-8000.proxy.runpod.net
-            $proxyUrl = 'https://' . $pod['id'] . '-8000.proxy.runpod.net';
+            // Build the RunPod proxy URL from pod ID and the server's configured port.
+            // Format: https://{podId}-{port}.proxy.runpod.net
+            $port     = $server->runpod_port ?: 8000;
+            $proxyUrl = 'https://' . $pod['id'] . '-' . $port . '.proxy.runpod.net';
 
             $server->update(['api_url' => $proxyUrl]);
 

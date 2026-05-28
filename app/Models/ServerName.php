@@ -17,13 +17,15 @@ class ServerName extends Model
         'runpod_api_key',
         'runpod_network_volume_id',
         'runpod_template_id',
+        'runpod_port',
         'host',
         'description',
         'is_active',
     ];
 
     protected $casts = [
-        'is_active' => 'boolean',
+        'is_active'    => 'boolean',
+        'runpod_port'  => 'integer',
     ];
 
     // Hide secrets from JSON serialization

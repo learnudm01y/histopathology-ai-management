@@ -89,6 +89,7 @@ class ServersController extends Controller
             'api_key'                  => 'nullable|string|max:500',
             'runpod_api_key'           => 'nullable|string|max:1000',
             'runpod_network_volume_id' => 'nullable|string|max:100',
+            'runpod_port'              => 'nullable|integer|min:1|max:65535',
             'host'                     => 'nullable|string|max:255',
             'description'              => 'nullable|string|max:500',
         ]);
