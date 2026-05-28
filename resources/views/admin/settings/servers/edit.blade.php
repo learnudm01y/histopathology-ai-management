@@ -93,7 +93,7 @@
                         <hr class="my-3">
                         <h6 class="text-muted mb-3"><i class="mdi mdi-lightning-bolt mr-1"></i>RunPod Settings</h6>
                         <div class="row">
-                            <div class="col-md-8">
+                            <div class="col-md-7">
                                 <div class="form-group">
                                     <label>RunPod Account API Key
                                         <span class="badge badge-warning ml-1" style="font-size:.7rem;">sensitive</span>
@@ -122,7 +122,7 @@
                                     </small>
                                 </div>
                             </div>
-                            <div class="col-md-1">
+                            <div class="col-md-2">
                                 <div class="form-group">
                                     <label>Port</label>
                                     <input type="number" name="runpod_port"

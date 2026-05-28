@@ -91,7 +91,7 @@
                         <hr class="my-3">
                         <h6 class="text-muted mb-3"><i class="mdi mdi-lightning-bolt mr-1"></i>RunPod Settings</h6>
                         <div class="row">
-                            <div class="col-md-8">
+                            <div class="col-md-7">
                                 <div class="form-group">
                                     <label>RunPod Account API Key
                                         <span class="badge badge-warning ml-1" style="font-size:.7rem;">sensitive</span>
@@ -108,7 +108,7 @@
                                     </small>
                                 </div>
                             </div>
-                            <div class="col-md-4">
+                            <div class="col-md-3">
                                 <div class="form-group">
                                     <label>Network Volume ID</label>
                                     <input type="text" name="runpod_network_volume_id"
@@ -118,6 +118,20 @@
                                     @error('runpod_network_volume_id')<div class="invalid-feedback">{{ $message }}</div>@enderror
                                     <small class="form-text text-muted">
                                         The persistent volume ID mounted at <code>/workspace</code> on the pod.
+                                    </small>
+                                </div>
+                            </div>
+                            <div class="col-md-2">
+                                <div class="form-group">
+                                    <label>Port</label>
+                                    <input type="number" name="runpod_port"
+                                           class="form-control @error('runpod_port') is-invalid @enderror"
+                                           value="{{ old('runpod_port', 8000) }}"
+                                           min="1" max="65535"
+                                           placeholder="8001">
+                                    @error('runpod_port')<div class="invalid-feedback">{{ $message }}</div>@enderror
+                                    <small class="form-text text-muted">
+                                        Container port (8000 Virchow2, 8001 TITAN, 8002 CLAM).
                                     </small>
                                 </div>
                             </div>
