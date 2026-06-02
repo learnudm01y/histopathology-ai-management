@@ -53,7 +53,8 @@ class TrainingRun extends Model
 
     public function samples(): BelongsToMany
     {
-        return $this->belongsToMany(Sample::class, 'training_run_samples');
+        return $this->belongsToMany(Sample::class, 'training_run_samples')
+                    ->withPivot('training_phase');
     }
 
     public function getBestAucAttribute(): float

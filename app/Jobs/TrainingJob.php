@@ -2,8 +2,6 @@
 
 namespace App\Jobs;
 
-use App\Models\Sample;
-use App\Models\ServerName;
 use App\Models\TrainingRun;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -40,13 +38,16 @@ class TrainingJob implements ShouldQueue
             return;
         }
 
-        // ── Build sample payload ──────────────────────────────────────────────
+        // ── Build sample payload split into train / val / test ───────────────
         $featureModelName = $run->featureModel?->name ?? 'TITAN';
         $labelType        = $run->label_type;
         $labelMap         = $run->label_map ?? [];   // int → label string
 
-        $samplesPayload = $run->samples->map(function (Sample $sample) use ($featureModelName, $labelMap, $labelType) {
-            // Determine numeric label
+        $splitBuckets = [1 => [], 2 => [], 3 => []]; // 1=train, 2=val, 3=test
+
+        foreach ($run->samples as $sample) {
+            $phase = (int) ($sample->pivot->training_phase ?? 1);
+
             $rawLabel = match ($labelType) {
                 'disease_type' => $sample->patientCase?->disease_type ?? 'unknown',
                 default        => $sample->category?->label_en ?? 'Unknown',
@@ -56,12 +57,21 @@ class TrainingJob implements ShouldQueue
                 $numericLabel = 0;
             }
 
-            return [
+            $entry = [
                 'sample_id'            => $sample->id,
                 'label'                => (int) $numericLabel,
+                'training_phase'       => $phase,
                 'gdrive_features_path' => $sample->features_gdrive_path ?? '',
             ];
-        })->values()->all();
+
+            $splitBuckets[$phase][] = $entry;
+        }
+
+        $nTrain = count($splitBuckets[1]);
+        $nVal   = count($splitBuckets[2]);
+        $nTest  = count($splitBuckets[3]);
+
+        Log::info("[TrainingJob] Run #{$run->id} split — Train:{$nTrain} Val:{$nVal} Test:{$nTest}");
 
         // ── Build training params ─────────────────────────────────────────────
         $trainingParams = [
@@ -75,7 +85,12 @@ class TrainingJob implements ShouldQueue
         $payload = [
             'run_id'           => $run->id,
             'feature_model'    => $featureModelName,
-            'samples'          => $samplesPayload,
+            // Explicit three-way split — no random splitting on the server side
+            'samples_train'    => $splitBuckets[1],
+            'samples_val'      => $splitBuckets[2],
+            'samples_test'     => $splitBuckets[3],
+            // Legacy flat array kept for backward compatibility (same data, tagged)
+            'samples'          => array_merge($splitBuckets[1], $splitBuckets[2], $splitBuckets[3]),
             'training_params'  => $trainingParams,
             'gdrive_output_dir' => $run->gdrive_output_dir ?? "training/CLAM/run_{$run->id}",
         ];

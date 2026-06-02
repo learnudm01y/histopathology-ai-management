@@ -418,9 +418,27 @@
                             </div>
                         </div>
 
+                        {{-- ── Split Summary Bar ──────────────────────────────────────────── --}}
+                        <div class="d-flex align-items-center flex-wrap gap-2 mb-2 p-2 bg-light rounded border" id="trSplitSummary" style="display:none!important;">
+                            <strong class="mr-2"><i class="mdi mdi-format-list-bulleted-square mr-1"></i>Split Summary:</strong>
+                            <span class="badge badge-success px-2 py-1 mr-1">Train: <span id="cntTrain">0</span></span>
+                            <span class="badge badge-primary px-2 py-1 mr-1">Val: <span id="cntVal">0</span></span>
+                            <span class="badge badge-warning text-dark px-2 py-1 mr-1">Test: <span id="cntTest">0</span></span>
+                            <span class="badge badge-secondary px-2 py-1 mr-2">Unassigned: <span id="cntUnassigned">0</span></span>
+                            <span id="trSplitError" class="text-danger small font-weight-bold" style="display:none;"></span>
+                        </div>
+
+                        {{-- ── Bulk-assign buttons ─────────────────────────────────────────── --}}
+                        <div class="d-flex align-items-center flex-wrap mb-2 small" id="trBulkBtns" style="display:none!important;">
+                            <span class="text-muted mr-2">Set all checked →</span>
+                            <button type="button" class="btn btn-sm btn-success mr-1" id="bulkTrain">All → Train</button>
+                            <button type="button" class="btn btn-sm btn-primary mr-1" id="bulkVal">All → Val</button>
+                            <button type="button" class="btn btn-sm btn-warning mr-1 text-dark" id="bulkTest">All → Test</button>
+                        </div>
+
                         {{-- Eligible samples table (feature_extraction_status = completed) --}}
                         <div class="table-responsive mt-3" style="max-height:400px; overflow-y:auto;">
-                            <table class="table table-sm table-hover">
+                            <table class="table table-sm table-hover" id="trSamplesTable">
                                 <thead class="thead-light">
                                     <tr>
                                         <th style="width:40px;">
@@ -433,6 +451,9 @@
                                         <th>Disease Type</th>
                                         <th>Feature Model</th>
                                         <th>GDrive Features</th>
+                                        <th style="min-width:180px;">
+                                            <i class="mdi mdi-call-split mr-1"></i>Split
+                                        </th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -449,12 +470,18 @@
                                             ->get();
                                     @endphp
                                     @forelse($trainingEligible as $s)
-                                        <tr>
+                                        <tr data-case-id="{{ $s->patient_case_id ?? '' }}" data-sample-id="{{ $s->id }}">
                                             <td>
                                                 <input type="checkbox"
                                                        name="sample_ids[]"
                                                        value="{{ $s->id }}"
                                                        class="tr-sample-cb">
+                                                {{-- Hidden phase input — value set by JS --}}
+                                                <input type="hidden"
+                                                       name="sample_phases[{{ $s->id }}]"
+                                                       value=""
+                                                       class="tr-phase-input"
+                                                       id="phase_{{ $s->id }}">
                                             </td>
                                             <td>{{ $s->id }}</td>
                                             <td class="text-truncate" style="max-width:180px;">{{ $s->file_name }}</td>
@@ -471,10 +498,19 @@
                                             <td class="text-truncate" style="max-width:200px;">
                                                 <small class="text-muted">{{ $s->features_gdrive_path ?? '—' }}</small>
                                             </td>
+                                            <td>
+                                                {{-- Split button group — visible only when row is checked --}}
+                                                <div class="btn-group btn-group-sm tr-split-group" id="splitBtns_{{ $s->id }}" style="display:none;">
+                                                    <button type="button" class="btn btn-outline-success btn-phase" data-phase="1" data-sample="{{ $s->id }}" title="Train">Train</button>
+                                                    <button type="button" class="btn btn-outline-primary btn-phase" data-phase="2" data-sample="{{ $s->id }}" title="Validation">Val</button>
+                                                    <button type="button" class="btn btn-outline-warning btn-phase text-dark" data-phase="3" data-sample="{{ $s->id }}" title="Test">Test</button>
+                                                </div>
+                                                <small class="tr-phase-label text-muted" id="phaseLabel_{{ $s->id }}"></small>
+                                            </td>
                                         </tr>
                                     @empty
                                         <tr>
-                                            <td colspan="8" class="text-center text-muted py-3">
+                                            <td colspan="9" class="text-center text-muted py-3">
                                                 No eligible samples.
                                                 Samples need <code>feature_extraction_status = completed</code>
                                                 and a GDrive features path.
@@ -1090,31 +1126,184 @@
         if (feMod) feMod.addEventListener('change', feUpdate);
         feUpdate();
 
-        // ── Training selection tracker ────────────────────────────────────────
-        var trAll  = document.getElementById('trSelectAll');
-        var trCbs  = document.querySelectorAll('.tr-sample-cb');
-        var trBtn  = document.getElementById('trExecuteBtn');
-        var trCnt  = document.getElementById('trSelectedCount');
-        var trSrv  = document.getElementById('trSelectServer');
-        var trHead = document.getElementById('trSelectHead');
-        var trFeat = document.getElementById('trSelectFeat');
+        // ── Training: Split management ────────────────────────────────────────
+        var trAll     = document.getElementById('trSelectAll');
+        var trCbs     = document.querySelectorAll('.tr-sample-cb');
+        var trBtn     = document.getElementById('trExecuteBtn');
+        var trCnt     = document.getElementById('trSelectedCount');
+        var trSrv     = document.getElementById('trSelectServer');
+        var trHead    = document.getElementById('trSelectHead');
+        var trFeat    = document.getElementById('trSelectFeat');
+        var splitSummary = document.getElementById('trSplitSummary');
+        var bulkBtns     = document.getElementById('trBulkBtns');
 
+        var PHASE_LABELS = {1: 'Train', 2: 'Val', 3: 'Test'};
+        var PHASE_CLASSES = {1: 'btn-success', 2: 'btn-primary', 3: 'btn-warning'};
+        var PHASE_OUTLINE = {1: 'btn-outline-success', 2: 'btn-outline-primary', 3: 'btn-outline-warning'};
+
+        /** Update the split summary bar and enable/disable Dispatch button */
         function trUpdate() {
-            var checked = Array.from(trCbs).filter(function(cb){ return cb.checked; }).length;
-            if (trCnt) trCnt.textContent = String(checked);
-            var ready = checked >= 2
-                     && trSrv  && trSrv.value
-                     && trHead && trHead.value
-                     && trFeat && trFeat.value;
+            var checked = Array.from(trCbs).filter(function(cb){ return cb.checked; });
+            var nTrain = 0, nVal = 0, nTest = 0, nUnassigned = 0;
+
+            checked.forEach(function(cb) {
+                var id = cb.value;
+                var phaseInput = document.getElementById('phase_' + id);
+                var phase = phaseInput ? parseInt(phaseInput.value) : 0;
+                if (phase === 1) nTrain++;
+                else if (phase === 2) nVal++;
+                else if (phase === 3) nTest++;
+                else nUnassigned++;
+            });
+
+            if (trCnt) trCnt.textContent = String(checked.length);
+            document.getElementById('cntTrain').textContent      = nTrain;
+            document.getElementById('cntVal').textContent        = nVal;
+            document.getElementById('cntTest').textContent       = nTest;
+            document.getElementById('cntUnassigned').textContent = nUnassigned;
+
+            var errEl = document.getElementById('trSplitError');
+
+            // Show summary / bulk bar only when at least one sample is checked
+            if (checked.length > 0) {
+                splitSummary.style.setProperty('display', 'flex', 'important');
+                bulkBtns.style.setProperty('display', 'flex', 'important');
+            } else {
+                splitSummary.style.setProperty('display', 'none', 'important');
+                bulkBtns.style.setProperty('display', 'none', 'important');
+            }
+
+            // Validate
+            var error = '';
+            if (nUnassigned > 0) {
+                error = nUnassigned + ' sample(s) are not yet assigned to a split.';
+            } else if (nTrain < 1) {
+                error = 'At least 1 Train sample is required.';
+            } else if (nVal < 1) {
+                error = 'At least 1 Validation sample is required.';
+            }
+
+            // Leakage check: same case_id in multiple splits
+            if (!error) {
+                var casePhaseMap = {};
+                checked.forEach(function(cb) {
+                    var row = cb.closest('tr');
+                    var caseId = row ? row.dataset.caseId : '';
+                    if (!caseId) return;
+                    var phase = parseInt(document.getElementById('phase_' + cb.value).value) || 0;
+                    if (casePhaseMap[caseId] !== undefined && casePhaseMap[caseId] !== phase) {
+                        error = 'Data leakage: samples from the same case are in different splits!';
+                    }
+                    casePhaseMap[caseId] = phase;
+                });
+            }
+
+            if (errEl) {
+                if (error) {
+                    errEl.textContent = '⚠ ' + error;
+                    errEl.style.display = '';
+                } else {
+                    errEl.textContent = '';
+                    errEl.style.display = 'none';
+                }
+            }
+
+            var serverOk = trSrv  && trSrv.value;
+            var headOk   = trHead && trHead.value;
+            var featOk   = trFeat && trFeat.value;
+            var ready = checked.length >= 2 && !error && serverOk && headOk && featOk;
             if (trBtn) trBtn.disabled = !ready;
         }
+
+        /** Assign a phase to a row and update its button visuals */
+        function assignPhase(sampleId, phase) {
+            var phaseInput = document.getElementById('phase_' + sampleId);
+            if (phaseInput) phaseInput.value = phase;
+
+            var labelEl = document.getElementById('phaseLabel_' + sampleId);
+            if (labelEl) {
+                labelEl.textContent = '';   // hide text label; buttons show state
+            }
+
+            // Update button active state
+            var group = document.getElementById('splitBtns_' + sampleId);
+            if (!group) return;
+            group.querySelectorAll('.btn-phase').forEach(function(btn) {
+                var btnPhase = parseInt(btn.dataset.phase);
+                // Remove all active classes first
+                btn.classList.remove('btn-success', 'btn-primary', 'btn-warning');
+                btn.classList.remove('btn-outline-success', 'btn-outline-primary', 'btn-outline-warning');
+                // Re-apply correct state
+                if (btnPhase === phase) {
+                    btn.classList.add(PHASE_CLASSES[btnPhase]);
+                } else {
+                    btn.classList.add(PHASE_OUTLINE[btnPhase]);
+                }
+            });
+        }
+
+        /** Toggle checkbox and split button group visibility */
+        function handleRowCheck(cb) {
+            var id = cb.value;
+            var group = document.getElementById('splitBtns_' + id);
+            if (group) group.style.display = cb.checked ? '' : 'none';
+            if (!cb.checked) {
+                // Clear phase when deselected
+                var phaseInput = document.getElementById('phase_' + id);
+                if (phaseInput) phaseInput.value = '';
+                // Reset buttons to outline
+                if (group) {
+                    group.querySelectorAll('.btn-phase').forEach(function(btn) {
+                        var btnPhase = parseInt(btn.dataset.phase);
+                        btn.classList.remove('btn-success', 'btn-primary', 'btn-warning');
+                        btn.classList.add(PHASE_OUTLINE[btnPhase]);
+                    });
+                }
+            }
+        }
+
+        // ── Wire up events ────────────────────────────────────────────────────
         if (trAll) {
             trAll.addEventListener('change', function(e) {
-                trCbs.forEach(function(cb){ cb.checked = e.target.checked; });
+                trCbs.forEach(function(cb){
+                    cb.checked = e.target.checked;
+                    handleRowCheck(cb);
+                });
                 trUpdate();
             });
         }
-        trCbs.forEach(function(cb){ cb.addEventListener('change', trUpdate); });
+
+        trCbs.forEach(function(cb){
+            cb.addEventListener('change', function() {
+                handleRowCheck(cb);
+                trUpdate();
+            });
+        });
+
+        // Phase buttons
+        document.addEventListener('click', function(e) {
+            if (e.target && e.target.classList.contains('btn-phase')) {
+                var phase    = parseInt(e.target.dataset.phase);
+                var sampleId = e.target.dataset.sample;
+                assignPhase(sampleId, phase);
+                trUpdate();
+            }
+        });
+
+        // Bulk assignment buttons
+        document.getElementById('bulkTrain') && document.getElementById('bulkTrain').addEventListener('click', function(){
+            trCbs.forEach(function(cb){ if (cb.checked) assignPhase(cb.value, 1); });
+            trUpdate();
+        });
+        document.getElementById('bulkVal') && document.getElementById('bulkVal').addEventListener('click', function(){
+            trCbs.forEach(function(cb){ if (cb.checked) assignPhase(cb.value, 2); });
+            trUpdate();
+        });
+        document.getElementById('bulkTest') && document.getElementById('bulkTest').addEventListener('click', function(){
+            trCbs.forEach(function(cb){ if (cb.checked) assignPhase(cb.value, 3); });
+            trUpdate();
+        });
+
         if (trSrv)  trSrv.addEventListener('change',  trUpdate);
         if (trHead) trHead.addEventListener('change', trUpdate);
         if (trFeat) trFeat.addEventListener('change', trUpdate);
@@ -1123,7 +1312,14 @@
         // ── Label-map: serialise to JSON on submit ────────────────────────────
         var trForm = document.getElementById('trainingForm');
         if (trForm) {
-            trForm.addEventListener('submit', function() {
+            trForm.addEventListener('submit', function(e) {
+                // Final client-side guard
+                var errEl = document.getElementById('trSplitError');
+                if (errEl && errEl.textContent) {
+                    e.preventDefault();
+                    alert(errEl.textContent);
+                    return;
+                }
                 var rows = document.querySelectorAll('.label-map-row');
                 var map  = {};
                 rows.forEach(function(row) {

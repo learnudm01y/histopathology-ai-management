@@ -119,23 +119,26 @@ class OperationsController extends Controller
      * Create and dispatch a CLAM training run.
      *
      * Expects POST body:
-     *   sample_ids[]       — array of sample IDs (must have feature_extraction_status = "completed")
-     *   server_id          — ID of the CLAM training server (servers_names)
-     *   training_head_id   — ID of the CLAM model in ai_models
-     *   feature_model_id   — ID of the feature extraction model used (TITAN/Virchow2)
-     *   label_type         — 'category' | 'disease_type'
-     *   label_map          — JSON string: { "0": "Normal", "1": "Malignant" }
-     *   model_type         — 'clam_sb' | 'clam_mb'
-     *   epochs             — int
-     *   learning_rate      — float
-     *   bag_size           — int (-1 = no limit)
-     *   gdrive_output_dir  — GDrive output path (optional)
+     *   sample_ids[]          — array of sample IDs (must have feature_extraction_status = "completed")
+     *   sample_phases[{id}]   — training_phase for each sample: 1=train, 2=val, 3=test
+     *   server_id             — ID of the CLAM training server (servers_names)
+     *   training_head_id      — ID of the CLAM model in ai_models
+     *   feature_model_id      — ID of the feature extraction model used (TITAN/Virchow2)
+     *   label_type            — 'category' | 'disease_type'
+     *   label_map             — JSON string: { "0": "Normal", "1": "Malignant" }
+     *   model_type            — 'clam_sb' | 'clam_mb'
+     *   epochs                — int
+     *   learning_rate         — float
+     *   bag_size              — int (-1 = no limit)
+     *   gdrive_output_dir     — GDrive output path (optional)
      */
     public function dispatchTraining(Request $request): RedirectResponse
     {
         $validated = $request->validate([
             'sample_ids'        => ['required', 'array', 'min:2'],
             'sample_ids.*'      => ['integer', 'exists:samples,id'],
+            'sample_phases'     => ['required', 'array'],
+            'sample_phases.*'   => ['integer', 'in:1,2,3'],
             'server_id'         => ['required', 'integer', 'exists:servers_names,id'],
             'training_head_id'  => ['required', 'integer', 'exists:ai_models,id'],
             'feature_model_id'  => ['required', 'integer', 'exists:ai_models,id'],
@@ -149,13 +152,56 @@ class OperationsController extends Controller
             'gdrive_output_dir' => ['nullable', 'string', 'max:255'],
         ]);
 
-        // Decode and validate label_map
+        // ── Decode and validate label_map ─────────────────────────────────────
         $labelMap = json_decode($validated['label_map'], true);
         if (! is_array($labelMap) || count($labelMap) < 2) {
             return redirect()->back()->withErrors(['label_map' => 'Label map must have at least 2 classes.']);
         }
 
-        // Only include samples with completed feature extraction
+        // ── Build phase map keyed by sample_id ────────────────────────────────
+        $phaseMap = $validated['sample_phases']; // [sample_id => 1|2|3]
+
+        // Every selected sample must have a phase assigned
+        $missingPhase = array_filter($validated['sample_ids'], fn($id) => ! isset($phaseMap[$id]));
+        if (! empty($missingPhase)) {
+            return redirect()->back()->withErrors([
+                'sample_phases' => 'Every selected sample must be assigned to Train, Val, or Test. ' . count($missingPhase) . ' sample(s) are unassigned.',
+            ]);
+        }
+
+        // Must have at least 1 Train sample and at least 1 Val sample
+        $phaseValues = array_intersect_key($phaseMap, array_flip($validated['sample_ids']));
+        $nTrain = count(array_filter($phaseValues, fn($p) => $p == 1));
+        $nVal   = count(array_filter($phaseValues, fn($p) => $p == 2));
+
+        if ($nTrain < 1) {
+            return redirect()->back()->withErrors(['sample_phases' => 'At least 1 sample must be assigned to Train.']);
+        }
+        if ($nVal < 1) {
+            return redirect()->back()->withErrors(['sample_phases' => 'At least 1 sample must be assigned to Validation.']);
+        }
+
+        // ── Data-leakage guard: no case_id may span multiple splits ──────────
+        $samplesWithCases = Sample::whereIn('id', $validated['sample_ids'])
+            ->with('patientCase:id,case_id')
+            ->get(['id', 'patient_case_id']);
+
+        $casePhaseMap = []; // case_id => first_phase_seen
+        foreach ($samplesWithCases as $s) {
+            $caseId = $s->patient_case_id;
+            if (! $caseId) {
+                continue;
+            }
+            $phase = (int) $phaseMap[$s->id];
+            if (isset($casePhaseMap[$caseId]) && $casePhaseMap[$caseId] !== $phase) {
+                return redirect()->back()->withErrors([
+                    'sample_phases' => "Data leakage detected: samples from the same case (case_id={$s->patientCase?->case_id}) are assigned to different splits. All samples from a case must belong to the same split.",
+                ]);
+            }
+            $casePhaseMap[$caseId] = $phase;
+        }
+
+        // ── Only include samples with completed feature extraction ─────────────
         $eligibleSampleIds = Sample::whereIn('id', $validated['sample_ids'])
             ->where('feature_extraction_status', 'completed')
             ->whereNotNull('features_gdrive_path')
@@ -170,7 +216,18 @@ class OperationsController extends Controller
             ]);
         }
 
-        // Create the training run record
+        // ── Ensure we still have at least 1 train + 1 val after eligibility filter ──
+        $eligiblePhases = array_intersect_key($phaseValues, array_flip($eligibleSampleIds));
+        $nTrainEligible = count(array_filter($eligiblePhases, fn($p) => $p == 1));
+        $nValEligible   = count(array_filter($eligiblePhases, fn($p) => $p == 2));
+
+        if ($nTrainEligible < 1 || $nValEligible < 1) {
+            return redirect()->back()->withErrors([
+                'sample_ids' => 'After eligibility filtering, at least 1 Train sample and 1 Val sample with completed feature extraction are required.',
+            ]);
+        }
+
+        // ── Create the training run record ────────────────────────────────────
         $run = TrainingRun::create([
             'training_head_id'  => $validated['training_head_id'],
             'feature_model_id'  => $validated['feature_model_id'],
@@ -192,13 +249,21 @@ class OperationsController extends Controller
             $run->update(['gdrive_output_dir' => "training/CLAM/run_{$run->id}"]);
         }
 
-        // Attach samples to the run
-        $run->samples()->sync($eligibleSampleIds);
+        // ── Attach samples with their training_phase to the pivot ─────────────
+        $pivotData = [];
+        foreach ($eligibleSampleIds as $sampleId) {
+            $pivotData[$sampleId] = ['training_phase' => (int) ($phaseMap[$sampleId] ?? 1)];
+        }
+        $run->samples()->sync($pivotData);
 
-        // Dispatch the job
+        // ── Log split distribution ─────────────────────────────────────────────
+        $nTest = count(array_filter($eligiblePhases, fn($p) => $p == 3));
+        \Illuminate\Support\Facades\Log::info("[TrainingDispatch] Run #{$run->id} — split: Train={$nTrainEligible} | Val={$nValEligible} | Test={$nTest}");
+
+        // ── Dispatch the job ──────────────────────────────────────────────────
         TrainingJob::dispatch($run->id);
 
-        $msg = "Training run #{$run->id} dispatched with {$run->sample_count} samples.";
+        $msg = "Training run #{$run->id} dispatched ({$nTrainEligible} train / {$nValEligible} val / {$nTest} test).";
         if ($skipped > 0) {
             $msg .= " {$skipped} sample(s) skipped (features not ready).";
         }
