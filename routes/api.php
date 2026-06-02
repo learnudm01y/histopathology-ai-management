@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\V1\FeatureExtractionApiController;
+use App\Http\Controllers\Api\V1\InferenceApiController;
 use App\Http\Controllers\Api\V1\TrainingApiController;
 use Illuminate\Support\Facades\Route;
 
@@ -55,5 +56,13 @@ Route::prefix('v1')
                 ->name('api.training.progress');
             Route::post('/report', [TrainingApiController::class, 'report'])
                 ->name('api.training.report');
+        });
+
+        // Inference callbacks — called by RunPod CLAM server after inference completes
+        Route::prefix('inference')->group(function () {
+            Route::post('/progress', [InferenceApiController::class, 'progress'])
+                ->name('api.inference.progress');
+            Route::post('/report', [InferenceApiController::class, 'report'])
+                ->name('api.inference.report');
         });
     });

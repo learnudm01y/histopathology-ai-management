@@ -35,10 +35,10 @@
             </a>
         </li>
 
-        <li class="nav-item {{ $routeName === 'admin.output' ? 'active' : '' }}">
-            <a class="nav-link" href="{{ route('admin.output') }}">
-                <i class="menu-icon typcn typcn-document"></i>
-                <span class="menu-title">Output</span>
+        <li class="nav-item {{ $routeName === 'admin.ai-diagnosis-test' ? 'active' : '' }}">
+            <a class="nav-link" href="{{ route('admin.ai-diagnosis-test') }}">
+                <i class="menu-icon mdi mdi-flask-outline"></i>
+                <span class="menu-title">AI - Diagnosis Test</span>
             </a>
         </li>
 

@@ -5,6 +5,7 @@ use App\Http\Controllers\Admin\BulkDeleteController;
 use App\Http\Controllers\Admin\CasesController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\ImportsController;
+use App\Http\Controllers\Admin\InferenceController;
 use App\Http\Controllers\Admin\OperationsController;
 use App\Http\Controllers\Admin\WsiPreviewController;
 use App\Http\Controllers\Admin\Settings\AiModelsController;
@@ -70,7 +71,12 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::post('workflow/dispatch/patch-extraction', [OperationsController::class, 'dispatchPatchExtraction'])->name('workflow.dispatch.patch-extraction');
         Route::post('workflow/dispatch/feature-extraction', [OperationsController::class, 'dispatchFeatureExtraction'])->name('workflow.dispatch.feature-extraction');
         Route::post('workflow/dispatch/training', [OperationsController::class, 'dispatchTraining'])->name('workflow.dispatch.training');
-        Route::get('output', [DashboardController::class, 'output'])->name('output');
+
+        // AI Diagnosis Test (formerly 'output')
+        Route::get('ai-diagnosis-test', [InferenceController::class, 'index'])->name('ai-diagnosis-test');
+        Route::post('ai-diagnosis-test/dispatch', [InferenceController::class, 'dispatch'])->name('ai-diagnosis-test.dispatch');
+        Route::get('ai-diagnosis-test/samples-for-run/{trainingRun}', [InferenceController::class, 'samplesForRun'])->name('ai-diagnosis-test.samples-for-run');
+        Route::get('ai-diagnosis-test/{inferenceRun}/status', [InferenceController::class, 'status'])->name('ai-diagnosis-test.status');
 
         // Cases (patients) — clinical case browser
         Route::get('cases',          [CasesController::class, 'index'])->name('cases.index');

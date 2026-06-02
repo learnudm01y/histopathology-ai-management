@@ -1102,10 +1102,8 @@ class DashboardController extends Controller
         ]);
     }
 
-    public function output(): View
-    {
-        return view('admin.output');
-    }
+    // output() removed — replaced by InferenceController::index()
+    // Route: GET /admin/ai-diagnosis-test → admin.ai-diagnosis-test
 
     // ─────────────────────────────────────────────────────────────────────────
     //  Private helpers for GDC linkage during bulk upload
