@@ -333,6 +333,7 @@ class DashboardController extends Controller
                         'organ_id'            => $validated['organ_id'],
                         'data_source_id'      => $validated['data_source_id'] ?? null,
                         'category_id'         => $validated['category_id'] ?? null,
+                        'disease_subtype_id'  => $validated['disease_subtype_id'] ?? null,
                         'disease_subtype'     => $subtypeName ?: null,
                         'tissue_name'         => $tissueName ? $tissueName . $entitySubmitterId . '/' : null,
                         'training_phase'      => $validated['training_phase'] ?? null,
@@ -403,6 +404,7 @@ class DashboardController extends Controller
                     'organ_id'            => $validated['organ_id'],
                     'data_source_id'      => $validated['data_source_id'] ?? null,
                     'category_id'         => $validated['category_id'] ?? null,
+                    'disease_subtype_id'  => $validated['disease_subtype_id'] ?? null,
                     'disease_subtype'     => $subtypeName ?: null,
                     'tissue_name'         => $tissueName ? $tissueName . $entitySubmitterId . '/' : null,
                     'training_phase'      => $validated['training_phase'] ?? null,
@@ -518,6 +520,7 @@ class DashboardController extends Controller
             'organ_id'            => $validated['organ_id'],
             'data_source_id'      => $validated['data_source_id'] ?? null,
             'category_id'         => $validated['category_id'] ?? null,
+            'disease_subtype_id'  => $validated['disease_subtype_id'] ?? null,
             'disease_subtype'     => $subtypeName ?: null,
             'tissue_name'         => $tissueName,
             'training_phase'      => $validated['training_phase'] ?? null,
@@ -718,11 +721,23 @@ class DashboardController extends Controller
             'notes'                  => 'nullable|string',
         ]);
 
+        // Keep the FK in sync with the (display) name the form posts, so
+        // fine-grained training always sees a stable leaf-class identity.
+        $subtypeName = trim((string) $request->disease_subtype);
+        $subtypeId   = null;
+        if ($subtypeName !== '') {
+            $subtypeId = DiseaseSubtype::query()
+                ->where('name', $subtypeName)
+                ->when($request->category_id, fn($q) => $q->where('category_id', $request->category_id))
+                ->value('id');
+        }
+
         $sample->update([
             'organ_id'                 => $request->organ_id,
             'data_source_id'           => $request->data_source_id,
             'category_id'              => $request->category_id,
-            'disease_subtype'          => $request->disease_subtype,
+            'disease_subtype_id'       => $subtypeId,
+            'disease_subtype'          => $subtypeName !== '' ? $subtypeName : null,
             'stain_id'                 => $request->stain_id ?: null,
             'stain_marker'             => $request->stain_marker,
             'entity_submitter_id'      => $request->entity_submitter_id,

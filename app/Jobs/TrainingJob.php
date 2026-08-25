@@ -39,32 +39,51 @@ class TrainingJob implements ShouldQueue
         }
 
         // ── Build sample payload split into train / val / test ───────────────
+        //
+        // Labels are NOT derived here. They were resolved once at dispatch time
+        // (OperationsController + TrainingLabelResolver) and frozen into the
+        // pivot, so a run is reproducible and a sample edited after dispatch
+        // cannot silently change what the model was trained on.
         $featureModelName = $run->featureModel?->name ?? 'TITAN';
-        $labelType        = $run->label_type;
-        $labelMap         = $run->label_map ?? [];   // int → label string
+        $isHierarchical   = $run->isHierarchical();
 
         $splitBuckets = [1 => [], 2 => [], 3 => []]; // 1=train, 2=val, 3=test
+        $unlabelled   = [];
 
         foreach ($run->samples as $sample) {
             $phase = (int) ($sample->pivot->training_phase ?? 1);
+            $label = $sample->pivot->label;
 
-            $rawLabel = match ($labelType) {
-                'disease_type' => $sample->patientCase?->disease_type ?? 'unknown',
-                default        => $sample->category?->label_en ?? 'Unknown',
-            };
-            $numericLabel = array_search($rawLabel, $labelMap, true);
-            if ($numericLabel === false) {
-                $numericLabel = 0;
+            if ($label === null) {
+                // Legacy run created before labels were frozen into the pivot,
+                // or a corrupted attach. Fail loudly — never guess a class.
+                $unlabelled[] = $sample->id;
+                continue;
             }
 
             $entry = [
                 'sample_id'            => $sample->id,
-                'label'                => (int) $numericLabel,
+                'label'                => (int) $label,
                 'training_phase'       => $phase,
                 'gdrive_features_path' => $sample->features_gdrive_path ?? '',
             ];
 
+            if ($isHierarchical) {
+                $entry['parent_label'] = $sample->pivot->parent_label !== null
+                    ? (int) $sample->pivot->parent_label
+                    : -1;
+            }
+
             $splitBuckets[$phase][] = $entry;
+        }
+
+        if (! empty($unlabelled)) {
+            $ids   = implode(', ', array_slice($unlabelled, 0, 20));
+            $error = count($unlabelled) . " sample(s) in this run have no resolved label "
+                   . "(sample IDs: {$ids}). Re-create the run from the workflow page so labels are resolved.";
+            Log::error("[TrainingJob] Run #{$run->id} — {$error}");
+            $run->update(['status' => 'failed', 'error' => $error, 'finished_at' => now()]);
+            return;
         }
 
         $nTrain = count($splitBuckets[1]);
@@ -80,7 +99,20 @@ class TrainingJob implements ShouldQueue
             'learning_rate'      => (float) $run->learning_rate,
             'bag_size'           => $run->bag_size,
             'n_classes'          => $run->n_classes,
+            'use_class_weights'  => (bool) $run->use_class_weights,
         ];
+
+        if ($isHierarchical) {
+            $trainingParams['n_parent_classes'] = (int) $run->n_parent_classes;
+            $trainingParams['hier_weight']      = (float) $run->hier_weight;
+            $trainingParams['hierarchy_consistent_inference'] = (bool) $run->hierarchy_consistent_inference;
+            // Fine class index → coarse class index, as a dense list so the
+            // Python side never has to deal with JSON-object key ordering.
+            $trainingParams['child_to_parent'] = $this->denseChildToParent(
+                $run->child_to_parent ?? [],
+                (int) $run->n_classes
+            );
+        }
 
         $payload = [
             'run_id'           => $run->id,
@@ -93,6 +125,9 @@ class TrainingJob implements ShouldQueue
             'samples'          => array_merge($splitBuckets[1], $splitBuckets[2], $splitBuckets[3]),
             'training_params'  => $trainingParams,
             'gdrive_output_dir' => $run->gdrive_output_dir ?? "training/CLAM/run_{$run->id}",
+            // Sent for logging / checkpoint provenance on the training server
+            'label_map'        => array_values($run->label_map ?? []),
+            'parent_label_map' => $isHierarchical ? array_values($run->parent_label_map ?? []) : [],
         ];
 
         // ── Dispatch to RunPod CLAM server ────────────────────────────────────
@@ -114,6 +149,22 @@ class TrainingJob implements ShouldQueue
             Log::error("[TrainingJob] HTTP error dispatching run #{$run->id}: " . $e->getMessage());
             $run->update(['status' => 'failed', 'error' => $e->getMessage(), 'finished_at' => now()]);
         }
+    }
+
+    /**
+     * Turn { "0": 1, "2": 0 } into [1, -1, 0, …] of length n_classes.
+     * -1 means "no parent known" and is ignored by the coarse loss.
+     */
+    private function denseChildToParent(array $map, int $nClasses): array
+    {
+        $dense = array_fill(0, max(0, $nClasses), -1);
+        foreach ($map as $child => $parent) {
+            $c = (int) $child;
+            if ($c >= 0 && $c < $nClasses) {
+                $dense[$c] = (int) $parent;
+            }
+        }
+        return $dense;
     }
 
     public function failed(\Throwable $exception): void

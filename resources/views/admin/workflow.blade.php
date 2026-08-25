@@ -332,9 +332,13 @@
                                 <div class="form-group">
                                     <label for="trLabelType">Label Source</label>
                                     <select name="label_type" id="trLabelType" class="form-control" required>
-                                        <option value="category">Category</option>
+                                        <option value="category">Category (coarse)</option>
                                         <option value="disease_type">Disease Type</option>
+                                        <option value="disease_subtype">Disease Subtype — exact name (hierarchical)</option>
                                     </select>
+                                    <small class="form-text text-muted" id="trLabelTypeHint">
+                                        Coarse family-level classes.
+                                    </small>
                                 </div>
                             </div>
 
@@ -366,12 +370,13 @@
                                 </div>
                             </div>
 
-                            {{-- n_classes --}}
+                            {{-- Hierarchical loss weight --}}
                             <div class="col-md-2">
                                 <div class="form-group">
-                                    <label for="trNClasses">Num Classes</label>
-                                    <input type="number" name="n_classes" id="trNClasses" class="form-control"
-                                           value="2" min="2" max="10" required>
+                                    <label for="trHierWeight">Coarse Loss Weight</label>
+                                    <input type="number" name="hier_weight" id="trHierWeight" class="form-control"
+                                           value="0.3" min="0" max="1" step="0.05" disabled>
+                                    <small class="form-text text-muted">Family-level supervision (0 = off)</small>
                                 </div>
                             </div>
 
@@ -386,35 +391,28 @@
                             </div>
                         </div>
 
-                        {{-- Label map builder --}}
+                        {{-- ── Class map (derived from the selected samples) ───────────────── --}}
                         <div class="card bg-light mt-2 mb-3">
                             <div class="card-body py-2 px-3">
                                 <div class="d-flex justify-content-between align-items-center mb-1">
-                                    <strong><i class="mdi mdi-tag-multiple mr-1"></i>Class Label Map</strong>
-                                    <button type="button" class="btn btn-outline-secondary btn-sm" id="addLabelRow">
-                                        + Add Class
+                                    <strong><i class="mdi mdi-tag-multiple mr-1"></i>Training Classes</strong>
+                                    <button type="button" class="btn btn-outline-primary btn-sm" id="trDetectClasses">
+                                        <i class="mdi mdi-refresh mr-1"></i>Detect from selected samples
                                     </button>
                                 </div>
                                 <small class="text-muted d-block mb-2">
-                                    Map numeric class index (0, 1, …) to human-readable label.
-                                    The label must match the value in the <code>label_type</code> column for each sample.
+                                    Classes are read from the database for exactly the slides you selected —
+                                    no hand-typed label map, so a mismatch can never silently relabel a slide.
+                                    Pick <code>Disease Subtype</code> above to train on the exact disease name.
                                 </small>
-                                <div id="labelMapContainer">
-                                    <div class="input-group mb-1 label-map-row" data-idx="0">
-                                        <div class="input-group-prepend"><span class="input-group-text">0</span></div>
-                                        <input type="text" class="form-control label-map-text" placeholder="e.g. Normal" required>
-                                        <div class="input-group-append">
-                                            <button class="btn btn-outline-danger btn-sm remove-label-row" type="button">✕</button>
-                                        </div>
-                                    </div>
-                                    <div class="input-group mb-1 label-map-row" data-idx="1">
-                                        <div class="input-group-prepend"><span class="input-group-text">1</span></div>
-                                        <input type="text" class="form-control label-map-text" placeholder="e.g. Malignant" required>
-                                        <div class="input-group-append">
-                                            <button class="btn btn-outline-danger btn-sm remove-label-row" type="button">✕</button>
-                                        </div>
-                                    </div>
+
+                                <div id="trClassPreview" class="small text-muted">
+                                    Select samples and choose a label source, then press
+                                    <em>Detect from selected samples</em>.
                                 </div>
+
+                                {{-- Kept for backward compatibility: left blank, the server derives the map. --}}
+                                <input type="hidden" name="use_class_weights" value="1">
                             </div>
                         </div>
 
@@ -1309,57 +1307,140 @@
         if (trFeat) trFeat.addEventListener('change', trUpdate);
         trUpdate();
 
-        // ── Label-map: serialise to JSON on submit ────────────────────────────
-        var trForm = document.getElementById('trainingForm');
-        if (trForm) {
-            trForm.addEventListener('submit', function(e) {
-                // Final client-side guard
-                var errEl = document.getElementById('trSplitError');
-                if (errEl && errEl.textContent) {
-                    e.preventDefault();
-                    alert(errEl.textContent);
+    // ── Label source: hint text + hierarchical controls ───────────────────
+    var trLabelType  = document.getElementById('trLabelType');
+    var trHierWeight = document.getElementById('trHierWeight');
+    var trHint       = document.getElementById('trLabelTypeHint');
+    var trPreview    = document.getElementById('trClassPreview');
+
+    var HINTS = {
+        category:        'Coarse family-level classes (e.g. Normal / Tumor).',
+        disease_type:    'Free-text diagnosis carried on the patient case.',
+        disease_subtype: 'Exact disease name (taxonomy leaf) + its category as an auxiliary coarse head.'
+    };
+
+    function syncLabelTypeUI() {
+        if (!trLabelType) return;
+        var t = trLabelType.value;
+        if (trHint) trHint.textContent = HINTS[t] || '';
+        if (trHierWeight) {
+            trHierWeight.disabled = (t !== 'disease_subtype');
+            if (trHierWeight.disabled) { trHierWeight.value = '0'; }
+            else if (trHierWeight.value === '0') { trHierWeight.value = '0.3'; }
+        }
+        if (trPreview) {
+            trPreview.innerHTML = '<span class="text-muted">Label source changed — press '
+                + '<em>Detect from selected samples</em> to refresh the class list.</span>';
+        }
+    }
+
+    if (trLabelType) {
+        trLabelType.addEventListener('change', syncLabelTypeUI);
+        syncLabelTypeUI();
+    }
+
+    // ── Detect the real classes for the current selection ─────────────────
+    function selectedTrainingSampleIds() {
+        var ids = [];
+        document.querySelectorAll('.tr-sample-cb:checked').forEach(function (cb) {
+            ids.push(cb.value);
+        });
+        if (!ids.length) {
+            document.querySelectorAll('#trainingForm input[name="sample_ids[]"]').forEach(function (el) {
+                if (el.type !== 'checkbox' || el.checked) ids.push(el.value);
+            });
+        }
+        return ids;
+    }
+
+    var detectBtn = document.getElementById('trDetectClasses');
+    if (detectBtn) {
+        detectBtn.addEventListener('click', function () {
+            var ids = selectedTrainingSampleIds();
+            if (!ids.length) {
+                trPreview.innerHTML = '<span class="text-danger">Select at least one sample first.</span>';
+                return;
+            }
+
+            var token = document.querySelector('input[name="_token"]');
+            var body  = new FormData();
+            body.append('_token', token ? token.value : '');
+            body.append('label_type', trLabelType ? trLabelType.value : 'category');
+            ids.forEach(function (id) { body.append('sample_ids[]', id); });
+
+            trPreview.innerHTML = '<span class="text-muted">Detecting…</span>';
+
+            fetch('{{ route('admin.workflow.training.class-preview') }}', {
+                method: 'POST',
+                body: body,
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                credentials: 'same-origin'
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (!data.ok) {
+                    trPreview.innerHTML = '<span class="text-danger">'
+                        + (data.message || 'Could not detect classes.') + '</span>';
                     return;
                 }
-                var rows = document.querySelectorAll('.label-map-row');
-                var map  = {};
-                rows.forEach(function(row) {
-                    var idx   = row.dataset.idx;
-                    var input = row.querySelector('.label-map-text');
-                    var label = input ? input.value.trim() : '';
-                    if (label) map[idx] = label;
+
+                var html = '<div class="mb-1">'
+                    + '<span class="badge badge-dark mr-1">' + data.n_classes + ' classes</span>';
+                if (data.hierarchical) {
+                    html += '<span class="badge badge-info mr-1">'
+                         + data.n_parent_classes + ' parent classes — hierarchical</span>';
+                }
+                html += '<span class="badge badge-light border">' + data.eligible_count
+                     + ' eligible slides</span></div>';
+
+                if (data.unlabelled_count > 0) {
+                    html += '<div class="text-danger mb-1">'
+                         + data.unlabelled_count + ' selected slide(s) have no label for this source '
+                         + 'and will block dispatch — fix or deselect them.</div>';
+                }
+
+                html += '<table class="table table-sm table-bordered mb-0" style="font-size:.8rem;">'
+                     + '<thead class="thead-light"><tr><th style="width:60px;">Index</th>'
+                     + '<th>Class</th><th style="width:140px;">Parent</th>'
+                     + '<th style="width:80px;">Slides</th></tr></thead><tbody>';
+
+                data.classes.forEach(function (c) {
+                    var warn = c.count < 2 ? ' class="table-warning"' : '';
+                    html += '<tr' + warn + '><td>' + c.index + '</td><td>' + c.label + '</td>'
+                         + '<td class="text-muted">' + (c.parent || '—') + '</td>'
+                         + '<td>' + c.count + '</td></tr>';
                 });
-                var jsonField = document.getElementById('labelMapJson');
-                if (jsonField) jsonField.value = JSON.stringify(map);
-            });
-        }
+                html += '</tbody></table>';
+                html += '<small class="text-muted d-block mt-1">'
+                     + 'Rows highlighted in yellow have too few slides to appear in both Train and Val.'
+                     + '</small>';
 
-        // ── Label-map: add / remove rows dynamically ──────────────────────────
-        var addLabelBtn = document.getElementById('addLabelRow');
-        if (addLabelBtn) {
-            addLabelBtn.addEventListener('click', function() {
-                var container = document.getElementById('labelMapContainer');
-                var count = container.querySelectorAll('.label-map-row').length;
-                var row = document.createElement('div');
-                row.className = 'input-group mb-1 label-map-row';
-                row.dataset.idx = count;
-                row.innerHTML =
-                    '<div class="input-group-prepend"><span class="input-group-text">' + count + '</span></div>' +
-                    '<input type="text" class="form-control label-map-text" placeholder="Class label" required>' +
-                    '<div class="input-group-append"><button class="btn btn-outline-danger btn-sm remove-label-row" type="button">✕</button></div>';
-                container.appendChild(row);
-                row.querySelector('.remove-label-row').addEventListener('click', function(){ row.remove(); });
+                trPreview.innerHTML = html;
+            })
+            .catch(function () {
+                trPreview.innerHTML = '<span class="text-danger">Class detection request failed.</span>';
             });
-        }
-
-        // Remove pre-existing label rows
-        document.addEventListener('click', function(e) {
-            if (e.target && e.target.classList.contains('remove-label-row')) {
-                var row = e.target.closest('.label-map-row');
-                if (row) row.remove();
-            }
         });
+    }
 
-    })();
-    </script>
-    @endpush
+    // ── Final client-side guard on submit ─────────────────────────────────
+    // The label map itself is derived server-side from the database, so there
+    // is nothing to serialise here any more.
+    var trForm = document.getElementById('trainingForm');
+    if (trForm) {
+        trForm.addEventListener('submit', function (e) {
+            var errEl = document.getElementById('trSplitError');
+            if (errEl && errEl.textContent) {
+                e.preventDefault();
+                alert(errEl.textContent);
+                return;
+            }
+            var jsonField = document.getElementById('labelMapJson');
+            if (jsonField) jsonField.value = '';   // blank = derive from data
+        });
+    }
+
+})();
+</script>
+@endpush
 @endsection
