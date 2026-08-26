@@ -682,17 +682,6 @@
                         </div>
                         <div class="col-md-4">
                             <div class="form-group">
-                                <label>Training Phase</label>
-                                <select name="training_phase" class="form-control">
-                                    <option value="">— None —</option>
-                                    <option value="1" @selected(old('training_phase') == 1)>Phase 1</option>
-                                    <option value="2" @selected(old('training_phase') == 2)>Phase 2</option>
-                                    <option value="3" @selected(old('training_phase') == 3)>Phase 3</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="form-group">
                                 <label>Stain</label>
                                 <select name="stain_id" class="form-control @error('stain_id') is-invalid @enderror">
                                     <option value="">— None —</option>

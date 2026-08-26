@@ -428,10 +428,6 @@
                     <span class="text-muted" style="min-width:160px;font-size:.85rem;">Tissue Name</span>
                     <span class="small text-muted">{{ $sample->tissue_name ?? '—' }}</span>
                 </div>
-                <div class="d-flex border-bottom py-2">
-                    <span class="text-muted" style="min-width:160px;font-size:.85rem;">Training Phase</span>
-                    <span class="small">{{ $sample->training_phase ? 'Phase ' . $sample->training_phase : '—' }}</span>
-                </div>
                 <div class="d-flex py-2">
                     <span class="text-muted" style="min-width:160px;font-size:.85rem;">Usable</span>
                     @if($sample->is_usable)

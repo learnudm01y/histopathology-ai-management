@@ -19,13 +19,23 @@ Usage
         --input          /path/to/slide.svs \
         --output_dir     /path/to/patches/ \
         --patch_size     256 \
-        --level          0 \
+        --target_mpp     0.5 \
+        --max_patches    3000 \
         --overlap        0 \
         --format         png \
         --tissue_threshold 0.5 \
         --workers        4 \
         --save_coords \
         --overview
+
+Scale
+-----
+Patches are defined by PHYSICAL size via --target_mpp, not by a pyramid level.
+256 px at 0.5 mpp covers 128 um of tissue on every slide, whether the scanner
+recorded it at 20x (~0.5 mpp) or 40x (~0.25 mpp). The pyramid level is chosen
+automatically as the deepest one that needs no upsampling, and the region is then
+downscaled to --patch_size. Slides that declare no MPP are rejected unless
+--allow_missing_mpp is passed.
 
 Output JSON (stdout)
 --------------------
@@ -50,6 +60,7 @@ import json
 import logging
 import math
 import os
+import random
 import sys
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
@@ -95,6 +106,49 @@ log = logging.getLogger("patch_extract")
 
 Coord = Tuple[int, int, int, int]  # (x, y, w, h) at level-0 coordinates
 
+# Tissue masks are built at a fixed physical resolution rather than at
+# "whatever the last pyramid level happens to be", so mask granularity — and
+# therefore the tissue-fraction test that accepts or rejects a patch — is the
+# same on every slide.
+MASK_MPP = 32.0  # microns per pixel for the tissue mask
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Physical scale
+# ═════════════════════════════════════════════════════════════════════════════
+
+def read_base_mpp(slide: OpenSlide) -> Optional[float]:
+    """
+    Level-0 microns per pixel, or None when the slide does not declare it.
+
+    This is the value that makes a patch mean the same thing on every scanner: a
+    256 px patch covers 64 um on a 0.25 mpp slide but 128 um on a 0.5 mpp one.
+    """
+    for key in (openslide.PROPERTY_NAME_MPP_X, "openslide.mpp-x", "aperio.MPP"):
+        raw = slide.properties.get(key)
+        if raw:
+            try:
+                mpp = float(raw)
+                if mpp > 0:
+                    return mpp
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def pick_level_for_scale(slide: OpenSlide, scale: float) -> int:
+    """
+    Highest pyramid level whose downsample does not exceed *scale*.
+
+    Reading from that level and then downscaling to the requested patch size
+    avoids ever upsampling, which would invent detail that is not in the slide.
+    """
+    best = 0
+    for lvl, ds in enumerate(slide.level_downsamples):
+        if ds <= scale + 1e-6:
+            best = lvl
+    return best
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Tissue detection
@@ -102,29 +156,39 @@ Coord = Tuple[int, int, int, int]  # (x, y, w, h) at level-0 coordinates
 
 def build_tissue_mask(
     slide: OpenSlide,
-    thumb_level: int = -1,
+    base_mpp: Optional[float] = None,
     sat_threshold: int = 20,
+    use_otsu: bool = True,
     blur_ksize: int = 7,
     morph_ksize: int = 15,
     min_contour_area: float = 500.0,
 ) -> Tuple[np.ndarray, float]:
     """
-    Return a binary tissue mask at thumbnail resolution and the
-    downsampling factor (level0_pixels / thumbnail_pixels).
+    Return a binary tissue mask and the downsampling factor
+    (level0_pixels / mask_pixels).
 
     Pipeline:
         RGB → HSV → saturation channel → median blur → Otsu/threshold
         → morphological closing → contour filtering
     """
-    if thumb_level < 0:
-        thumb_level = slide.level_count - 1
+    W0, H0 = slide.level_dimensions[0]
 
-    thumb_size = slide.level_dimensions[thumb_level]
-    thumb_img  = np.array(slide.get_thumbnail(thumb_size))
+    # Target a fixed physical mask resolution when the slide declares its scale.
+    # Falling back to the smallest pyramid level (the previous behaviour) made
+    # the mask coarse on slides with many levels and fine on slides with few.
+    if base_mpp:
+        mask_scale = max(1.0, MASK_MPP / base_mpp)
+        thumb_w = max(1, int(round(W0 / mask_scale)))
+        thumb_h = max(1, int(round(H0 / mask_scale)))
+    else:
+        thumb_w, thumb_h = slide.level_dimensions[slide.level_count - 1]
 
-    # Downsampling factor from level-0 to thumbnail
-    ds_x = slide.level_dimensions[0][0] / thumb_size[0]
-    ds_y = slide.level_dimensions[0][1] / thumb_size[1]
+    thumb_img = np.array(slide.get_thumbnail((thumb_w, thumb_h)).convert("RGB"))
+    thumb_h_actual, thumb_w_actual = thumb_img.shape[:2]
+
+    # Downsampling factor from level-0 to the mask we actually got back
+    ds_x = W0 / float(thumb_w_actual)
+    ds_y = H0 / float(thumb_h_actual)
     ds   = (ds_x + ds_y) / 2.0
 
     # RGB → HSV, use saturation
@@ -136,8 +200,21 @@ def build_tissue_mask(
         blur_ksize += 1
     blurred = cv2.medianBlur(sat, blur_ksize)
 
-    # Threshold: use Otsu if tissue_threshold==0, else fixed
-    _, mask = cv2.threshold(blurred, sat_threshold, 255, cv2.THRESH_BINARY)
+    # Otsu adapts the cut to each slide's own staining intensity. The previous
+    # code documented an Otsu branch but never implemented one, so a single
+    # hard-coded saturation cut of 20 was applied to every slide: weakly stained
+    # sections lost real tissue, strongly stained ones let background through.
+    if use_otsu:
+        otsu_t, mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # Guard against a degenerate threshold on nearly-empty slides.
+        if otsu_t < 5 or otsu_t > 200:
+            log.warning("Otsu threshold %.0f looks degenerate; falling back to fixed %d",
+                        otsu_t, sat_threshold)
+            _, mask = cv2.threshold(blurred, sat_threshold, 255, cv2.THRESH_BINARY)
+        else:
+            log.info("Otsu saturation threshold: %.0f", otsu_t)
+    else:
+        _, mask = cv2.threshold(blurred, sat_threshold, 255, cv2.THRESH_BINARY)
 
     # Morphological closing to fill small holes
     if morph_ksize > 0:
@@ -152,10 +229,10 @@ def build_tissue_mask(
             cv2.drawContours(cleaned, [cnt], -1, 255, cv2.FILLED)
 
     log.info(
-        "Tissue mask built at level %d (%dx%d), downsample=%.1f, "
+        "Tissue mask built %dx%d px (~%.1f um/px), downsample=%.1f, "
         "tissue pixels=%d / total=%d (%.1f%%)",
-        thumb_level,
-        thumb_size[0], thumb_size[1],
+        thumb_w_actual, thumb_h_actual,
+        (base_mpp * ds) if base_mpp else float("nan"),
         ds,
         np.count_nonzero(cleaned),
         cleaned.size,
@@ -173,19 +250,23 @@ def generate_candidates(
     mask: np.ndarray,
     ds: float,
     patch_size: int,
-    level: int,
     overlap: int,
     tissue_threshold: float,
+    scale: float,
 ) -> List[Coord]:
     """
-    Slide a grid over the slide at the given level and return coordinates
-    (at level-0) of patches whose tissue mask coverage exceeds the threshold.
+    Slide a grid over the slide and return level-0 coordinates of patches whose
+    tissue mask coverage exceeds the threshold.
+
+    *scale* is level-0 pixels per output pixel (target_mpp / base_mpp), so the
+    grid is laid out in PHYSICAL units. The grid used to be derived from a fixed
+    pyramid level instead, which meant the same patch_size covered twice the
+    tissue on a 20x slide as on a 40x one — and both were then fed to a
+    foundation model expecting one scale.
     """
-    level_ds      = slide.level_downsamples[level]
-    # Effective stride at level-0
-    stride        = patch_size - overlap                  # patch pixels at requested level
-    stride_l0     = int(stride  * level_ds)
-    patch_size_l0 = int(patch_size * level_ds)
+    stride        = max(1, patch_size - overlap)           # output pixels
+    stride_l0     = max(1, int(round(stride * scale)))     # level-0 pixels
+    patch_size_l0 = max(1, int(round(patch_size * scale))) # level-0 pixels
 
     W0, H0 = slide.level_dimensions[0]
 
@@ -210,7 +291,10 @@ def generate_candidates(
             if ratio >= tissue_threshold:
                 candidates.append((x0, y0, patch_size_l0, patch_size_l0))
 
-    log.info("Grid generated: %d candidate patches (tissue≥%.0f%%)", len(candidates), tissue_threshold * 100)
+    log.info(
+        "Grid generated: %d candidate patches (tissue>=%.0f%%, %d level-0 px per patch)",
+        len(candidates), tissue_threshold * 100, patch_size_l0,
+    )
     return candidates
 
 
@@ -267,18 +351,33 @@ def _extract_worker(args: tuple) -> Optional[dict]:
     try:
         slide    = OpenSlide(slide_path)
         level_ds = slide.level_downsamples[level]
-        # Convert level-0 coordinates to level-N size
+        # Convert level-0 region size to a read size at the chosen level
         pw = max(1, int(round(w0 / level_ds)))
         ph = max(1, int(round(h0 / level_ds)))
 
         # Never load the full WSI; read only the required region
         pil_patch = slide.read_region((x0, y0), level, (pw, ph))
-        patch     = np.array(pil_patch.convert("RGB"))
+
+        # OpenSlide returns RGBA, where fully transparent means "outside the
+        # scanned area". convert("RGB") simply drops alpha, turning those pixels
+        # BLACK — which both corrupts edge patches and trips the black-patch
+        # filter. Composite onto white, which is what slide background is.
+        if pil_patch.mode == "RGBA":
+            background = Image.new("RGB", pil_patch.size, (255, 255, 255))
+            background.paste(pil_patch, mask=pil_patch.split()[3])
+            pil_patch = background
+        else:
+            pil_patch = pil_patch.convert("RGB")
+
+        patch = np.array(pil_patch)
         slide.close()
 
-        # Resize to exact patch_size if necessary (rounding artefacts)
+        # Downscale to the requested output size. INTER_AREA is the correct
+        # filter for shrinking (INTER_LINEAR aliases); INTER_CUBIC for the rare
+        # case where the chosen level forces a small upscale.
         if patch.shape[0] != patch_size or patch.shape[1] != patch_size:
-            patch = cv2.resize(patch, (patch_size, patch_size), interpolation=cv2.INTER_LINEAR)
+            interp = cv2.INTER_AREA if patch.shape[0] > patch_size else cv2.INTER_CUBIC
+            patch = cv2.resize(patch, (patch_size, patch_size), interpolation=interp)
 
         # Quality filters
         if is_white_patch(patch):
@@ -363,13 +462,18 @@ def run(
     slide_path: str,
     output_dir: str,
     patch_size: int = 256,
-    level: int = 0,
+    level: int = -1,
     overlap: int = 0,
     fmt: str = "png",
     tissue_threshold: float = 0.5,
     workers: int = 1,
     save_coords_flag: bool = False,
     overview_flag: bool = False,
+    target_mpp: float = 0.5,
+    allow_missing_mpp: bool = False,
+    max_patches: int = 0,
+    seed: int = 42,
+    use_otsu: bool = True,
 ) -> dict:
     """
     Full patch extraction pipeline.
@@ -381,26 +485,57 @@ def run(
     slide = OpenSlide(slide_path)
     W0, H0 = slide.level_dimensions[0]
     n_levels = slide.level_count
+    base_mpp = read_base_mpp(slide)
 
     log.info(
-        "Slide opened: %s | %dx%d | %d level(s) | vendor=%s",
+        "Slide opened: %s | %dx%d | %d level(s) | vendor=%s | mpp=%s",
         os.path.basename(slide_path),
         W0, H0,
         n_levels,
         slide.properties.get("openslide.vendor", "unknown"),
+        f"{base_mpp:.4f}" if base_mpp else "UNKNOWN",
     )
 
-    # Clamp requested level
-    if level >= n_levels:
+    # ── Resolve physical scale ──────────────────────────────────────────────
+    # Extraction is driven by microns-per-pixel, not by a pyramid level. A fixed
+    # level meant a 20x slide and a 40x slide produced patches covering different
+    # amounts of tissue, and the foundation model saw two different scales.
+    if base_mpp is None:
+        if not allow_missing_mpp:
+            slide.close()
+            raise ValueError(
+                "Slide does not declare openslide.mpp-x, so patches cannot be extracted at a "
+                "known physical scale. Pass --allow_missing_mpp to fall back to level-0 pixels "
+                "(the resulting patches will not be comparable with MPP-based ones)."
+            )
+        log.warning("No MPP in slide metadata — falling back to level-0 pixels (scale=1.0).")
+        scale = 1.0
+        effective_mpp = None
+    else:
+        scale = target_mpp / base_mpp
+        effective_mpp = target_mpp
+
+    # Read from the deepest level that does not require upsampling, then downscale.
+    if level is None or level < 0:
+        level = pick_level_for_scale(slide, scale)
+    elif level >= n_levels:
         log.warning("Requested level %d >= level count %d; clamping to %d", level, n_levels, n_levels - 1)
         level = n_levels - 1
 
+    log.info(
+        "Scale: base_mpp=%s target_mpp=%.4f -> %.4f level-0 px per output px; "
+        "reading level %d (downsample %.2f); patch covers %.1f um",
+        f"{base_mpp:.4f}" if base_mpp else "n/a",
+        target_mpp, scale, level, slide.level_downsamples[level],
+        patch_size * (effective_mpp if effective_mpp else (base_mpp or 0.0)),
+    )
+
     # ── 1. Tissue mask ──────────────────────────────────────────────────────
-    mask, ds = build_tissue_mask(slide)
+    mask, ds = build_tissue_mask(slide, base_mpp=base_mpp, use_otsu=use_otsu)
 
     # ── 2. Candidate grid ───────────────────────────────────────────────────
     candidates = generate_candidates(
-        slide, mask, ds, patch_size, level, overlap, tissue_threshold
+        slide, mask, ds, patch_size, overlap, tissue_threshold, scale
     )
     slide.close()
 
@@ -411,12 +546,24 @@ def run(
             "patches_skipped":   0,
             "patch_size":        patch_size,
             "level":             level,
+            "base_mpp":          base_mpp,
+            "target_mpp":        effective_mpp,
             "slide_width":       W0,
             "slide_height":      H0,
             "output_dir":        output_dir,
             "coords_file":       None,
             "overview_file":     None,
         }
+
+    # ── Cap the number of patches ───────────────────────────────────────────
+    # A large 40x slide yields tens of thousands of candidates. Sampling here
+    # bounds both extraction time and the per-slide bag the trainer must hold,
+    # and it is seeded so the same slide always yields the same subset.
+    n_candidates = len(candidates)
+    if max_patches and n_candidates > max_patches:
+        rng = random.Random(seed)
+        candidates = sorted(rng.sample(candidates, max_patches))
+        log.info("Capped candidates: %d -> %d (seed=%d)", n_candidates, max_patches, seed)
 
     # ── 3. Extract patches (parallel) ──────────────────────────────────────
     tasks = [
@@ -459,6 +606,13 @@ def run(
         "patches_skipped":   skipped,
         "patch_size":        patch_size,
         "level":             level,
+        # Physical scale is reported so the caller can store it and later verify
+        # that every slide in a training run was extracted the same way.
+        "base_mpp":          base_mpp,
+        "target_mpp":        effective_mpp,
+        "scale_l0_px_per_out_px": round(scale, 6),
+        "candidates_total":  n_candidates,
+        "max_patches":       max_patches or None,
         "slide_width":       W0,
         "slide_height":      H0,
         "output_dir":        output_dir,
@@ -478,11 +632,26 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--input",             required=True,  help="Path to the WSI file")
     p.add_argument("--output_dir",        required=True,  help="Directory to write patches into")
-    p.add_argument("--patch_size",        type=int, default=256,  help="Patch width = height (pixels at requested level)")
-    p.add_argument("--level",             type=int, default=0,    help="OpenSlide pyramid level (0 = highest resolution)")
-    p.add_argument("--overlap",           type=int, default=0,    help="Overlap between adjacent patches (pixels)")
+    p.add_argument("--patch_size",        type=int, default=256,  help="Output patch width = height in pixels")
+    p.add_argument("--target_mpp",        type=float, default=0.5,
+                   help="Microns per pixel of the OUTPUT patch. This, not --level, defines the "
+                        "physical scale: 256 px at 0.5 mpp always covers 128 um, on any scanner.")
+    p.add_argument("--level",             type=int, default=-1,
+                   help="Pyramid level to read from. -1 (default) picks the deepest level that "
+                        "needs no upsampling for --target_mpp. Setting this explicitly overrides "
+                        "the automatic choice and reintroduces scale inconsistency across scanners.")
+    p.add_argument("--allow_missing_mpp", action="store_true",
+                   help="Extract even when the slide declares no MPP (falls back to level-0 "
+                        "pixels). Off by default: such patches are not scale-comparable.")
+    p.add_argument("--max_patches",       type=int, default=0,
+                   help="Cap patches per slide (0 = no cap). Sampling is seeded, so the same "
+                        "slide always yields the same subset.")
+    p.add_argument("--seed",              type=int, default=42,   help="Seed for the patch-cap sampling")
+    p.add_argument("--no_otsu",           action="store_true",
+                   help="Use the fixed saturation threshold instead of per-slide Otsu")
+    p.add_argument("--overlap",           type=int, default=0,    help="Overlap between adjacent patches (output pixels)")
     p.add_argument("--format",            default="png", choices=["png", "jpg", "jpeg"], help="Output image format")
-    p.add_argument("--tissue_threshold",  type=float, default=0.5, help="Minimum tissue fraction (0‒1) to accept a patch")
+    p.add_argument("--tissue_threshold",  type=float, default=0.5, help="Minimum tissue fraction (0-1) to accept a patch")
     p.add_argument("--workers",           type=int, default=1,    help="Number of parallel worker processes")
     p.add_argument("--save_coords",       action="store_true",    help="Save patch coordinates to CSV")
     p.add_argument("--overview",          action="store_true",    help="Generate overview PNG with patch locations")
@@ -508,6 +677,11 @@ def main() -> None:
             workers           = args.workers,
             save_coords_flag  = args.save_coords,
             overview_flag     = args.overview,
+            target_mpp        = args.target_mpp,
+            allow_missing_mpp = args.allow_missing_mpp,
+            max_patches       = args.max_patches,
+            seed              = args.seed,
+            use_otsu          = not args.no_otsu,
         )
         print(json.dumps(result))
     except Exception as exc:
