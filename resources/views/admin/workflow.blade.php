@@ -404,6 +404,9 @@
                                     Classes are read from the database for exactly the slides you selected —
                                     no hand-typed label map, so a mismatch can never silently relabel a slide.
                                     Pick <code>Disease Subtype</code> above to train on the exact disease name.
+                                    A run is <strong>scoped to one organ</strong>: the taxonomy is
+                                    <code>Organ → Clinical Group → Disease</code>, so selecting slides from two
+                                    organs is refused rather than merged into one class.
                                 </small>
 
                                 <div id="trClassPreview" class="small text-muted">
@@ -1384,14 +1387,31 @@
                     return;
                 }
 
+                var organLabel = (data.organs && data.organs.length)
+                    ? data.organs.join(', ') : '—';
+
                 var html = '<div class="mb-1">'
+                    + '<span class="badge badge-primary mr-1">Organ: ' + organLabel + '</span>'
                     + '<span class="badge badge-dark mr-1">' + data.n_classes + ' classes</span>';
                 if (data.hierarchical) {
                     html += '<span class="badge badge-info mr-1">'
-                         + data.n_parent_classes + ' parent classes — hierarchical</span>';
+                         + data.n_parent_classes + ' clinical groups — hierarchical</span>';
                 }
                 html += '<span class="badge badge-light border">' + data.eligible_count
                      + ' eligible slides</span></div>';
+
+                // A run is scoped to one organ: the same clinical group means a
+                // different disease in each organ, so mixing them merges entities.
+                if (data.organ_conflict) {
+                    html += '<div class="text-danger font-weight-bold mb-1">'
+                         + 'This selection spans ' + data.organs.length + ' organs (' + organLabel + '). '
+                         + 'A run must cover one organ only — dispatch will be refused.</div>';
+                }
+                if (data.missing_organ > 0) {
+                    html += '<div class="text-danger mb-1">'
+                         + data.missing_organ + ' selected slide(s) have no organ assigned '
+                         + 'and will block dispatch.</div>';
+                }
 
                 if (data.unlabelled_count > 0) {
                     html += '<div class="text-danger mb-1">'

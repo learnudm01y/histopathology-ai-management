@@ -37,7 +37,8 @@
                         <div class="col-md-4">
                             <div class="form-group">
                                 <label>Organ <span class="text-danger">*</span></label>
-                                <select name="organ_id" class="form-control @error('organ_id') is-invalid @enderror">
+                                <select name="organ_id" id="edit_organ_id"
+                                        class="form-control @error('organ_id') is-invalid @enderror">
                                     <option value="">— Select —</option>
                                     @foreach($organs as $organ)
                                         <option value="{{ $organ->id }}"
@@ -67,16 +68,14 @@
 
                         <div class="col-md-4">
                             <div class="form-group">
-                                <label>Category</label>
-                                <select name="category_id" id="edit_category_id" class="form-control">
+                                <label>Clinical Group</label>
+                                <select name="category_id" id="edit_category_id" class="form-control"
+                                        data-selected="{{ old('category_id', $sample->category_id) }}">
                                     <option value="">— None —</option>
-                                    @foreach($categories as $cat)
-                                        <option value="{{ $cat->id }}"
-                                            @selected(old('category_id', $sample->category_id) == $cat->id)>
-                                            {{ $cat->label_en }}
-                                        </option>
-                                    @endforeach
                                 </select>
+                                <small class="form-text text-muted">
+                                    Groups belong to the selected organ.
+                                </small>
                             </div>
                         </div>
 
@@ -266,7 +265,33 @@
 (function () {
     'use strict';
 
-    var subtypes = @json($diseaseSubtypesByCategory);
+    // Taxonomy is organ-rooted: Organ → Clinical Group → Disease.
+    // Each level's picker is rebuilt from the level above it, so a slide can
+    // never be filed under a group or disease belonging to a different organ.
+    var subtypes         = @json($diseaseSubtypesByCategory);
+    var groupsByOrgan    = @json($categoriesByOrgan);
+
+    /** Populate the Clinical Group dropdown for the given organ. */
+    function populateEditGroups(organId, selectedValue) {
+        var sel  = document.getElementById('edit_category_id');
+        var list = organId ? (groupsByOrgan[organId] || []) : [];
+
+        sel.innerHTML = '';
+        var blank = document.createElement('option');
+        blank.value = '';
+        blank.textContent = list.length
+            ? '— None —'
+            : (organId ? '— No clinical groups for this organ —' : '— Select an organ first —');
+        sel.appendChild(blank);
+
+        list.forEach(function (g) {
+            var opt = document.createElement('option');
+            opt.value       = g.id;
+            opt.textContent = g.label_en;
+            if (String(g.id) === String(selectedValue)) opt.selected = true;
+            sel.appendChild(opt);
+        });
+    }
 
     /**
      * Populate the Disease Subtype dropdown for the given category.
@@ -296,10 +321,19 @@
         populateEditSubtypes(this.value, '');
     });
 
-    // Populate on initial page load, restoring the saved / old() subtype value
-    var initCatId  = document.getElementById('edit_category_id').value;
+    // Changing the organ invalidates both levels beneath it.
+    document.getElementById('edit_organ_id').addEventListener('change', function () {
+        populateEditGroups(this.value, '');
+        populateEditSubtypes('', '');
+    });
+
+    // Populate on initial page load, restoring the saved / old() values top-down
+    var initOrganId = document.getElementById('edit_organ_id').value;
+    var initCatId   = document.getElementById('edit_category_id').dataset.selected;
     var initSubtype = document.getElementById('edit_subtype_id').dataset.selected;
-    populateEditSubtypes(initCatId, initSubtype);
+
+    populateEditGroups(initOrganId, initCatId);
+    populateEditSubtypes(document.getElementById('edit_category_id').value, initSubtype);
 
 })();
 </script>

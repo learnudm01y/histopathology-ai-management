@@ -3,6 +3,33 @@
 
 @push('styles')
 <style>
+/* ── Organ band (root level of the taxonomy) ─────────────────── */
+.organ-band {
+    display: flex;
+    align-items: center;
+    padding: 9px 14px;
+    margin: 18px 0 0;
+    background: linear-gradient(90deg, #eef2ff 0%, #f8fafc 100%);
+    border: 1px solid #d7dEEB;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    font-weight: 600;
+    color: #2d3748;
+}
+.organ-band-unrooted {
+    background: #fffaf0;
+    border-color: #f0d9a8;
+    color: #8a6d3b;
+}
+.organ-band-name { font-size: .95rem; }
+.organ-band-body {
+    border: 1px solid #d7dEEB;
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    padding: 10px 12px 4px;
+    margin-bottom: 6px;
+}
+
 /* ── Tree Layout ─────────────────────────────────────────────── */
 .tree-node { margin-bottom: 5px; }
 
@@ -129,15 +156,40 @@
             <div class="card-body">
 
                 {{-- Header --}}
-                <div class="d-flex justify-content-between align-items-center mb-4">
+                <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap">
                     <h4 class="card-title mb-0">
-                        All Categories
-                        <span class="badge badge-secondary ml-2">{{ $categories->count() }}</span>
+                        Disease Taxonomy
+                        <span class="badge badge-secondary ml-2">{{ $categories->count() }} groups</span>
                     </h4>
-                    <a href="{{ route('admin.settings.categories.create') }}" class="btn btn-primary btn-sm">
-                        <i class="mdi mdi-plus mr-1"></i> Add Category
-                    </a>
+                    <div class="d-flex align-items-center" style="gap:.5rem;">
+                        {{-- Organ filter --}}
+                        <form method="GET" class="d-flex align-items-center mb-0" style="gap:.35rem;">
+                            <label class="mb-0 small text-muted">Organ</label>
+                            <select name="organ_id" class="form-control form-control-sm"
+                                    style="min-width:180px;" onchange="this.form.submit()">
+                                <option value="">All organs</option>
+                                @foreach($organs as $organ)
+                                    <option value="{{ $organ->id }}" @selected($selectedOrganId == $organ->id)>
+                                        {{ $organ->name }}
+                                    </option>
+                                @endforeach
+                            </select>
+                        </form>
+                        <a href="{{ route('admin.settings.categories.create', ['organ_id' => $selectedOrganId]) }}"
+                           class="btn btn-primary btn-sm text-nowrap">
+                            <i class="mdi mdi-plus mr-1"></i> Add Clinical Group
+                        </a>
+                    </div>
                 </div>
+
+                @if($unrootedCount > 0)
+                    <div class="alert alert-warning py-2 px-3 mb-3" style="font-size:.82rem;">
+                        <i class="mdi mdi-alert-outline mr-1"></i>
+                        <strong>{{ $unrootedCount }}</strong> clinical group(s) have no organ assigned. They predate the
+                        organ root and had no slides to infer it from — they cannot receive diseases or be trained on
+                        until you edit each one and pick its organ.
+                    </div>
+                @endif
 
                 {{-- Tree --}}
                 @if($categories->isEmpty())
@@ -147,8 +199,34 @@
                         <a href="{{ route('admin.settings.categories.create') }}">Add one now</a>
                     </div>
                 @else
-                <div class="category-tree">
-                    @foreach($categories as $cat)
+                <div class="alert alert-light border py-2 px-3 mb-3" style="font-size:.82rem;">
+                    <i class="mdi mdi-information-outline mr-1 text-info"></i>
+                    <strong>Organ → Clinical Group → Disease.</strong>
+                    The organ is the root and is never typed here — it comes from
+                    <a href="{{ route('admin.settings.organs.index') }}">Organs</a>. A disease name is unique
+                    <em>within its organ</em>, so "Adenocarcinoma" of the lung and of the colon stay two
+                    separate entities. In training, a run is scoped to one organ, each <strong>disease</strong>
+                    becomes a class, and its <strong>clinical group</strong> is the auxiliary coarse label.
+                </div>
+
+                @foreach($grouped as $organId => $organCategories)
+                @php $organ = $organCategories->first()->organ; @endphp
+
+                {{-- ── Organ band (root level) ── --}}
+                <div class="organ-band {{ $organ ? '' : 'organ-band-unrooted' }}">
+                    <i class="mdi {{ $organ ? 'mdi-hospital-building' : 'mdi-help-circle-outline' }} mr-2"></i>
+                    <span class="organ-band-name">{{ $organ->name ?? 'Not assigned to an organ' }}</span>
+                    <span class="badge badge-light border ml-2">{{ $organCategories->count() }} group(s)</span>
+                    <span class="badge badge-light border ml-1">
+                        {{ $organCategories->sum('disease_subtypes_count') }} disease(s)
+                    </span>
+                    <span class="badge badge-light border ml-1">
+                        {{ $organCategories->sum('samples_count') }} slide(s)
+                    </span>
+                </div>
+
+                <div class="category-tree organ-band-body">
+                    @foreach($organCategories as $cat)
                     <div class="tree-node" id="cat-node-{{ $cat->id }}">
 
                         {{-- ── Category Header ── --}}
@@ -207,7 +285,10 @@
 
                                 @foreach($cat->diseaseSubtypes as $subtype)
                                 <div class="tree-subtype-row">
-                                    <i class="mdi mdi-chevron-right tree-subtype-icon"></i>
+                                    {{-- Leaf marker, NOT an expander: the taxonomy is exactly two
+                                         levels deep, so nothing nests under a subtype. --}}
+                                    <i class="mdi mdi-circle-medium tree-subtype-icon"
+                                       title="Disease subtype — this is the leaf level used as a training class"></i>
                                     <span class="tree-subtype-name">{{ $subtype->name }}</span>
 
                                     @if($subtype->is_active)
@@ -261,6 +342,7 @@
                     </div>{{-- /.tree-node --}}
                     @endforeach
                 </div>{{-- /.category-tree --}}
+                @endforeach{{-- /organ band --}}
                 @endif
 
             </div>

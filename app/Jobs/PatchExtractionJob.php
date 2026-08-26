@@ -21,12 +21,12 @@ use Symfony\Component\Process\Process;
  * Downloads a WSI from Google Drive, runs the patch_extract.py script
  * to tile the slide, then uploads the resulting patches folder back to
  * Google Drive under the "sliced_slides" root — preserving the same
- * data-source / category / case hierarchy.
+ * data-source / organ / clinical-group / case hierarchy.
  *
  * Pipeline (all on the local / Hostinger server):
  *   1. Download WSI from Google Drive via rclone (GoogleDriveService)
  *   2. Run  scripts/patch_extract.py  →  local temp patches folder
- *   3. rclone copy patches folder → gdrive:sliced_slides/{source}/{cat}/{case}/…
+ *   3. rclone copy patches folder → gdrive:sliced_slides/{source}/{organ}/{group}/{case}/…
  *   4. Update sample:  tiling_status=done, tile_count, tiles_gdrive_path, etc.
  *   5. Delete local temp directory
  */
@@ -308,18 +308,25 @@ class PatchExtractionJob implements ShouldQueue
      * Build the Google Drive destination path for the patches folder.
      *
      * Pattern:
-     *   {root}/sliced_slides/{magnification}/{data_source}/{category}/{case_id}/sample_{id}_{size}px/
+     *   {root}/sliced_slides/{magnification}/{data_source}/{organ}/{group}/{case_id}/sample_{id}_{size}px/
+     *
+     * The organ is part of the path because the taxonomy is organ-rooted: the
+     * same clinical-group name exists under several organs, so a path keyed on
+     * the group alone would collapse slides from different anatomical sites into
+     * one folder. Paths are persisted on the sample row, so folders written
+     * under the older {category} convention keep resolving unchanged.
      */
     private function buildGdrivePath(Sample $sample, PatchSize $patchSize, Magnification $magnification): string
     {
         $root       = rtrim((string) config('gdrive.root_folder'), '/');
         $magFolder  = $magnification->folder_name;          // e.g. "20x"
         $source     = Str::slug($sample->dataSource?->name ?? 'unknown_source');
-        $category   = Str::slug($sample->category?->label_en  ?? 'unknown_category');
+        $organ      = Str::slug($sample->organ?->name ?? 'unknown_organ');
+        $group      = Str::slug($sample->category?->label_en ?? 'unknown_group');
         $caseId     = $sample->patientCase?->case_id ?? 'no_case';
         $folderName = "sample_{$sample->id}_{$patchSize->size_px}px";
 
-        return implode('/', [$root, 'sliced_slides', $magFolder, $source, $category, $caseId, $folderName]);
+        return implode('/', [$root, 'sliced_slides', $magFolder, $source, $organ, $group, $caseId, $folderName]);
     }
 
     /**

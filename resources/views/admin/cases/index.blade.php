@@ -168,9 +168,37 @@
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <h4 class="card-title mb-0">Cases ({{ number_format($cases->total()) }})</h4>
-                    <button type="button" class="btn btn-danger btn-sm" data-toggle="modal" data-target="#bulkDeleteCasesModal">
-                        <i class="mdi mdi-delete-sweep mr-1"></i> Bulk Delete
-                    </button>
+                    <div class="d-flex align-items-center" style="gap:.5rem;">
+                        {{-- Export uses the filters currently applied to the list --}}
+                        @php $exportParams = request()->except('page'); @endphp
+                        <div class="btn-group">
+                            <a href="{{ route('admin.cases.export', array_merge($exportParams, ['scope' => 'full'])) }}"
+                               class="btn btn-success btn-sm">
+                                <i class="mdi mdi-file-excel mr-1"></i> Export Excel
+                                <span class="badge badge-light ml-1">{{ number_format($cases->total()) }}</span>
+                            </a>
+                            <button type="button" class="btn btn-success btn-sm dropdown-toggle dropdown-toggle-split"
+                                    data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                                <span class="sr-only">Export options</span>
+                            </button>
+                            <div class="dropdown-menu dropdown-menu-right">
+                                <h6 class="dropdown-header">Export {{ number_format($cases->total()) }} filtered case(s)</h6>
+                                <a class="dropdown-item"
+                                   href="{{ route('admin.cases.export', array_merge($exportParams, ['scope' => 'full'])) }}">
+                                    <i class="mdi mdi-file-excel-outline mr-1 text-success"></i>
+                                    Full data <small class="text-muted d-block ml-4">Case + complete clinical record</small>
+                                </a>
+                                <a class="dropdown-item"
+                                   href="{{ route('admin.cases.export', array_merge($exportParams, ['scope' => 'table'])) }}">
+                                    <i class="mdi mdi-table mr-1 text-primary"></i>
+                                    Table columns <small class="text-muted d-block ml-4">Only what is shown below</small>
+                                </a>
+                            </div>
+                        </div>
+                        <button type="button" class="btn btn-danger btn-sm" data-toggle="modal" data-target="#bulkDeleteCasesModal">
+                            <i class="mdi mdi-delete-sweep mr-1"></i> Bulk Delete
+                        </button>
+                    </div>
                 </div>
 
                 <div class="table-responsive">

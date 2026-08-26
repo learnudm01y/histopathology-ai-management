@@ -12,6 +12,7 @@ class TrainingRun extends Model
         'training_head_id',
         'feature_model_id',
         'server_id',
+        'organ_id',
         'status',
         'sample_count',
         'label_type',
@@ -55,6 +56,16 @@ class TrainingRun extends Model
     public function featureModel(): BelongsTo
     {
         return $this->belongsTo(AiModel::class, 'feature_model_id');
+    }
+
+    /**
+     * The organ this run is scoped to. The organ is a filter, not a predicted
+     * level — every slide in the run comes from it, so the coarse head is free
+     * to supervise the clinical group instead.
+     */
+    public function organ(): BelongsTo
+    {
+        return $this->belongsTo(Organ::class);
     }
 
     public function server(): BelongsTo

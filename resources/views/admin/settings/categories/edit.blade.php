@@ -23,8 +23,32 @@
                     @csrf @method('PUT')
 
                     {{-- Label EN --}}
+                    {{-- Organ (root — selected, never typed) --}}
+                    @php $lockedOrgan = $category->samples()->exists(); @endphp
                     <div class="form-group">
-                        <label>Label <span class="text-danger">*</span></label>
+                        <label>Organ <span class="text-danger">*</span></label>
+                        <select name="organ_id" class="form-control @error('organ_id') is-invalid @enderror"
+                                {{ $lockedOrgan ? 'disabled' : '' }} required>
+                            <option value="">— Choose organ —</option>
+                            @foreach($organs as $organ)
+                                <option value="{{ $organ->id }}"
+                                    @selected(old('organ_id', $category->organ_id) == $organ->id)>{{ $organ->name }}</option>
+                            @endforeach
+                        </select>
+                        @if($lockedOrgan)
+                            {{-- Disabled selects are not submitted; keep the value intact. --}}
+                            <input type="hidden" name="organ_id" value="{{ $category->organ_id }}">
+                            <small class="form-text text-warning">
+                                <i class="mdi mdi-lock-outline mr-1"></i>
+                                Locked: {{ $category->samples()->count() }} slide(s) are classified under this group.
+                                Moving it to another organ would silently relabel them.
+                            </small>
+                        @endif
+                        @error('organ_id')<div class="invalid-feedback d-block">{{ $message }}</div>@enderror
+                    </div>
+
+                    <div class="form-group">
+                        <label>Clinical Group Name <span class="text-danger">*</span></label>
                         <input type="text" name="label_en" class="form-control @error('label_en') is-invalid @enderror"
                                value="{{ old('label_en', $category->label_en) }}">
                         @error('label_en')<div class="invalid-feedback">{{ $message }}</div>@enderror

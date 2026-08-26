@@ -225,6 +225,29 @@ class OperationsController extends Controller
             ]);
         }
 
+        // ── Pin the run to a single organ ─────────────────────────────────────
+        // The taxonomy is organ-rooted, so the same clinical-group name means a
+        // different morphology in every organ. A run that straddles organs would
+        // merge two entities into one class, so it is refused outright.
+        $noOrgan = TrainingLabelResolver::samplesWithoutOrgan($eligibleSamples);
+        if (! empty($noOrgan)) {
+            return redirect()->back()->withErrors([
+                'sample_ids' => count($noOrgan) . ' selected slide(s) have no organ assigned and cannot be trained on '
+                    . '(sample IDs: ' . implode(', ', array_slice($noOrgan, 0, 15)) . '). Set their organ first.',
+            ]);
+        }
+
+        $organIds = TrainingLabelResolver::organIdsIn($eligibleSamples);
+        if (count($organIds) > 1) {
+            $names = \App\Models\Organ::whereIn('id', $organIds)->orderBy('name')->pluck('name')->implode(', ');
+            return redirect()->back()->withErrors([
+                'sample_ids' => "A training run must be scoped to one organ, but the selection spans "
+                    . count($organIds) . ": {$names}. Train one organ at a time — "
+                    . 'the same clinical group means a different disease in each organ.',
+            ]);
+        }
+        $organId = $organIds[0];
+
         // ── Resolve labels ONCE, from the database, for exactly these samples ──
         $spec = TrainingLabelResolver::buildSpec($eligibleSamples, $labelType);
 
@@ -321,6 +344,7 @@ class OperationsController extends Controller
             'training_head_id'  => $validated['training_head_id'],
             'feature_model_id'  => $validated['feature_model_id'],
             'server_id'         => $validated['server_id'],
+            'organ_id'          => $organId,
             'status'            => 'pending',
             'sample_count'      => count($eligibleSampleIds),
             'label_type'        => $labelType,
@@ -363,8 +387,10 @@ class OperationsController extends Controller
         foreach ($spec['label_map'] as $idx => $name) {
             $classSummary[] = "{$idx}:{$name}=" . ($spec['class_counts'][$idx] ?? 0);
         }
+        $organName = \App\Models\Organ::whereKey($organId)->value('name') ?? "organ#{$organId}";
         \Illuminate\Support\Facades\Log::info(
-            "[TrainingDispatch] Run #{$run->id} — split: Train={$nTrainEligible} | Val={$nValEligible} | Test={$nTest} — "
+            "[TrainingDispatch] Run #{$run->id} — organ={$organName} — "
+            . "split: Train={$nTrainEligible} | Val={$nValEligible} | Test={$nTest} — "
             . "label_type={$labelType} n_classes={$spec['n_classes']} "
             . ($isHierarchical ? "n_parent_classes={$spec['n_parent_classes']} hier_weight={$hierWeight} " : 'flat ')
             . 'classes[' . implode(' ', $classSummary) . ']'
@@ -373,7 +399,8 @@ class OperationsController extends Controller
         // ── Dispatch the job ──────────────────────────────────────────────────
         TrainingJob::dispatch($run->id);
 
-        $msg = "Training run #{$run->id} dispatched ({$nTrainEligible} train / {$nValEligible} val / {$nTest} test) — "
+        $msg = "Training run #{$run->id} dispatched for {$organName} "
+             . "({$nTrainEligible} train / {$nValEligible} val / {$nTest} test) — "
              . "{$spec['n_classes']} classes from '{$labelType}'"
              . ($isHierarchical ? " with {$spec['n_parent_classes']} parent classes (hierarchical)." : '.');
         if ($skipped > 0) {
@@ -482,9 +509,17 @@ class OperationsController extends Controller
             ];
         }
 
+        // Organ scope — a run may only cover one organ.
+        $organIds   = TrainingLabelResolver::organIdsIn($samples);
+        $organNames = \App\Models\Organ::whereIn('id', $organIds)->orderBy('name')->pluck('name')->all();
+        $noOrgan    = TrainingLabelResolver::samplesWithoutOrgan($samples);
+
         return response()->json([
             'ok'               => true,
             'label_type'       => $labelType,
+            'organs'           => $organNames,
+            'organ_conflict'   => count($organIds) > 1,
+            'missing_organ'    => count($noOrgan),
             'n_classes'        => $spec['n_classes'],
             'n_parent_classes' => $spec['n_parent_classes'],
             'hierarchical'     => TrainingLabelResolver::isHierarchicalType($labelType) && $spec['n_parent_classes'] > 1,

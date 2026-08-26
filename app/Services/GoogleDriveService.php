@@ -28,27 +28,34 @@ class GoogleDriveService
      * Build the remote folder path for a sample (SINGLE file upload).
      *
      * Pattern (WITHOUT USERNAME):
-     *   {root}/{data_source}/{category}/{sample_folder}/
+     *   {root}/{data_source}/{organ}/{group}/{sample_folder}/
      *
-     * {sample_folder} = {data_source}-{category}-{sampleName}-{UUID}
+     * {sample_folder} = {data_source}-{organ}-{group}-{sampleName}-{UUID}
+     *
+     * The organ is part of the path because the taxonomy is organ-rooted: the
+     * same clinical-group name ("Malignant") exists under many organs, so a
+     * path keyed on the group alone would mix anatomical sites in one folder.
+     * Existing folders are unaffected — the path is stored on the sample row.
      *
      * If entity_submitter_id is provided, it is used as the "sampleName" part.
      * A UUID is always appended to guarantee uniqueness.
      */
     public function buildSampleFolderPath(Sample $sample): string
     {
-        $uuid         = (string) Str::uuid();
-        $categorySlug = $this->sanitize($sample->category?->label_en ?? 'uncategorized');
-        $sampleName   = $sample->entity_submitter_id
+        $uuid       = (string) Str::uuid();
+        $organSlug  = $this->sanitize($sample->organ?->name ?? 'unknown_organ');
+        $groupSlug  = $this->sanitize($sample->category?->label_en ?? 'uncategorized');
+        $sampleName = $sample->entity_submitter_id
             ? $this->sanitize($sample->entity_submitter_id)
             : 'sample';
 
-        // Folder name: {data_source}-{category}-{sampleName}-{UUID}
+        // Folder name: {data_source}-{organ}-{group}-{sampleName}-{UUID}
         // NO USERNAME in folder name anymore
         $dataSourceSlug = $this->sanitize($sample->dataSource?->name ?? 'unknown_source');
         $sampleFolder = implode('-', [
             $dataSourceSlug,
-            $categorySlug,
+            $organSlug,
+            $groupSlug,
             $sampleName,
             $uuid,
         ]);
@@ -56,7 +63,8 @@ class GoogleDriveService
         return implode('/', [
             $this->rootFolder,
             $dataSourceSlug,
-            $categorySlug,
+            $organSlug,
+            $groupSlug,
             $sampleFolder,
         ]);
     }
@@ -66,19 +74,21 @@ class GoogleDriveService
      * Preserves the original folder structure from the source.
      *
      * Pattern:
-     *   {root}/{data_source}/{category}/{original_folder_name}/
+     *   {root}/{data_source}/{organ}/{group}/{original_folder_name}/
      *
      * The original folder structure inside is NOT modified.
      */
     public function buildBulkFolderPath(Sample $sample, string $originalFolderName): string
     {
         $dataSourceSlug = $this->sanitize($sample->dataSource?->name ?? 'unknown_source');
-        $categorySlug = $this->sanitize($sample->category?->label_en ?? 'uncategorized');
+        $organSlug      = $this->sanitize($sample->organ?->name ?? 'unknown_organ');
+        $groupSlug      = $this->sanitize($sample->category?->label_en ?? 'uncategorized');
 
         return implode('/', [
             $this->rootFolder,
             $dataSourceSlug,
-            $categorySlug,
+            $organSlug,
+            $groupSlug,
             $this->sanitize($originalFolderName),
         ]);
     }

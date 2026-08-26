@@ -61,7 +61,7 @@ class ProcessSampleUpload implements ShouldQueue
     public function handle(GoogleDriveService $drive): void
     {
         /** @var Sample $sample */
-        $sample = Sample::with(['dataSource', 'category'])->findOrFail($this->sampleId);
+        $sample = Sample::with(['dataSource', 'organ', 'category'])->findOrFail($this->sampleId);
 
         // Mark as transferring
         $sample->update(['storage_status' => 'downloading']);

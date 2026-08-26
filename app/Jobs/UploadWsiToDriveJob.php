@@ -52,7 +52,7 @@ class UploadWsiToDriveJob implements ShouldQueue, ShouldBeUnique
      * Placeholder values that buildBulkFolderPath emits when a relationship is null.
      * If the resolved path contains any of these, the upload is aborted.
      */
-    private const INVALID_SLUGS = ['unknown_source', 'uncategorized'];
+    private const INVALID_SLUGS = ['unknown_source', 'unknown_organ', 'uncategorized'];
 
     public function uniqueId(): string
     {
@@ -68,9 +68,9 @@ class UploadWsiToDriveJob implements ShouldQueue, ShouldBeUnique
     public function handle(GoogleDriveService $drive): void
     {
         // ── 1. Load sample WITH classification relationships ───────────────────
-        // Eager-load dataSource and category to avoid N+1 and to ensure the
-        // path builder has accurate data before we decide anything.
-        $sample = Sample::with(['dataSource', 'category'])->find($this->sampleId);
+        // Eager-load dataSource, organ and category to avoid N+1 and to ensure
+        // the path builder has accurate data before we decide anything.
+        $sample = Sample::with(['dataSource', 'organ', 'category'])->find($this->sampleId);
 
         if (!$sample) {
             Log::warning("[UploadWsiToDriveJob] Sample #{$this->sampleId}: not found in DB — discarding.");
@@ -91,10 +91,11 @@ class UploadWsiToDriveJob implements ShouldQueue, ShouldBeUnique
         //
         // buildBulkFolderPath uses:
         //   $sample->dataSource->name       → e.g. "TCGA-BRCA"
+        //   $sample->organ->name            → e.g. "Breast"
         //   $sample->category->label_en     → e.g. "tumor" | "normal"
         //   $sample->file_id                → e.g. "8191fa1b-..."
         //
-        // This produces: samples/TCGA-BRCA/tumor/8191fa1b-.../
+        // This produces: samples/TCGA-BRCA/breast/tumor/8191fa1b-.../
         // which is the SAME structure used by all other uploads in the system.
         $remoteFolderPath = $drive->buildBulkFolderPath($sample, $sample->file_id);
         $remotePath       = $remoteFolderPath . '/' . $sample->file_name;

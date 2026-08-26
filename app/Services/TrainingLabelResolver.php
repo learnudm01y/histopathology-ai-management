@@ -15,10 +15,15 @@ use Illuminate\Support\Collection;
  *   disease_subtype — the exact disease name (leaf of the taxonomy)     [HIERARCHICAL]
  *
  * For `disease_subtype` the resolver also emits the coarse parent level
- * (the subtype's own Category), producing a two-level label:
+ * (the subtype's own Category), producing a two-level label inside one organ:
  *
- *      fine   = index of DiseaseSubtype   ("Invasive ductal carcinoma")
+ *      organ  = run scope, never a class  ("Breast")   ← filtered by the caller
  *      parent = index of its Category     ("Malignant")
+ *      fine   = index of DiseaseSubtype   ("Invasive ductal carcinoma")
+ *
+ * The organ deliberately does not become a class: it arrives with the specimen,
+ * so a run is pinned to one organ and the network spends its capacity on the
+ * two levels it actually has to infer.
  *
  * Identity is always keyed on the primary key (never the display string), so
  * two subtypes that happen to share a name under different categories stay
@@ -46,10 +51,32 @@ class TrainingLabelResolver
     public static function relationsFor(string $labelType): array
     {
         return match ($labelType) {
-            self::TYPE_DISEASE_SUBTYPE => ['diseaseSubtype.category'],
-            self::TYPE_DISEASE_TYPE    => ['patientCase'],
-            default                    => ['category'],
+            self::TYPE_DISEASE_SUBTYPE => ['organ', 'diseaseSubtype.category', 'diseaseSubtype.organ'],
+            self::TYPE_DISEASE_TYPE    => ['organ', 'patientCase'],
+            default                    => ['organ', 'category'],
         };
+    }
+
+    /**
+     * Distinct organ ids spanned by a sample set.
+     *
+     * A fine-grained run must not straddle organs: the same clinical group name
+     * ("Malignant") means a different morphology in every organ, so mixing them
+     * collapses two entities into one class. The dispatcher uses this to pin the
+     * run to a single organ.
+     *
+     * @param  Collection<int, Sample>  $samples
+     * @return array<int, int>
+     */
+    public static function organIdsIn(Collection $samples): array
+    {
+        return $samples->pluck('organ_id')->filter()->unique()->values()->all();
+    }
+
+    /** Sample ids that carry no organ at all — they cannot be scoped to a run. */
+    public static function samplesWithoutOrgan(Collection $samples): array
+    {
+        return $samples->whereNull('organ_id')->pluck('id')->all();
     }
 
     /**

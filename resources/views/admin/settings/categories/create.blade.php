@@ -17,17 +17,42 @@
     <div class="col-lg-7 grid-margin">
         <div class="card">
             <div class="card-body">
-                <h4 class="card-title mb-4">New Category</h4>
+                <h4 class="card-title mb-1">New Clinical Group</h4>
+                <p class="card-description mb-4">
+                    A clinical group is the middle level of the taxonomy:
+                    <strong>Organ → Clinical Group → Disease</strong>.
+                    The organ is chosen from the organs list — it is never typed here.
+                </p>
 
                 <form action="{{ route('admin.settings.categories.store') }}" method="POST">
                     @csrf
 
+                    {{-- Organ (root — selected, never typed) --}}
+                    <div class="form-group">
+                        <label>Organ <span class="text-danger">*</span></label>
+                        <select name="organ_id" class="form-control @error('organ_id') is-invalid @enderror" required>
+                            <option value="">— Choose organ —</option>
+                            @foreach($organs as $organ)
+                                <option value="{{ $organ->id }}"
+                                    @selected(old('organ_id', $selectedOrganId) == $organ->id)>{{ $organ->name }}</option>
+                            @endforeach
+                        </select>
+                        @error('organ_id')<div class="invalid-feedback">{{ $message }}</div>@enderror
+                        <small class="form-text text-muted">
+                            Comes from <a href="{{ route('admin.settings.organs.index') }}" target="_blank">Organs</a>.
+                            The same group name may exist under different organs — they stay separate classes.
+                        </small>
+                    </div>
+
                     {{-- Label EN --}}
                     <div class="form-group">
-                        <label>Label <span class="text-danger">*</span></label>
+                        <label>Clinical Group Name <span class="text-danger">*</span></label>
                         <input type="text" name="label_en" class="form-control @error('label_en') is-invalid @enderror"
-                               placeholder="e.g. Normal" value="{{ old('label_en') }}">
+                               placeholder="e.g. Malignant" value="{{ old('label_en') }}">
                         @error('label_en')<div class="invalid-feedback">{{ $message }}</div>@enderror
+                        <small class="form-text text-muted">
+                            Must be unique within the selected organ. This becomes the coarse (auxiliary) class in training.
+                        </small>
                     </div>
 
                     {{-- Notes --}}

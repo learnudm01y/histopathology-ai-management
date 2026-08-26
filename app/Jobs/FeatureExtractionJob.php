@@ -30,7 +30,7 @@ use Illuminate\Support\Str;
  *   5. POSTs status reports to /api/v1/feature-extraction/report
  *
  * Output GDrive path convention (mirrors sliced_slides hierarchy):
- *   {root}/features/{ai_model_slug}/{magnification}/{data_source}/{category}/{case_id}/sample_{id}_{size}px/
+ *   {root}/features/{ai_model_slug}/{magnification}/{data_source}/{organ}/{group}/{case_id}/sample_{id}_{size}px/
  */
 class FeatureExtractionJob implements ShouldQueue
 {
@@ -63,7 +63,7 @@ class FeatureExtractionJob implements ShouldQueue
     public function handle(): void
     {
         /** @var Sample $sample */
-        $sample = Sample::with(['dataSource', 'category', 'patientCase'])->findOrFail($this->sampleId);
+        $sample = Sample::with(['dataSource', 'category', 'organ', 'patientCase'])->findOrFail($this->sampleId);
         /** @var ServerName $server */
         $server = ServerName::findOrFail($this->serverId);
         /** @var AiModel $model */
@@ -190,7 +190,10 @@ class FeatureExtractionJob implements ShouldQueue
         $modelFolder = $model->name;                        // keep original case in folder name
         $magFolder = $magnification->folder_name;           // e.g. "20x"
         $sourceSlug = Str::slug($sample->dataSource?->name ?? 'unknown_source');
-        $categorySlug = Str::slug($sample->category?->label_en ?? 'unknown_category');
+        // Organ-rooted: the same clinical-group name exists under several organs,
+        // so the organ has to be in the path to keep the trees disjoint.
+        $organSlug = Str::slug($sample->organ?->name ?? 'unknown_organ');
+        $groupSlug = Str::slug($sample->category?->label_en ?? 'unknown_group');
         $caseId = $sample->patientCase?->case_id ?? 'no_case';
         $sampleFolder = "sample_{$sample->id}_{$patchSize->size_px}px";
 
@@ -204,7 +207,8 @@ class FeatureExtractionJob implements ShouldQueue
             $modelFolder,
             $magFolder,
             $sourceSlug,
-            $categorySlug,
+            $organSlug,
+            $groupSlug,
             $caseId,
             $sampleFolder,
         ]);

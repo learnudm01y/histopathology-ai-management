@@ -81,6 +81,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
 
         // Cases (patients) — clinical case browser
         Route::get('cases',          [CasesController::class, 'index'])->name('cases.index');
+        Route::get('cases/export',   [CasesController::class, 'export'])->name('cases.export');
         Route::get('cases/{case}',   [CasesController::class, 'show'])->name('cases.show');
 
         // Bulk delete (samples + cases)

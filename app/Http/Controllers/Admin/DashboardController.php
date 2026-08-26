@@ -15,6 +15,7 @@ use App\Services\CaseLinker;
 use App\Services\GoogleDriveService;
 use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Validation\Rule;
 use Illuminate\View\View;
 
 class DashboardController extends Controller
@@ -128,7 +129,10 @@ class DashboardController extends Controller
 
         $samples     = $query->paginate(20)->withQueryString();
         $organs      = Organ::where('is_active', true)->orderBy('name')->get();
-        $categories  = Category::where('is_active', true)->orderBy('id')->get();
+        $categories  = Category::where('is_active', true)->with('organ')->orderBy('label_en')->get();
+        // Clinical groups are organ-scoped, so the picker has to follow the
+        // chosen organ — otherwise a slide can be filed under another organ's group.
+        $categoriesByOrgan = $categories->groupBy('organ_id')->map(fn ($g) => $g->values());
         $dataSources = DataSource::where('is_active', true)->orderBy('name')->get();
         $stains      = Stain::where('is_active', true)->orderBy('stain_type')->orderBy('name')->get();
 
@@ -145,7 +149,7 @@ class DashboardController extends Controller
             'tiling_done'     => Sample::where('tiling_status', 'done')->count(),
         ];
 
-        return view('admin.samples', compact('samples', 'organs', 'categories', 'dataSources', 'stains', 'diseaseSubtypesByCategory', 'stats'));
+        return view('admin.samples', compact('samples', 'organs', 'categories', 'categoriesByOrgan', 'dataSources', 'stains', 'diseaseSubtypesByCategory', 'stats'));
     }
 
     public function storeSample(Request $request): RedirectResponse
@@ -157,8 +161,14 @@ class DashboardController extends Controller
             'upload_method'        => ['required', 'in:upload,gdrive,bulk'],
             'organ_id'             => ['required', 'exists:organs,id'],
             'data_source_id'       => ['nullable', 'exists:data_sources,id'],
-            'category_id'          => ['nullable', 'exists:categories,id'],
-            'disease_subtype_id'   => ['nullable', 'exists:disease_subtypes,id'],
+            // The taxonomy is organ-rooted, so the group and the disease must
+            // both belong to the organ the slide is filed under. Enforcing it
+            // only in the UI would let a crafted or stale POST slip through and
+            // silently create a cross-organ training class.
+            'category_id'          => ['nullable', Rule::exists('categories', 'id')
+                                        ->where('organ_id', $request->integer('organ_id'))],
+            'disease_subtype_id'   => ['nullable', Rule::exists('disease_subtypes', 'id')
+                                        ->where('organ_id', $request->integer('organ_id'))],
             'stain_id'             => ['nullable', 'exists:stains,id'],
             'stain_marker'         => ['nullable', 'string', 'max:100'],
             'training_phase'       => ['nullable', 'integer', 'min:1', 'max:3'],
@@ -599,8 +609,11 @@ class DashboardController extends Controller
         $validated = $request->validate([
             'organ_id'           => ['required', 'exists:organs,id'],
             'data_source_id'     => ['nullable', 'exists:data_sources,id'],
-            'category_id'        => ['nullable', 'exists:categories,id'],
-            'disease_subtype_id' => ['nullable', 'exists:disease_subtypes,id'],
+            // Organ-rooted taxonomy: group and disease must belong to this organ.
+            'category_id'        => ['nullable', Rule::exists('categories', 'id')
+                                      ->where('organ_id', $request->integer('organ_id'))],
+            'disease_subtype_id' => ['nullable', Rule::exists('disease_subtypes', 'id')
+                                      ->where('organ_id', $request->integer('organ_id'))],
             'stain_id'           => ['nullable', 'exists:stains,id'],
             'stain_marker'       => ['nullable', 'string', 'max:100'],
             'training_phase'     => ['nullable', 'integer', 'min:1', 'max:3'],
@@ -691,14 +704,16 @@ class DashboardController extends Controller
         $sample->load(['organ', 'dataSource', 'category', 'stain']);
         $organs      = Organ::where('is_active', true)->orderBy('name')->get();
         $dataSources = DataSource::where('is_active', true)->orderBy('name')->get();
-        $categories  = Category::where('is_active', true)->orderBy('id')->get();
+        $categories  = Category::where('is_active', true)->with('organ')->orderBy('label_en')->get();
+        // Clinical groups are organ-scoped — the picker follows the chosen organ.
+        $categoriesByOrgan = $categories->groupBy('organ_id')->map(fn ($g) => $g->values());
         $stains      = Stain::where('is_active', true)->orderBy('stain_type')->orderBy('name')->get();
         $diseaseSubtypesByCategory = DiseaseSubtype::orderBy('name')
             ->get(['id', 'category_id', 'name'])
             ->groupBy('category_id')
             ->map(fn ($g) => $g->values());
 
-        return view('admin.sample-edit', compact('sample', 'organs', 'dataSources', 'categories', 'stains', 'diseaseSubtypesByCategory'));
+        return view('admin.sample-edit', compact('sample', 'organs', 'dataSources', 'categories', 'categoriesByOrgan', 'stains', 'diseaseSubtypesByCategory'));
     }
 
     public function updateSample(Request $request, Sample $sample): RedirectResponse
@@ -706,7 +721,9 @@ class DashboardController extends Controller
         $request->validate([
             'organ_id'               => 'required|exists:organs,id',
             'data_source_id'         => 'nullable|exists:data_sources,id',
-            'category_id'            => 'nullable|exists:categories,id',
+            // Organ-rooted taxonomy: the group must belong to the chosen organ.
+            'category_id'            => ['nullable', Rule::exists('categories', 'id')
+                                          ->where('organ_id', $request->integer('organ_id'))],
             'disease_subtype'        => 'nullable|string|max:200',
             'stain_id'               => 'nullable|exists:stains,id',
             'stain_marker'           => 'nullable|string|max:100',
@@ -723,11 +740,16 @@ class DashboardController extends Controller
 
         // Keep the FK in sync with the (display) name the form posts, so
         // fine-grained training always sees a stable leaf-class identity.
+        // Resolved within the slide's own ORGAN: disease names are unique per
+        // organ, so scoping by organ is both sufficient and never ambiguous —
+        // scoping by group alone would fall through to another organ's disease
+        // whenever the group is left blank.
         $subtypeName = trim((string) $request->disease_subtype);
         $subtypeId   = null;
         if ($subtypeName !== '') {
             $subtypeId = DiseaseSubtype::query()
                 ->where('name', $subtypeName)
+                ->forOrgan($request->integer('organ_id'))
                 ->when($request->category_id, fn($q) => $q->where('category_id', $request->category_id))
                 ->value('id');
         }

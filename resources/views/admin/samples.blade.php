@@ -116,12 +116,13 @@
                         @endforeach
                     </select>
 
-                    {{-- Category (from DB) --}}
+                    {{-- Clinical group (from DB) — qualified by organ, because the
+                         same group name now exists once per organ. --}}
                     <select name="category_id" class="form-control form-control-sm">
-                        <option value="">All Categories</option>
+                        <option value="">All Clinical Groups</option>
                         @foreach($categories as $cat)
                             <option value="{{ $cat->id }}" @selected(request('category_id') == $cat->id)>
-                                {{ $cat->label_en }}
+                                {{ $cat->qualified_name }}
                             </option>
                         @endforeach
                     </select>
@@ -378,11 +379,12 @@
                     </div>
                     <div class="col-md-6">
                         <div class="form-group mb-2">
-                            <label class="small font-weight-medium">Disease Type (Category)</label>
+                            <label class="small font-weight-medium">Clinical Group</label>
                             <select id="bs-category" class="form-control form-control-sm">
                                 <option value="">— Any —</option>
                                 @foreach($categories as $cat)
-                                    <option value="{{ $cat->id }}">{{ $cat->label_en }}</option>
+                                    {{-- Qualified by organ: the same group name exists once per organ. --}}
+                                    <option value="{{ $cat->id }}">{{ $cat->qualified_name }}</option>
                                 @endforeach
                             </select>
                         </div>
@@ -647,14 +649,10 @@
                         </div>
                         <div class="col-md-4">
                             <div class="form-group">
-                                <label>Category</label>
-                                <select name="category_id" id="modal_category_id" class="form-control">
-                                    <option value="">— Select category —</option>
-                                    @foreach($categories as $cat)
-                                        <option value="{{ $cat->id }}" @selected(old('category_id') == $cat->id)>
-                                            {{ $cat->label_en }}
-                                        </option>
-                                    @endforeach
+                                <label>Clinical Group</label>
+                                <select name="category_id" id="modal_category_id" class="form-control"
+                                        data-selected="{{ old('category_id') }}">
+                                    <option value="">— Select an organ first —</option>
                                 </select>
                             </div>
                         </div>
@@ -1247,6 +1245,36 @@
 
     // Update the custom-file label when user picks a file
 
+    // ── Taxonomy cascade: Organ → Clinical Group → Disease ───────────────────
+    // Groups are organ-scoped, so the group picker is rebuilt from the chosen
+    // organ. Without this a slide could be filed under another organ's group.
+    var groupsByOrgan = @json($categoriesByOrgan ?? []);
+
+    function updateClinicalGroupDropdown(preserve) {
+        var organId = document.getElementById('modal_organ_id').value;
+        var select  = document.getElementById('modal_category_id');
+        var wanted  = preserve ? select.dataset.selected : '';
+        var groups  = organId ? (groupsByOrgan[organId] || []) : [];
+
+        select.innerHTML = '';
+        var defaultOpt = document.createElement('option');
+        defaultOpt.value = '';
+        defaultOpt.textContent = groups.length
+            ? '— Select clinical group —'
+            : (organId ? '— No clinical groups for this organ —' : '— Select an organ first —');
+        select.appendChild(defaultOpt);
+
+        groups.forEach(function (g) {
+            var opt = document.createElement('option');
+            opt.value = g.id;
+            opt.textContent = g.label_en;
+            if (String(g.id) === String(wanted)) opt.selected = true;
+            select.appendChild(opt);
+        });
+
+        updateDiseaseSubtypeDropdown();
+    }
+
     // ── Populate disease subtype dropdown based on category selection ────────
     function updateDiseaseSubtypeDropdown() {
         var catId   = document.getElementById('modal_category_id').value;
@@ -1306,9 +1334,16 @@
         }
     }
 
+    // Changing the organ invalidates both levels beneath it.
+    document.getElementById('modal_organ_id').addEventListener('change', function () {
+        updateClinicalGroupDropdown(false);
+    });
     document.getElementById('modal_category_id').addEventListener('change', updateDiseaseSubtypeDropdown);
     document.getElementById('modal_data_source_id').addEventListener('change', updatePreviews);
     document.getElementById('modal_disease_subtype_id').addEventListener('change', updatePreviews);
+
+    // Initial state — an organ may already be selected via old() input.
+    updateClinicalGroupDropdown(true);
 
     @if($errors->any())
     // Re-open modal when validation errors are returned
@@ -1317,8 +1352,8 @@
         @if(old('upload_method') === 'gdrive')
         $('#tab-gdrive-link').tab('show');
         @endif
-        // Restore subtype dropdown for the previously selected category
-        updateDiseaseSubtypeDropdown();
+        // Restore the group + subtype dropdowns for the previously chosen organ
+        updateClinicalGroupDropdown(true);
         @if(old('disease_subtype_id'))
         document.getElementById('modal_disease_subtype_id').value = '{{ old('disease_subtype_id') }}';
         @endif
