@@ -34,8 +34,23 @@ class SlideVerification extends Model
      */
     public const STATE_PASSED      = 'passed';
     public const STATE_FAILED      = 'failed';
+    public const STATE_WARNING     = 'warning';
     public const STATE_NEEDS_INFO  = 'needs_info';
     public const STATE_NOT_CHECKED = 'not_checked';
+
+    /**
+     * Checks that are advisory rather than disqualifying.
+     *
+     * WSI_TRAINING_ELIGIBILITY_STANDARD.md, section C, marks C5 (heavy ink /
+     * background), C6 (out-of-focus blur) and C7 (artifacts) as تحذير —
+     * warnings — while C1 (tissue ≥ 10%) and C2 (≥ 50 patches) are إلزامي,
+     * mandatory. The code used to reject on all five, which rejected 587
+     * slides on blur and 556 on background against the project's own rules.
+     *
+     * An advisory check that does not meet its threshold is reported, and is
+     * visible on the slide, but it does not reject the slide.
+     */
+    public const ADVISORY_CHECKS = ['blur_score', 'artifact_score', 'background_ratio'];
 
     /**
      * Definition of every check the verification pipeline runs.
@@ -115,12 +130,18 @@ class SlideVerification extends Model
 
         foreach (self::CHECKS as $check) {
             [$state, $detail] = $this->evaluateSingle($check);
+
+            // Advisory checks report, they do not disqualify.
+            if ($state === self::STATE_FAILED && in_array($check['code'], self::ADVISORY_CHECKS, true)) {
+                $state = self::STATE_WARNING;
+            }
+
             $results[] = [
                 'code'   => $check['code'],
                 'label'  => $check['label'],
                 'group'  => $check['group'],
                 'kind'   => $check['kind'],
-                'state'  => $state,    // passed | failed | needs_info | not_checked
+                'state'  => $state,    // passed | failed | warning | needs_info | not_checked
                 'detail' => $detail,
             ];
         }
@@ -219,11 +240,19 @@ class SlideVerification extends Model
             'magnification_power' => $this->numCheck($this->magnification_power, fn ($v) => $v >= 20,        'min 20x'),
             'mpp_x'               => $this->numCheck($this->mpp_x,               fn ($v) => $v > 0,          '> 0'),
             'mpp_y'               => $this->numCheck($this->mpp_y,               fn ($v) => $v > 0,          '> 0'),
+            // C1 and C2 of the eligibility standard — mandatory.
             'tissue_area_percent' => $this->numCheck($this->tissue_area_percent, fn ($v) => $v >= 10,        'min 10%'),
             'tissue_patch_count'  => $this->numCheck($this->tissue_patch_count,  fn ($v) => $v >= 50,        'min 50 patches'),
+            // C5–C7 — advisory (see ADVISORY_CHECKS).
             'artifact_score'      => $this->numCheck($this->artifact_score,      fn ($v) => $v <= 0.30,      'max 0.30'),
             'blur_score'          => $this->numCheck($this->blur_score,          fn ($v) => $v <= 0.65,      'max 0.65'),
-            'background_ratio'    => $this->numCheck($this->background_ratio,    fn ($v) => $v <= 0.85,      'max 0.85'),
+            // background_ratio is computed as 1 - tissue_area_percent/100 by
+            // both inspectors, so it is the same measurement as C1 stated the
+            // other way round. At 0.85 it was STRICTER than C1 and contradicted
+            // it: a slide with 12% tissue passed "sufficient tissue" and failed
+            // "background does not dominate" on the identical number. The
+            // threshold is now C1's exact complement.
+            'background_ratio'    => $this->numCheck($this->background_ratio,    fn ($v) => $v <= 0.90,      'max 0.90'),
             default               => ['not_checked', null],
         };
     }

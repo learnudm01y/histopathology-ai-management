@@ -658,11 +658,15 @@ class SlideVerificationService
         $failedLabels    = [];
         $pendingLabels   = [];
         $caseInfoLabels  = [];
+        $warningLabels   = [];
 
         foreach ($results as $r) {
             if ($r['state'] === SlideVerification::STATE_FAILED) {
                 $hasFailed = true;
                 $failedLabels[] = $r['label'] . ($r['detail'] ? " ({$r['detail']})" : '');
+            } elseif ($r['state'] === SlideVerification::STATE_WARNING) {
+                // Advisory only — recorded, never disqualifying.
+                $warningLabels[] = $r['label'] . ($r['detail'] ? " ({$r['detail']})" : '');
             } elseif ($r['state'] === SlideVerification::STATE_NEEDS_INFO) {
                 $needsCaseInfo = true;
                 $caseInfoLabels[] = $r['label'];
@@ -699,6 +703,13 @@ class SlideVerificationService
         // checks; record them so the note tells the whole story.
         if ($status === SlideVerification::STATUS_NEEDS_CASE && $pendingLabels) {
             $notes .= ' | still not checked: ' . implode('; ', $pendingLabels);
+        }
+
+        // Advisory findings are appended to every outcome, including 'passed':
+        // they are the reason a reviewer might look at a slide even though it
+        // is eligible.
+        if ($warningLabels) {
+            $notes .= ' | WARNINGS: ' . implode('; ', $warningLabels);
         }
 
         $verification->update([

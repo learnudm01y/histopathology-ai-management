@@ -596,6 +596,7 @@
     $grouped       = collect($checks)->groupBy('group');
     $failedChecks  = collect($checks)->where('state', 'failed');
     $caseInfoNeeds = collect($checks)->where('state', 'needs_info');
+    $warningChecks = collect($checks)->where('state', 'warning');
     $statusBadge   = match ($verification?->verification_status) {
         'passed'              => 'success',
         'failed'              => 'danger',
@@ -668,6 +669,7 @@
                         <span class="ml-auto d-flex" style="gap:.75rem;">
                             <span class="text-success small"><i class="mdi mdi-check-circle"></i> {{ $countsByState['passed'] ?? 0 }}</span>
                             <span class="text-danger small"><i class="mdi mdi-close-circle"></i> {{ $countsByState['failed'] ?? 0 }}</span>
+                            <span class="text-warning small"><i class="mdi mdi-alert-outline"></i> {{ $countsByState['warning'] ?? 0 }}</span>
                             <span class="text-info small"><i class="mdi mdi-account-question-outline"></i> {{ $countsByState['needs_info'] ?? 0 }}</span>
                             <span class="text-muted small"><i class="mdi mdi-clock-outline"></i> {{ $countsByState['not_checked'] ?? 0 }}</span>
                         </span>
@@ -682,6 +684,25 @@
                         Not processed yet. Click <strong>Verify Slide</strong> above.
                     </div>
                 @else
+
+                    {{-- ── Advisory findings (do not reject the slide) ── --}}
+                    @if($warningChecks->isNotEmpty())
+                        <div class="alert alert-warning py-2 px-3 mb-3 small">
+                            <strong><i class="mdi mdi-alert-outline mr-1"></i>Warnings:</strong>
+                            advisory under the eligibility standard (blur, artifacts and background are
+                            warnings, not disqualifiers) — the slide stays eligible.
+                            <ul class="mb-0 mt-1 pl-3">
+                                @foreach($warningChecks as $wc)
+                                    <li>
+                                        {{ $wc['label'] }}
+                                        @if($wc['detail'])
+                                            &mdash; <em>{{ Str::limit($wc['detail'], 55) }}</em>
+                                        @endif
+                                    </li>
+                                @endforeach
+                            </ul>
+                        </div>
+                    @endif
 
                     {{-- ── Case information still required ── --}}
                     @if($caseInfoNeeds->isNotEmpty())
@@ -737,11 +758,12 @@
                                 @foreach($grouped[$groupCode] as $row)
                                     @php
                                         [$icon, $rowClass, $stateLabel] = match ($row['state']) {
-                                            'passed'      => ['mdi-check-circle text-success',       '',             'Passed'],
-                                            'failed'      => ['mdi-close-circle text-danger',        'table-danger', 'Failed'],
+                                            'passed'      => ['mdi-check-circle text-success',       '',              'Passed'],
+                                            'failed'      => ['mdi-close-circle text-danger',        'table-danger',  'Failed'],
+                                            'warning'     => ['mdi-alert-outline text-warning',      'table-warning', 'Warning'],
                                             'needs_info'  => ['mdi-account-question-outline text-info', 'table-info', 'Needs info'],
-                                            'not_checked' => ['mdi-clock-outline text-muted',        '',             'Pending'],
-                                            default       => ['mdi-help-circle text-muted',          '',             '—'],
+                                            'not_checked' => ['mdi-clock-outline text-muted',        '',              'Pending'],
+                                            default       => ['mdi-help-circle text-muted',          '',              '—'],
                                         };
                                         $isVirtual = ($row['code'] === 'slide_dimensions');
                                         $colName   = $isVirtual ? null : $row['code'];
@@ -784,7 +806,7 @@
                                             @endif
                                         </td>
                                         <td class="text-right align-middle" style="padding:3px 5px;">
-                                            <span class="badge badge-outline-{{ ['passed' => 'success', 'failed' => 'danger', 'needs_info' => 'info'][$row['state']] ?? 'secondary' }}"
+                                            <span class="badge badge-outline-{{ ['passed' => 'success', 'failed' => 'danger', 'warning' => 'warning', 'needs_info' => 'info'][$row['state']] ?? 'secondary' }}"
                                                   style="font-size:.67rem;">
                                                 {{ $stateLabel }}
                                             </span>
@@ -1198,6 +1220,7 @@
                                 [$icon, $stateLabel, $stateColor] = match ($row['state']) {
                                     'passed'      => ['mdi-check-circle',              'OK',         '#28a745'],
                                     'failed'      => ['mdi-close-circle',              'Failed',     '#dc3545'],
+                                    'warning'     => ['mdi-alert-outline',             'Warning',    '#ffc107'],
                                     'needs_info'  => ['mdi-account-question-outline',  'Needs info', '#17a2b8'],
                                     'not_checked' => ['mdi-clock-outline',             'Pending',    '#888'],
                                     default       => ['mdi-help-circle',               '—',          '#888'],
