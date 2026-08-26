@@ -149,12 +149,16 @@ class SlideVerificationService
             //   MySQL evaluates (NULL != $id) as NULL — not TRUE.
             //   A plain `!=` silently skips rows where sample_id IS NULL.
             //   The explicit whereNull() OR clause makes the match correct.
+            // Only rows with no owning sample are orphans. Rows belonging to a
+            // DIFFERENT sample must be left alone: two samples can legitimately
+            // carry the same TCGA slide barcode (different files, same
+            // entity_submitter_id) — 74 such pairs exist in this database.
+            // Deleting the other sample's row made the pair overwrite each other
+            // forever, and a row deleted mid-flight made finalize()'s fresh()
+            // return null, which was the source of the 43k failed jobs.
             if (!empty($localData['slide_id'])) {
                 SlideVerification::where('slide_id', $localData['slide_id'])
-                    ->where(function ($q) use ($sample) {
-                        $q->whereNull('sample_id')
-                          ->orWhere('sample_id', '!=', $sample->id);
-                    })
+                    ->whereNull('sample_id')
                     ->lockForUpdate()
                     ->delete();
             }
@@ -166,11 +170,23 @@ class SlideVerificationService
         }, 3); // retry up to 3× on DeadlockException (InnoDB gap-lock, errno 1213)
 
         // Now compute the aggregate verification_status (passed/failed/pending).
-        $verification = $this->finalize($verification);
+        $finalized = $this->finalize($verification);
 
-        Log::info("[SlideVerificationService] Sample #{$sample->id} verified → {$verification->verification_status}");
+        if ($finalized === null) {
+            // The row vanished between the write and the re-read (concurrent
+            // worker). Nothing to report, but this must not throw: raising here
+            // failed the job and had it re-dispatched indefinitely.
+            Log::warning(
+                "[SlideVerificationService] Verification row for sample #{$sample->id} disappeared "
+                . 'during finalize — skipping this pass.'
+            );
 
-        return $verification;
+            return $verification;
+        }
+
+        Log::info("[SlideVerificationService] Sample #{$sample->id} verified → {$finalized->verification_status}");
+
+        return $finalized;
     }
 
     /**
@@ -586,18 +602,29 @@ class SlideVerificationService
         $this->finalize($verification);
     }
 
-    private function finalize(SlideVerification $verification): SlideVerification
+    /**
+     * Compute the aggregate verification_status and record why.
+     *
+     * Returns null when the row no longer exists (a concurrent worker removed
+     * it). The return type used to be non-nullable while the body ended in
+     * fresh(), so a mid-flight delete raised a TypeError that failed the job.
+     */
+    private function finalize(SlideVerification $verification): ?SlideVerification
     {
         $results = $verification->evaluateChecks();
 
         $hasFailed     = false;
         $hasNotChecked = false;
+        $failedLabels  = [];
+        $pendingLabels = [];
 
         foreach ($results as $r) {
             if ($r['state'] === 'failed') {
                 $hasFailed = true;
+                $failedLabels[] = $r['label'] . ($r['detail'] ? " ({$r['detail']})" : '');
             } elseif ($r['state'] === 'not_checked') {
                 $hasNotChecked = true;
+                $pendingLabels[] = $r['label'];
             }
         }
 
@@ -607,7 +634,20 @@ class SlideVerificationService
             default        => 'passed',
         };
 
-        $verification->update(['verification_status' => $status]);
+        // Persist the reason. Previously `notes` stayed NULL for every one of the
+        // 756 failed rows, so there was no way to tell why the dataset was
+        // rejected — and therefore no way to fix it.
+        $notes = match ($status) {
+            'failed'  => 'FAILED: ' . implode('; ', $failedLabels),
+            'pending' => 'PENDING (not checked): ' . implode('; ', $pendingLabels),
+            default   => 'All checks passed.',
+        };
+
+        $verification->update([
+            'verification_status' => $status,
+            'notes'               => mb_substr($notes, 0, 60000),
+            'verified_at'         => now(),
+        ]);
 
         // Sync Sample.quality_status so the samples table reflects verification.
         $qualityStatus = match ($status) {

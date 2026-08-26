@@ -78,7 +78,7 @@ class PatchExtractionJob implements ShouldQueue
 
             // ── 2. Extract patches ───────────────────────────────────────────
             $patchesDir = $tempDir . DIRECTORY_SEPARATOR . 'patches';
-            $result     = $this->runExtraction($localWsi, $patchesDir, $patchSize);
+            $result     = $this->runExtraction($localWsi, $patchesDir, $patchSize, $magnification);
             Log::info("[PatchExtraction] Sample #{$this->sampleId}: {$result['patches_extracted']} patches extracted, {$result['patches_skipped']} skipped");
 
             // ── 3. Compress patches into a single archive ─────────────────────
@@ -190,7 +190,12 @@ class PatchExtractionJob implements ShouldQueue
     /**
      * Run  scripts/patch_extract.py  and return the decoded JSON result.
      */
-    private function runExtraction(string $wsiPath, string $outputDir, PatchSize $patchSize): array
+    private function runExtraction(
+        string $wsiPath,
+        string $outputDir,
+        PatchSize $patchSize,
+        Magnification $magnification
+    ): array
     {
         $scriptPath = base_path('scripts/patch_extract.py');
         $pythonPath = (string) env('PYTHON_PATH', 'python3');
@@ -220,19 +225,34 @@ class PatchExtractionJob implements ShouldQueue
             throw new \RuntimeException("patch_extract.py not found or not readable at: {$scriptPath}");
         }
 
+        // The selected magnification now determines the PHYSICAL scale of a patch
+        // instead of only naming a Drive folder. Previously every patch_sizes row
+        // carried wsi_level=0, so the extractor always read the scanner's native
+        // resolution: a 256 px patch covered 128 um on a 20x slide but only 64 um
+        // on a 40x one, and both were stored side by side as if identical.
+        //   10x -> 1.00 um/px, 20x -> 0.50 um/px, 40x -> 0.25 um/px
+        $magValue  = max(1, (int) $magnification->value);
+        $targetMpp = 10.0 / $magValue;
+
         $cmd = [
             $pythonPath, $scriptPath,
             '--input',            $wsiPath,
             '--output_dir',       $outputDir,
             '--patch_size',       (string) $patchSize->size_px,
-            '--level',            (string) $patchSize->wsi_level,
+            '--target_mpp',       (string) $targetMpp,
+            // --level is intentionally omitted: the script picks the deepest
+            // pyramid level that needs no upsampling for this target_mpp.
             '--overlap',          (string) $patchSize->overlap_px,
             '--format',           'png',
             '--tissue_threshold', '0.5',
+            '--max_patches',      (string) max(0, (int) env('PATCH_MAX_PER_SLIDE', 3000)),
+            '--seed',             '42',
             '--workers',          (string) max(1, (int) env('PATCH_WORKERS', 2)),
             '--save_coords',                // always write patch_coords.csv
             '--overview',                   // always write overview.png
         ];
+
+        Log::info("[PatchExtraction] Sample #{$this->sampleId} scale: {$magnification->label} -> target_mpp={$targetMpp}");
 
         // Force unbuffered Python so we get logs immediately and JSON gets flushed
         // before exit even when the process is killed (OOM etc.).

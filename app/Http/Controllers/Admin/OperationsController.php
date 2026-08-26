@@ -142,6 +142,9 @@ class OperationsController extends Controller
      * label_type = 'disease_subtype' trains on the EXACT disease name (taxonomy leaf)
      * and additionally supervises the coarse Category level, so the head learns
      * "which family" and "which exact entity" jointly.
+     *
+     * Only slides that are usable, quality_status = passed and whose slide
+     * verification passed are admitted into a run.
      */
     public function dispatchTraining(Request $request): RedirectResponse
     {
@@ -162,6 +165,8 @@ class OperationsController extends Controller
             'hier_weight'       => ['nullable', 'numeric', 'min:0', 'max:1'],
             'use_class_weights' => ['nullable', 'boolean'],
             'gdrive_output_dir' => ['nullable', 'string', 'max:255'],
+            'sample_phases'     => ['nullable', 'array'],
+            'sample_phases.*'   => ['integer', 'in:1,2,3'],
         ]);
 
         $labelType = $validated['label_type'];
@@ -209,19 +214,86 @@ class OperationsController extends Controller
             $casePhaseMap[$caseId] = $phase;
         }
 
-        // ── Only include samples with completed feature extraction ─────────────
-        $eligibleSamples = Sample::whereIn('id', $validated['sample_ids'])
+        // ── Only train on slides that are usable AND verified ─────────────────
+        // A features file is not enough on its own: a slide that failed
+        // verification, that was rejected on quality, or that is still waiting
+        // for its clinical case information has unproven label provenance, and
+        // letting it into a split — the test split above all — invalidates the
+        // result it produces.
+        $candidates = Sample::whereIn('id', $validated['sample_ids'])
             ->where('feature_extraction_status', 'completed')
             ->whereNotNull('features_gdrive_path')
-            ->with(TrainingLabelResolver::relationsFor($labelType))
+            ->where('is_usable', true)
+            ->where('quality_status', 'passed')
+            ->with(array_merge(TrainingLabelResolver::relationsFor($labelType), ['slideVerification']))
             ->get();
 
-        $eligibleSampleIds = $eligibleSamples->pluck('id')->all();
-        $skipped = count($validated['sample_ids']) - count($eligibleSampleIds);
+        $rejected        = [];
+        $eligibleSamples = $candidates->filter(function (Sample $s) use (&$rejected) {
+            $v = $s->slideVerification;
+            if (! $v) {
+                $rejected[] = "#{$s->id} (no verification record)";
+                return false;
+            }
+            if ($v->verification_status !== 'passed') {
+                $rejected[] = "#{$s->id} (verification={$v->verification_status})";
+                return false;
+            }
+            return true;
+        })->values();
 
-        if (count($eligibleSampleIds) < 2) {
+        $eligibleSampleIds = $eligibleSamples->pluck('id')->all();
+        $skipped           = count($validated['sample_ids']) - count($eligibleSampleIds);
+
+        if (count($eligibleSampleIds) < 4) {
+            $detail = $rejected ? ' Rejected: ' . implode(', ', array_slice($rejected, 0, 10)) : '';
             return redirect()->back()->withErrors([
-                'sample_ids' => 'Not enough samples with completed feature extraction. At least 2 required.',
+                'sample_ids' => sprintf(
+                    'Only %d of %d selected sample(s) are eligible. A run needs at least 4 '
+                    . '(train and validation must each hold at least two classes). Eligibility requires: '
+                    . 'feature extraction completed, features path set, is_usable, quality_status=passed, '
+                    . 'and slide verification passed.%s',
+                    count($eligibleSampleIds),
+                    count($validated['sample_ids']),
+                    $detail
+                ),
+            ]);
+        }
+
+        // ── Extraction uniformity ─────────────────────────────────────────────
+        // The worker infers the feature dimension from the FIRST bag only, so a
+        // run mixing 768-dim (TITAN/CONCH) and 2560-dim (Virchow2) features dies
+        // on the first mismatched bag. Mixing patch sizes or magnifications is
+        // worse: it trains happily on a non-comparable feature space.
+        $featureModels  = $eligibleSamples->pluck('feature_extraction_ai_model_id')->unique()->filter()->values();
+        $patchSizes     = $eligibleSamples->pluck('patch_size_id')->unique()->filter()->values();
+        $magnifications = $eligibleSamples->pluck('magnification_id')->unique()->filter()->values();
+
+        if ($featureModels->count() > 1) {
+            return redirect()->back()->withErrors([
+                'feature_model_id' => 'Selected samples were extracted with ' . $featureModels->count()
+                    . ' different feature models (ai_model ids: ' . $featureModels->implode(', ')
+                    . '). Feature dimensions differ between models, so one run must use exactly one.',
+            ]);
+        }
+        if ($featureModels->count() === 1 && (int) $featureModels[0] !== (int) $validated['feature_model_id']) {
+            return redirect()->back()->withErrors([
+                'feature_model_id' => 'The selected feature model (id ' . $validated['feature_model_id']
+                    . ') is not the model these samples were extracted with (id ' . $featureModels[0] . ').',
+            ]);
+        }
+        if ($patchSizes->count() > 1) {
+            return redirect()->back()->withErrors([
+                'sample_ids' => 'Selected samples use ' . $patchSizes->count()
+                    . ' different patch sizes (patch_size ids: ' . $patchSizes->implode(', ')
+                    . '). One run must use a single patch size.',
+            ]);
+        }
+        if ($magnifications->count() > 1) {
+            return redirect()->back()->withErrors([
+                'sample_ids' => 'Selected samples use ' . $magnifications->count()
+                    . ' different magnifications (magnification ids: ' . $magnifications->implode(', ')
+                    . '). One run must use a single magnification.',
             ]);
         }
 
@@ -404,7 +476,7 @@ class OperationsController extends Controller
              . "{$spec['n_classes']} classes from '{$labelType}'"
              . ($isHierarchical ? " with {$spec['n_parent_classes']} parent classes (hierarchical)." : '.');
         if ($skipped > 0) {
-            $msg .= " {$skipped} sample(s) skipped (features not ready).";
+            $msg .= " {$skipped} sample(s) excluded as ineligible.";
         }
         if (! empty($missingInVal)) {
             $msg .= ' Warning: no Validation slide for: ' . implode(', ', $missingInVal)
