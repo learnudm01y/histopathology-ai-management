@@ -625,16 +625,16 @@ class SlideVerificationService
     }
 
     /**
-     * Compute the aggregate verification_status from the per-check results.
-     *
-     * Rules:
-     *   - any 'failed' check → verification_status = 'failed'
-     *   - else if every check is 'passed' → 'passed'
-     *   - otherwise (some checks still 'not_checked') → 'pending'
-     */
-    /**
      * Public wrapper: recompute aggregate verification_status from current check results.
-     * Called after a field is updated inline via the PATCH endpoint.
+     *
+     * Called after a field is updated inline via the PATCH endpoint, and by
+     * `php artisan slides:recompute-status` when the ranking itself changes.
+     *
+     * Rules, worst first:
+     *   - any 'failed' check          → 'failed'
+     *   - else any missing case field → 'needs_clinical_info'
+     *   - else any check not run yet  → 'pending'
+     *   - otherwise                   → 'passed'
      */
     public function recomputeStatus(SlideVerification $verification): void
     {
