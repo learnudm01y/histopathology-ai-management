@@ -271,7 +271,7 @@
                                 {{-- Quality Status --}}
                                 <td style="padding:6px 8px; white-space:nowrap;" class="align-middle">
                                     <span class="badge badge-{{ $sample->quality_status_badge }}">
-                                        {{ str_replace('_', ' ', $sample->quality_status) }}
+                                        {{ $sample->quality_status_label }}
                                     </span>
                                 </td>
 
@@ -363,6 +363,7 @@
                                 <option value="passed">Passed</option>
                                 <option value="rejected">Rejected</option>
                                 <option value="needs_review">Needs Review</option>
+                                <option value="needs_clinical_info">Needs Case Info</option>
                             </select>
                         </div>
                     </div>

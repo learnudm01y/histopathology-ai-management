@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\ClinicalCaseInformation;
+use App\Models\Magnification;
 use App\Models\Sample;
 use App\Models\SlideVerification;
 use Illuminate\Support\Facades\DB;
@@ -42,7 +43,7 @@ class SlideVerificationService
      */
     public function verify(Sample $sample): SlideVerification
     {
-        $sample->loadMissing(['stain', 'category', 'patientCase.clinicalInfo', 'dataSource']);
+        $sample->loadMissing(['stain', 'category', 'diseaseSubtype', 'patientCase.clinicalInfo', 'dataSource']);
 
         $clinical = $sample->patientCase?->clinicalInfo;
 
@@ -169,7 +170,8 @@ class SlideVerificationService
             );
         }, 3); // retry up to 3× on DeadlockException (InnoDB gap-lock, errno 1213)
 
-        // Now compute the aggregate verification_status (passed/failed/pending).
+        // Now compute the aggregate verification_status
+        // (passed / failed / needs_clinical_info / pending).
         $finalized = $this->finalize($verification);
 
         if ($finalized === null) {
@@ -203,8 +205,22 @@ class SlideVerificationService
     private function collectMetadata(Sample $sample, ?ClinicalCaseInformation $clinical): array
     {
         // ── Identity & linkage ──────────────────────────────────────────
-        $slideId    = $sample->entity_submitter_id ?: ($sample->entity_id ?: null);
-        $filePath   = $sample->wsi_remote_path ?: $sample->storage_path;
+        // A slide uploaded by hand carries no GDC barcode, so fall back to the
+        // file name and finally to the row's own id. Reporting "no unique slide
+        // identifier" for a slide the system can address perfectly well was a
+        // false failure that rejected every manual upload.
+        $slideId = $sample->entity_submitter_id
+            ?: $sample->entity_id
+            ?: ($sample->file_name ? pathinfo($sample->file_name, PATHINFO_FILENAME) : null)
+            ?: "SAMPLE-{$sample->id}";
+
+        // The WSI lives on Drive for most rows; local storage, the shared link
+        // and the original bulk-import path are equally valid evidence that the
+        // file exists and where it is.
+        $filePath = $sample->wsi_remote_path
+            ?: $sample->storage_path
+            ?: $sample->storage_link
+            ?: $sample->bulk_folder_original_path;
 
         // patient_id — prefer clinical info or linked case; fall back to a
         // best-effort parse of the barcode embedded in the file_name.
@@ -230,9 +246,14 @@ class SlideVerificationService
                   ?: strtolower($sample->data_format ?? '');
         $extension = $extension ?: null;
 
-        $sizeMb = $sample->file_size_bytes
-            ? round(((int) $sample->file_size_bytes) / 1_048_576, 3)
-            : null;
+        // file_size_gb is what the bulk importer fills in; file_size_bytes is
+        // what the uploader fills in. Reading only one of the two left the size
+        // check permanently "not checked" for half the catalogue.
+        $sizeMb = match (true) {
+            (bool) $sample->file_size_bytes => round(((int) $sample->file_size_bytes) / 1_048_576, 3),
+            (bool) $sample->file_size_gb    => round(((float) $sample->file_size_gb) * 1024, 3),
+            default                         => null,
+        };
 
         // ── Health checks (require OpenSlide / Python worker) ──────────
         // We mark these `not_checked` here. A Python worker can later set
@@ -277,8 +298,14 @@ class SlideVerificationService
         $gender   = $clinical?->gender;
         $ageAtIdx = $clinical?->age_at_index;
 
-        // Category model uses label_en as the human label (e.g. tumor / normal)
+        // Category model uses label_en as the human label (e.g. tumor / normal).
+        // The taxonomy leaf (disease subtype) and the case's disease type are
+        // equally valid supervision targets, so a slide labelled at either of
+        // those levels no longer reports "no label".
         $label = $sample->category?->label_en
+            ?? $sample->diseaseSubtype?->name
+            ?? $sample->disease_subtype
+            ?? $sample->patientCase?->disease_type
             ?? ($sample->getAttributes()['category'] ?? null);
 
         // Determine label clarity
@@ -292,17 +319,29 @@ class SlideVerificationService
         }
 
         // ── Tissue / WSI fields the system already knows ───────────────
-        // samples.magnification is a string like "20x" → extract numeric.
+        // samples.magnification is a free-text string like "20x"; the patch
+        // pipeline instead stores magnification_id pointing at a row whose
+        // `value` is the numeric power. Read the text first, then the setting —
+        // note that $sample->magnification resolves to the COLUMN, not to the
+        // relation of the same name, so the row is fetched explicitly.
         $magnificationPower = $this->parseMagnification($sample->magnification);
+        if ($magnificationPower === null && $sample->magnification_id) {
+            $magnificationPower = Magnification::whereKey($sample->magnification_id)->value('value');
+            $magnificationPower = $magnificationPower !== null ? (float) $magnificationPower : null;
+        }
 
         // tissue_coverage_pct on samples is the tiling-pipeline output;
-        // tile_count is the produced patch count. Re-use both.
+        // tile_count is the produced patch count. When tiling data is absent,
+        // the feature-extraction stage's own patch count is the same quantity
+        // measured one step later.
         $tissueAreaPercent = $sample->tissue_coverage_pct !== null
             ? (float) $sample->tissue_coverage_pct
             : null;
-        $tissuePatchCount  = $sample->tile_count !== null
-            ? (int) $sample->tile_count
-            : null;
+        $tissuePatchCount  = match (true) {
+            $sample->tile_count !== null            => (int) $sample->tile_count,
+            $sample->features_patch_count !== null  => (int) $sample->features_patch_count,
+            default                                 => null,
+        };
 
         return [
             'slide_id'              => $slideId,
@@ -613,35 +652,54 @@ class SlideVerificationService
     {
         $results = $verification->evaluateChecks();
 
-        $hasFailed     = false;
-        $hasNotChecked = false;
-        $failedLabels  = [];
-        $pendingLabels = [];
+        $hasFailed       = false;
+        $hasNotChecked   = false;
+        $needsCaseInfo   = false;
+        $failedLabels    = [];
+        $pendingLabels   = [];
+        $caseInfoLabels  = [];
 
         foreach ($results as $r) {
-            if ($r['state'] === 'failed') {
+            if ($r['state'] === SlideVerification::STATE_FAILED) {
                 $hasFailed = true;
                 $failedLabels[] = $r['label'] . ($r['detail'] ? " ({$r['detail']})" : '');
-            } elseif ($r['state'] === 'not_checked') {
+            } elseif ($r['state'] === SlideVerification::STATE_NEEDS_INFO) {
+                $needsCaseInfo = true;
+                $caseInfoLabels[] = $r['label'];
+            } elseif ($r['state'] === SlideVerification::STATE_NOT_CHECKED) {
                 $hasNotChecked = true;
                 $pendingLabels[] = $r['label'];
             }
         }
 
+        // A missing patient/case field never rejects a slide — the file can be
+        // technically perfect and still not be usable until somebody records who
+        // it came from. It outranks `pending` because it is a known, actionable
+        // gap rather than a check that simply has not run yet, and it outranks
+        // `passed` because a slide without its case information must never be
+        // presented as fully accepted.
         $status = match (true) {
-            $hasFailed     => 'failed',
-            $hasNotChecked => 'pending',
-            default        => 'passed',
+            $hasFailed     => SlideVerification::STATUS_FAILED,
+            $needsCaseInfo => SlideVerification::STATUS_NEEDS_CASE,
+            $hasNotChecked => SlideVerification::STATUS_PENDING,
+            default        => SlideVerification::STATUS_PASSED,
         };
 
         // Persist the reason. Previously `notes` stayed NULL for every one of the
         // 756 failed rows, so there was no way to tell why the dataset was
         // rejected — and therefore no way to fix it.
         $notes = match ($status) {
-            'failed'  => 'FAILED: ' . implode('; ', $failedLabels),
-            'pending' => 'PENDING (not checked): ' . implode('; ', $pendingLabels),
-            default   => 'All checks passed.',
+            SlideVerification::STATUS_FAILED     => 'FAILED: ' . implode('; ', $failedLabels),
+            SlideVerification::STATUS_NEEDS_CASE => 'NEEDS CASE INFORMATION: ' . implode('; ', $caseInfoLabels),
+            SlideVerification::STATUS_PENDING    => 'PENDING (not checked): ' . implode('; ', $pendingLabels),
+            default                              => 'All checks passed.',
         };
+
+        // A slide held for case information still carries any unfinished deep
+        // checks; record them so the note tells the whole story.
+        if ($status === SlideVerification::STATUS_NEEDS_CASE && $pendingLabels) {
+            $notes .= ' | still not checked: ' . implode('; ', $pendingLabels);
+        }
 
         $verification->update([
             'verification_status' => $status,
@@ -651,9 +709,10 @@ class SlideVerificationService
 
         // Sync Sample.quality_status so the samples table reflects verification.
         $qualityStatus = match ($status) {
-            'passed'  => 'passed',
-            'failed'  => 'rejected',
-            default   => 'pending',
+            SlideVerification::STATUS_PASSED     => 'passed',
+            SlideVerification::STATUS_FAILED     => 'rejected',
+            SlideVerification::STATUS_NEEDS_CASE => 'needs_clinical_info',
+            default                              => 'pending',
         };
         Sample::where('id', $verification->sample_id)
               ->update(['quality_status' => $qualityStatus]);

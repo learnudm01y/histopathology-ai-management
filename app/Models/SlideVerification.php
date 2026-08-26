@@ -22,21 +22,40 @@ class SlideVerification extends Model
     ];
 
     /**
+     * Aggregate verification outcomes, worst first.
+     */
+    public const STATUS_FAILED       = 'failed';
+    public const STATUS_NEEDS_CASE   = 'needs_clinical_info';
+    public const STATUS_PENDING      = 'pending';
+    public const STATUS_PASSED       = 'passed';
+
+    /**
+     * Per-check states returned by evaluateChecks().
+     */
+    public const STATE_PASSED      = 'passed';
+    public const STATE_FAILED      = 'failed';
+    public const STATE_NEEDS_INFO  = 'needs_info';
+    public const STATE_NOT_CHECKED = 'not_checked';
+
+    /**
      * Definition of every check the verification pipeline runs.
      * Used to render the verification UI and to drive the pipeline itself.
      *
      * Each entry: [code, label, group, kind]
-     *   - kind: 'status' (passed/failed/not_checked enum)
-     *           'present' (column not-null/non-empty = passed)
-     *           'numeric' (numeric threshold check; logic in service)
+     *   - kind: 'status'   (passed/failed/not_checked enum)
+     *           'present'  (column not-null/non-empty = passed)
+     *           'numeric'  (numeric threshold check; logic in service)
+     *           'clinical' (patient / case information: missing does NOT
+     *                       reject the slide, it holds it in
+     *                       needs_clinical_info until a human fills it in)
      */
     public const CHECKS = [
         // Identity & Linkage
         ['code' => 'file_path',              'label' => 'File exists',                            'group' => 'identity', 'kind' => 'present'],
         ['code' => 'slide_id',                'label' => 'Unique slide identifier',                 'group' => 'identity', 'kind' => 'present'],
-        ['code' => 'patient_id',              'label' => 'Patient identifier exists',               'group' => 'identity', 'kind' => 'present'],
-        ['code' => 'case_id',                 'label' => 'Case/sample identifier linked to patient','group' => 'identity', 'kind' => 'present'],
-        ['code' => 'project_id',              'label' => 'Project/source identified',               'group' => 'identity', 'kind' => 'present'],
+        ['code' => 'patient_id',              'label' => 'Patient identifier exists',               'group' => 'identity', 'kind' => 'clinical'],
+        ['code' => 'case_id',                 'label' => 'Case/sample identifier linked to patient','group' => 'identity', 'kind' => 'clinical'],
+        ['code' => 'project_id',              'label' => 'Project/source identified',               'group' => 'identity', 'kind' => 'clinical'],
 
         // File & format
         ['code' => 'file_extension',          'label' => 'Supported file format',                   'group' => 'file',     'kind' => 'present'],
@@ -57,8 +76,8 @@ class SlideVerification extends Model
         // Sample / clinical metadata
         ['code' => 'sample_type',             'label' => 'Sample type is appropriate',              'group' => 'clinical', 'kind' => 'present'],
         ['code' => 'stain_type',              'label' => 'Stain type is appropriate',               'group' => 'clinical', 'kind' => 'present'],
-        ['code' => 'gender',                  'label' => 'Gender available for clinical tracking',  'group' => 'clinical', 'kind' => 'info'],
-        ['code' => 'age_at_index',            'label' => 'Age available for clinical tracking',     'group' => 'clinical', 'kind' => 'info'],
+        ['code' => 'gender',                  'label' => 'Gender available for clinical tracking',  'group' => 'clinical', 'kind' => 'clinical'],
+        ['code' => 'age_at_index',            'label' => 'Age available for clinical tracking',     'group' => 'clinical', 'kind' => 'clinical'],
         ['code' => 'label',                   'label' => 'Label exists (for supervised training)',  'group' => 'clinical', 'kind' => 'present'],
         ['code' => 'label_status',            'label' => 'Label is not ambiguous',                  'group' => 'clinical', 'kind' => 'status'],
 
@@ -100,12 +119,57 @@ class SlideVerification extends Model
                 'code'   => $check['code'],
                 'label'  => $check['label'],
                 'group'  => $check['group'],
-                'state'  => $state,    // passed | failed | not_checked
+                'kind'   => $check['kind'],
+                'state'  => $state,    // passed | failed | needs_info | not_checked
                 'detail' => $detail,
             ];
         }
 
         return $results;
+    }
+
+    /**
+     * Codes of the checks that describe the patient / case behind the slide.
+     *
+     * @return array<int, string>
+     */
+    public static function clinicalCheckCodes(): array
+    {
+        return array_column(
+            array_filter(self::CHECKS, fn (array $c) => $c['kind'] === 'clinical'),
+            'code'
+        );
+    }
+
+    /**
+     * Human labels of the case-information fields that are still empty.
+     *
+     * @return array<int, string>
+     */
+    public function missingClinicalLabels(): array
+    {
+        $missing = [];
+
+        foreach (self::CHECKS as $check) {
+            if ($check['kind'] !== 'clinical') {
+                continue;
+            }
+            $value = $this->{$check['code']} ?? null;
+            if ($value === null || $value === '') {
+                $missing[] = $check['label'];
+            }
+        }
+
+        return $missing;
+    }
+
+    /**
+     * True when the slide itself is fine but its case information is not
+     * complete — the slide is neither accepted nor rejected.
+     */
+    public function needsClinicalInfo(): bool
+    {
+        return $this->verification_status === self::STATUS_NEEDS_CASE;
     }
 
     /**
@@ -128,16 +192,19 @@ class SlideVerification extends Model
         if ($kind === 'present') {
             $value = $this->{$code} ?? null;
             return $value === null || $value === ''
-                ? ['failed', 'missing']
-                : ['passed', (string) $value];
+                ? [self::STATE_FAILED, 'missing']
+                : [self::STATE_PASSED, (string) $value];
         }
 
-        // 'info' fields are optional metadata — not_checked when absent, passed when present.
-        if ($kind === 'info') {
+        // Patient / case information. A gap here is not a defect of the slide:
+        // the file can be perfectly good and still be unusable for training
+        // until somebody records who it came from. It therefore never rejects
+        // the slide — it holds it in `needs_clinical_info` instead.
+        if ($kind === 'clinical') {
             $value = $this->{$code} ?? null;
             return $value === null || $value === ''
-                ? ['not_checked', null]
-                : ['passed', (string) $value];
+                ? [self::STATE_NEEDS_INFO, 'awaiting case information']
+                : [self::STATE_PASSED, (string) $value];
         }
 
         // numeric thresholds

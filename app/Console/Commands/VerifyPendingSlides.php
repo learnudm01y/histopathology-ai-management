@@ -58,6 +58,15 @@ class VerifyPendingSlides extends Command
                   ->orWhere(function ($q2) use ($cutoff) {        // passed but now stale
                       $q2->where('sv.verification_status', 'passed')
                          ->where('sv.verified_at', '<', $cutoff);
+                  })
+                  // Held for case information. Re-running is how a slide leaves
+                  // that state once somebody fills the patient record in, but it
+                  // is rate-limited by the same staleness cutoff as 'passed':
+                  // picking it up every tick would re-queue the whole backlog
+                  // for as long as the information stays missing.
+                  ->orWhere(function ($q2) use ($cutoff) {
+                      $q2->where('sv.verification_status', 'needs_clinical_info')
+                         ->where('sv.verified_at', '<', $cutoff);
                   });
             })
             ->select('samples.id')

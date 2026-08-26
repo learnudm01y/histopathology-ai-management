@@ -179,6 +179,7 @@
                                     <option value="pending"  @selected(old('quality_status', $sample->quality_status) === 'pending')>Pending</option>
                                     <option value="passed"   @selected(old('quality_status', $sample->quality_status) === 'passed')>Passed</option>
                                     <option value="rejected" @selected(old('quality_status', $sample->quality_status) === 'rejected')>Rejected</option>
+                                    <option value="needs_clinical_info" @selected(old('quality_status', $sample->quality_status) === 'needs_clinical_info')>Needs Case Info</option>
                                 </select>
                             </div>
                         </div>

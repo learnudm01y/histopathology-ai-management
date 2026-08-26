@@ -695,7 +695,7 @@
                                     <label>Image Quality</label>
                                     <select name="quality_status" class="form-control">
                                         <option value="">— Any —</option>
-                                        @foreach(['passed','rejected','needs_review','pending'] as $q)
+                                        @foreach(['passed','rejected','needs_review','needs_clinical_info','pending'] as $q)
                                             <option value="{{ $q }}" {{ $filters['quality_status'] === $q ? 'selected' : '' }}>
                                                 {{ ucfirst(str_replace('_',' ',$q)) }}
                                             </option>

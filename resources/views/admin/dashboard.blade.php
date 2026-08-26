@@ -175,6 +175,17 @@
         <div class="card shadow-sm h-100">
             <div class="card-body py-3 px-3 d-flex align-items-center justify-content-between">
                 <div>
+                    <p class="text-muted mb-1" style="font-size:.73rem;">Needs Case Info</p>
+                    <h4 class="font-weight-bold mb-0 text-info">{{ number_format($sampleStats['quality_case_info'] ?? 0) }}</h4>
+                </div>
+                <i class="mdi mdi-account-question-outline icon-lg text-info"></i>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2 mb-3">
+        <div class="card shadow-sm h-100">
+            <div class="card-body py-3 px-3 d-flex align-items-center justify-content-between">
+                <div>
                     <p class="text-muted mb-1" style="font-size:.73rem;">Quality Pending</p>
                     <h4 class="font-weight-bold mb-0 text-secondary">{{ number_format($sampleStats['quality_pending']) }}</h4>
                 </div>
@@ -312,6 +323,17 @@
                     <h4 class="font-weight-bold mb-0 text-warning">{{ number_format($verifStats['pending']) }}</h4>
                 </div>
                 <i class="mdi mdi-shield-half-full icon-lg text-warning"></i>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2 mb-3">
+        <div class="card shadow-sm h-100">
+            <div class="card-body py-3 px-3 d-flex align-items-center justify-content-between">
+                <div>
+                    <p class="text-muted mb-1" style="font-size:.73rem;">Needs Case Info</p>
+                    <h4 class="font-weight-bold mb-0 text-info">{{ number_format($verifStats['case_info'] ?? 0) }}</h4>
+                </div>
+                <i class="mdi mdi-account-question-outline icon-lg text-info"></i>
             </div>
         </div>
     </div>

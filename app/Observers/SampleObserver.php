@@ -3,6 +3,7 @@
 namespace App\Observers;
 
 use App\Jobs\DeleteWsiFromDriveJob;
+use App\Jobs\RunSlideVerification;
 use App\Jobs\UploadWsiToDriveJob;
 use App\Models\Sample;
 use Illuminate\Support\Facades\Log;
@@ -78,6 +79,34 @@ class SampleObserver
             $delay = $downloadJustCompleted ? 30 : 60;
             $this->dispatchUpload($sample, $downloadJustCompleted ? 'download_completed' : 'file_id_set', $delay);
         }
+
+        $this->reverifyIfCaseInfoChanged($sample);
+    }
+
+    /**
+     * A slide held in `needs_clinical_info` leaves that state only when its
+     * verification is recomputed. Editing the case linkage is exactly the act
+     * that is supposed to release it, so re-verify immediately instead of
+     * waiting for the scheduler's staleness window.
+     */
+    private function reverifyIfCaseInfoChanged(Sample $sample): void
+    {
+        $caseFields = [
+            'case_id', 'entity_submitter_id', 'entity_id',
+            'data_source_id', 'category_id', 'disease_subtype_id', 'organ_id',
+        ];
+
+        if (! $sample->wasChanged($caseFields)) {
+            return;
+        }
+
+        RunSlideVerification::dispatch($sample->id, false)->delay(now()->addSeconds(5));
+
+        Log::info(sprintf(
+            '[SampleObserver] Sample #%d: case linkage changed (%s) — re-verifying.',
+            $sample->id,
+            implode(', ', array_filter($caseFields, fn ($f) => $sample->wasChanged($f)))
+        ));
     }
 
     // ─────────────────────────────────────────────────────────────────────

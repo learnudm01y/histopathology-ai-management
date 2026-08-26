@@ -377,8 +377,8 @@
                                     </span>
                                 </td>
                                 <td>
-                                    <span class="badge badge-{{ ['passed' => 'success', 'rejected' => 'danger', 'needs_review' => 'warning'][$s->quality_status] ?? 'secondary' }}">
-                                        {{ str_replace('_', ' ', $s->quality_status) }}
+                                    <span class="badge badge-{{ $s->quality_status_badge }}">
+                                        {{ $s->quality_status_label }}
                                     </span>
                                 </td>
                                 <td>

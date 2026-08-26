@@ -449,7 +449,7 @@
                 <div class="d-flex border-bottom py-2">
                     <span class="text-muted" style="min-width:160px;font-size:.85rem;">Quality Status</span>
                     <span class="badge badge-{{ $sample->quality_status_badge }}">
-                        {{ str_replace('_', ' ', ucfirst($sample->quality_status ?? 'pending')) }}
+                        {{ $sample->quality_status_label }}
                     </span>
                 </div>
                 <div class="d-flex border-bottom py-2">
@@ -595,11 +595,18 @@
     $checks        = $verification?->evaluateChecks() ?? [];
     $grouped       = collect($checks)->groupBy('group');
     $failedChecks  = collect($checks)->where('state', 'failed');
+    $caseInfoNeeds = collect($checks)->where('state', 'needs_info');
     $statusBadge   = match ($verification?->verification_status) {
-        'passed'  => 'success',
-        'failed'  => 'danger',
-        'pending' => 'warning',
-        default   => 'secondary',
+        'passed'              => 'success',
+        'failed'              => 'danger',
+        'needs_clinical_info' => 'info',
+        'pending'             => 'warning',
+        default               => 'secondary',
+    };
+    $statusText    = match ($verification?->verification_status) {
+        'needs_clinical_info' => 'Needs Case Information',
+        null                  => 'Not Verified Yet',
+        default               => ucfirst((string) $verification?->verification_status),
     };
     $countsByState = collect($checks)->countBy('state');
     $verifUrl      = $verification ? route('admin.samples.verification.update', $sample) : '#';
@@ -653,7 +660,7 @@
 
                     @if($verification)
                         <span class="badge badge-{{ $statusBadge }} ml-2 px-2 py-1" id="vv-overall-badge">
-                            {{ ucfirst($verification->verification_status) }}
+                            {{ $statusText }}
                         </span>
                         <span class="text-muted small ml-2">
                             {{ $verification->verified_at?->format('Y-m-d H:i') ?? '—' }}
@@ -661,6 +668,7 @@
                         <span class="ml-auto d-flex" style="gap:.75rem;">
                             <span class="text-success small"><i class="mdi mdi-check-circle"></i> {{ $countsByState['passed'] ?? 0 }}</span>
                             <span class="text-danger small"><i class="mdi mdi-close-circle"></i> {{ $countsByState['failed'] ?? 0 }}</span>
+                            <span class="text-info small"><i class="mdi mdi-account-question-outline"></i> {{ $countsByState['needs_info'] ?? 0 }}</span>
                             <span class="text-muted small"><i class="mdi mdi-clock-outline"></i> {{ $countsByState['not_checked'] ?? 0 }}</span>
                         </span>
                     @else
@@ -674,6 +682,22 @@
                         Not processed yet. Click <strong>Verify Slide</strong> above.
                     </div>
                 @else
+
+                    {{-- ── Case information still required ── --}}
+                    @if($caseInfoNeeds->isNotEmpty())
+                        <div class="alert alert-info py-2 px-3 mb-3 small">
+                            <strong><i class="mdi mdi-account-question-outline mr-1"></i>Needs case information:</strong>
+                            This slide is not rejected — it is held until the patient / case record is filled in.
+                            <ul class="mb-0 mt-1 pl-3">
+                                @foreach($caseInfoNeeds as $ci)
+                                    <li>{{ $ci['label'] }}</li>
+                                @endforeach
+                            </ul>
+                            <a href="{{ route('admin.samples.edit', $sample) }}" class="d-inline-block mt-1">
+                                <i class="mdi mdi-pencil-outline"></i> Add the missing case details
+                            </a>
+                        </div>
+                    @endif
 
                     {{-- ── Failures summary (compact bullet list) ── --}}
                     @if($failedChecks->isNotEmpty())
@@ -713,10 +737,11 @@
                                 @foreach($grouped[$groupCode] as $row)
                                     @php
                                         [$icon, $rowClass, $stateLabel] = match ($row['state']) {
-                                            'passed'      => ['mdi-check-circle text-success', '',             'Passed'],
-                                            'failed'      => ['mdi-close-circle text-danger',  'table-danger', 'Failed'],
-                                            'not_checked' => ['mdi-clock-outline text-muted',  '',             'Pending'],
-                                            default       => ['mdi-help-circle text-muted',    '',             '—'],
+                                            'passed'      => ['mdi-check-circle text-success',       '',             'Passed'],
+                                            'failed'      => ['mdi-close-circle text-danger',        'table-danger', 'Failed'],
+                                            'needs_info'  => ['mdi-account-question-outline text-info', 'table-info', 'Needs info'],
+                                            'not_checked' => ['mdi-clock-outline text-muted',        '',             'Pending'],
+                                            default       => ['mdi-help-circle text-muted',          '',             '—'],
                                         };
                                         $isVirtual = ($row['code'] === 'slide_dimensions');
                                         $colName   = $isVirtual ? null : $row['code'];
@@ -759,7 +784,7 @@
                                             @endif
                                         </td>
                                         <td class="text-right align-middle" style="padding:3px 5px;">
-                                            <span class="badge badge-outline-{{ $row['state'] === 'passed' ? 'success' : ($row['state'] === 'failed' ? 'danger' : 'secondary') }}"
+                                            <span class="badge badge-outline-{{ ['passed' => 'success', 'failed' => 'danger', 'needs_info' => 'info'][$row['state']] ?? 'secondary' }}"
                                                   style="font-size:.67rem;">
                                                 {{ $stateLabel }}
                                             </span>
@@ -1149,10 +1174,9 @@
                 </h6>
                 <span id="modal-vv-overall-badge"
                       class="badge ml-auto px-2 py-1
-                            {{ $verification->verification_status === 'passed' ? 'badge-success'
-                              : ($verification->verification_status === 'failed' ? 'badge-danger' : 'badge-warning') }}"
+                            {{ ['passed' => 'badge-success', 'failed' => 'badge-danger', 'needs_clinical_info' => 'badge-info'][$verification->verification_status] ?? 'badge-warning' }}"
                       style="font-size:.66rem;">
-                    {{ ucfirst($verification->verification_status ?? 'pending') }}
+                    {{ $statusText }}
                 </span>
             </div>
             <p class="mb-3" style="font-size:.7rem; color:#777; line-height:1.4;">
@@ -1172,10 +1196,11 @@
                         @foreach($modalGrouped[$groupCode] as $row)
                             @php
                                 [$icon, $stateLabel, $stateColor] = match ($row['state']) {
-                                    'passed'      => ['mdi-check-circle',  'OK',      '#28a745'],
-                                    'failed'      => ['mdi-close-circle',  'Failed',  '#dc3545'],
-                                    'not_checked' => ['mdi-clock-outline', 'Pending', '#888'],
-                                    default       => ['mdi-help-circle',   '—',       '#888'],
+                                    'passed'      => ['mdi-check-circle',              'OK',         '#28a745'],
+                                    'failed'      => ['mdi-close-circle',              'Failed',     '#dc3545'],
+                                    'needs_info'  => ['mdi-account-question-outline',  'Needs info', '#17a2b8'],
+                                    'not_checked' => ['mdi-clock-outline',             'Pending',    '#888'],
+                                    default       => ['mdi-help-circle',               '—',          '#888'],
                                 };
                                 $isVirtual = ($row['code'] === 'slide_dimensions');
                                 $colName   = $isVirtual ? null : $row['code'];
@@ -1425,7 +1450,15 @@
 
                 /* refresh BOTH overall status badges (page card + modal panel) */
                 if (data.verification_status) {
-                    var map = { passed: 'badge-success', failed: 'badge-danger', pending: 'badge-warning' };
+                    var map = {
+                        passed:              'badge-success',
+                        failed:              'badge-danger',
+                        pending:             'badge-warning',
+                        needs_clinical_info: 'badge-info'
+                    };
+                    var text = {
+                        needs_clinical_info: 'Needs Case Information'
+                    };
                     ['vv-overall-badge', 'modal-vv-overall-badge'].forEach(function (id) {
                         var b = document.getElementById(id);
                         if (!b) return;
@@ -1433,7 +1466,8 @@
                             ? 'badge ml-auto px-2 py-1 '
                             : 'badge ml-2 px-2 py-1 ';
                         b.className   = base + (map[data.verification_status] || 'badge-secondary');
-                        b.textContent = data.verification_status.charAt(0).toUpperCase() + data.verification_status.slice(1);
+                        b.textContent = text[data.verification_status]
+                            || (data.verification_status.charAt(0).toUpperCase() + data.verification_status.slice(1));
                     });
                 }
             })

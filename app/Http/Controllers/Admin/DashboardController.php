@@ -36,6 +36,7 @@ class DashboardController extends Controller
             'quality_rejected'=> Sample::where('quality_status', 'rejected')->count(),
             'quality_review'  => Sample::where('quality_status', 'needs_review')->count(),
             'quality_pending' => Sample::where('quality_status', 'pending')->count(),
+            'quality_case_info'=> Sample::where('quality_status', 'needs_clinical_info')->count(),
             'not_usable'      => Sample::where('is_usable', false)->count(),
         ];
 
@@ -48,10 +49,11 @@ class DashboardController extends Controller
 
         // Slide verification stats
         $verifStats = [
-            'failed'  => \App\Models\SlideVerification::where('verification_status', 'failed')->count(),
-            'passed'  => \App\Models\SlideVerification::where('verification_status', 'passed')->count(),
-            'pending' => \App\Models\SlideVerification::where('verification_status', 'pending')->count(),
-            'total'   => \App\Models\SlideVerification::count(),
+            'failed'    => \App\Models\SlideVerification::where('verification_status', 'failed')->count(),
+            'passed'    => \App\Models\SlideVerification::where('verification_status', 'passed')->count(),
+            'pending'   => \App\Models\SlideVerification::where('verification_status', 'pending')->count(),
+            'case_info' => \App\Models\SlideVerification::where('verification_status', 'needs_clinical_info')->count(),
+            'total'     => \App\Models\SlideVerification::count(),
         ];
 
         $failedVerifications = \App\Models\SlideVerification::where('verification_status', 'failed')
@@ -725,7 +727,7 @@ class DashboardController extends Controller
             'file_name'              => 'nullable|string|max:500',
             'data_format'            => 'nullable|string|max:50',
             'storage_status'         => 'required|in:not_downloaded,downloading,verifying,available,corrupted,missing',
-            'quality_status'         => 'nullable|in:pending,passed,rejected',
+            'quality_status'         => 'nullable|in:pending,passed,rejected,needs_review,needs_clinical_info',
             'quality_rejection_reason' => 'nullable|string|max:500',
             'is_usable'              => 'boolean',
             'notes'                  => 'nullable|string',
@@ -822,7 +824,7 @@ class DashboardController extends Controller
             // ── Sample filters ─────────────────────────────────────
             'uniqueness'     => $request->input('uniqueness', 'any'),         // any | unique
             'gender'         => $request->input('gender'),                    // male | female | null
-            'quality_status' => $request->input('quality_status'),            // passed|rejected|needs_review|pending|null
+            'quality_status' => $request->input('quality_status'),            // passed|rejected|needs_review|needs_clinical_info|pending|null
             'min_size_gb'    => $request->input('min_size_gb'),
             'max_size_gb'    => $request->input('max_size_gb'),
             'organ_id'       => $request->input('organ_id'),
@@ -1012,9 +1014,12 @@ class DashboardController extends Controller
         $msg = $phase2Queued
             ? 'Phase 1 complete. Deep WSI analysis has been queued and will run in the background.'
             : match ($verification->verification_status) {
-                'passed'  => 'All metadata checks passed.',
-                'failed'  => 'Verification failed — see the details below.',
-                default   => 'Verification ran — some checks are still pending.',
+                'passed'              => 'All metadata checks passed.',
+                'failed'              => 'Verification failed — see the details below.',
+                'needs_clinical_info' => 'The slide itself is fine, but its case information is incomplete: '
+                                         . implode(', ', $verification->missingClinicalLabels())
+                                         . '. It is held rather than accepted until those are filled in.',
+                default               => 'Verification ran — some checks are still pending.',
             };
 
         return redirect()->route('admin.samples.show', $sample)->with('success', $msg);

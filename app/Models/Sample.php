@@ -153,10 +153,27 @@ class Sample extends Model
     public function getQualityStatusBadgeAttribute(): string
     {
         return match ($this->quality_status) {
-            'passed'       => 'success',
-            'rejected'     => 'danger',
-            'needs_review' => 'warning',
-            default        => 'secondary',
+            'passed'              => 'success',
+            'rejected'            => 'danger',
+            'needs_review'        => 'warning',
+            'needs_clinical_info' => 'info',
+            default               => 'secondary',
+        };
+    }
+
+    /**
+     * Human label for quality_status — `needs_clinical_info` reads badly when
+     * it is only underscore-stripped, and it is the one operators act on.
+     */
+    public function getQualityStatusLabelAttribute(): string
+    {
+        return match ($this->quality_status) {
+            'passed'              => 'Passed',
+            'rejected'            => 'Rejected',
+            'needs_review'        => 'Needs Review',
+            'needs_clinical_info' => 'Needs Case Info',
+            'pending'             => 'Pending',
+            default               => ucfirst(str_replace('_', ' ', (string) $this->quality_status)),
         };
     }
 
