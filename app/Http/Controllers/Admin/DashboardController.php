@@ -13,6 +13,7 @@ use App\Models\DiseaseSubtype;
 use App\Models\Stain;
 use App\Services\CaseLinker;
 use App\Services\GoogleDriveService;
+use App\Support\SampleListFilters;
 use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Validation\Rule;
@@ -111,23 +112,9 @@ class DashboardController extends Controller
         $query = Sample::with(['organ', 'dataSource', 'patientCase', 'category'])
             ->orderByDesc('created_at');
 
-        // Filters
-        if ($request->filled('organ_id')) {
-            $query->where('organ_id', $request->organ_id);
-        }
-        if ($request->filled('category_id')) {
-            $query->where('category_id', $request->category_id);
-        }
-        if ($request->filled('storage_status')) {
-            $query->where('storage_status', $request->storage_status);
-        }
-        if ($request->filled('search')) {
-            $query->where(function ($q) use ($request) {
-                $q->where('file_name', 'like', '%' . $request->search . '%')
-                  ->orWhere('file_id', 'like', '%' . $request->search . '%')
-                  ->orWhere('entity_submitter_id', 'like', '%' . $request->search . '%');
-            });
-        }
+        // Filters — shared with the rejection-reasons export so the list and a
+        // file exported from it always describe the same set of slides.
+        SampleListFilters::apply($query, $request);
 
         $samples     = $query->paginate(20)->withQueryString();
         $organs      = Organ::where('is_active', true)->orderBy('name')->get();
@@ -149,6 +136,7 @@ class DashboardController extends Controller
             'available'       => Sample::where('storage_status', 'available')->count(),
             'not_downloaded'  => Sample::where('storage_status', 'not_downloaded')->count(),
             'tiling_done'     => Sample::where('tiling_status', 'done')->count(),
+            'rejected'        => Sample::where('quality_status', 'rejected')->count(),
         ];
 
         return view('admin.samples', compact('samples', 'organs', 'categories', 'categoriesByOrgan', 'dataSources', 'stains', 'diseaseSubtypesByCategory', 'stats'));

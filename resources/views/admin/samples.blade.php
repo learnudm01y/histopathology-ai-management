@@ -163,6 +163,46 @@
                             Showing {{ $samples->firstItem() ?? 0 }}–{{ $samples->lastItem() ?? 0 }}
                             of {{ $samples->total() }}
                         </small>
+                        {{-- ── Rejection reasons → Excel ──
+                             Carries whatever filters the list is showing, so the
+                             file always matches what is on screen. --}}
+                        @php $rejectionParams = request()->only(\App\Support\SampleListFilters::KEYS); @endphp
+                        <div class="btn-group">
+                            <a href="{{ route('admin.samples.rejections.export', $rejectionParams) }}"
+                               class="btn btn-success btn-sm"
+                               title="Download an Excel file listing why each slide was rejected">
+                                <i class="mdi mdi-file-excel mr-1"></i> Export Rejection Reasons
+                                <span class="badge badge-light ml-1">{{ number_format($stats['rejected']) }}</span>
+                            </a>
+                            <button type="button" class="btn btn-success btn-sm dropdown-toggle dropdown-toggle-split"
+                                    data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                                <span class="sr-only">Export options</span>
+                            </button>
+                            <div class="dropdown-menu dropdown-menu-right">
+                                <h6 class="dropdown-header">
+                                    {{ number_format($stats['rejected']) }} rejected slide(s) &middot; current filters apply
+                                </h6>
+                                <a class="dropdown-item"
+                                   href="{{ route('admin.samples.rejections.export', $rejectionParams) }}">
+                                    <i class="mdi mdi-file-excel-outline mr-1 text-success"></i>
+                                    Rejected slides
+                                    <small class="text-muted d-block ml-4">One row per slide, all reasons in one cell</small>
+                                </a>
+                                <a class="dropdown-item"
+                                   href="{{ route('admin.samples.rejections.export', array_merge($rejectionParams, ['scope' => 'reasons'])) }}">
+                                    <i class="mdi mdi-format-list-numbered mr-1 text-primary"></i>
+                                    One row per reason
+                                    <small class="text-muted d-block ml-4">For counting / pivoting reasons in Excel</small>
+                                </a>
+                                <div class="dropdown-divider"></div>
+                                <a class="dropdown-item"
+                                   href="{{ route('admin.samples.rejections.export', array_merge($rejectionParams, ['status' => 'unusable'])) }}">
+                                    <i class="mdi mdi-alert-circle-outline mr-1 text-warning"></i>
+                                    Every slide not accepted
+                                    <small class="text-muted d-block ml-4">Rejected + held for case info + pending + never verified</small>
+                                </a>
+                            </div>
+                        </div>
                         {{-- ── Verify All Unverified Samples ── --}}
                         <button type="button" class="btn btn-outline-warning btn-sm"
                                 id="bulkVerifyBtn"
