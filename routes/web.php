@@ -19,11 +19,17 @@ use App\Http\Controllers\Admin\Settings\PatchSizesController;
 use App\Http\Controllers\Admin\Settings\ServersController;
 use App\Http\Controllers\Admin\Settings\RunPodController;
 use App\Http\Controllers\Admin\Settings\StainsController;
+use App\Http\Controllers\PublicPagesController;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/', function () {
-    return redirect()->route('admin.dashboard');
-});
+// ── Public pages ─────────────────────────────────────────────────────────────
+// These three URLs are registered on the Google Cloud OAuth consent screen as
+// the application home page, privacy policy and terms of service. Google
+// requires them to be reachable without signing in, so they must stay outside
+// the `auth` middleware group below.
+Route::get('/',        [PublicPagesController::class, 'home'])->name('public.home');
+Route::get('/privacy', [PublicPagesController::class, 'privacy'])->name('public.privacy');
+Route::get('/terms',   [PublicPagesController::class, 'terms'])->name('public.terms');
 
 Route::prefix('admin')->name('admin.')->group(function () {
     // Guest (login)
