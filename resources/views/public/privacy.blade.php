@@ -130,12 +130,9 @@
 
         <h3>3.4 Limited Use commitment</h3>
         <div class="callout">
-            <p>
-                MAIND PATH's use and transfer of information received from Google APIs to any other app
-                will adhere to the
-                <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noopener" target="_blank">Google
-                API Services User Data Policy</a>, including the Limited Use requirements.
-            </p>
+            {{-- Keep this sentence on one source line and in Google's canonical wording:
+                 automated verification checks scan the raw HTML for it. --}}
+            <p>MAIND PATH's use and transfer of information received from Google APIs to any other app will adhere to <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noopener" target="_blank">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
         </div>
         <p>Concretely, this means that data obtained through Google APIs is:</p>
         <ul>
