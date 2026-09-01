@@ -151,6 +151,7 @@ class WsiPreviewJob implements ShouldQueue, ShouldBeUnique
                 $wsiPath   = $candidate;
                 $usingFuse = true;
                 Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: using FUSE mount at {$candidate} — no download needed");
+                $this->warmVfsCache($candidate);
             } else {
                 Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: FUSE path {$candidate} not found, falling back to download");
             }
@@ -514,6 +515,43 @@ class WsiPreviewJob implements ShouldQueue, ShouldBeUnique
         }
 
         return null;
+    }
+
+    /**
+     * Pull the whole slide into the rclone VFS cache before OpenSlide opens it.
+     *
+     * OpenSlide seeks all over an SVS, and on the FUSE mount every seek is a
+     * separate ranged HTTPS request to Drive. Cold, a single DZI tile measured
+     * 40-56 s — past the tile server's 15 s timeout, so the viewer rendered
+     * blank tiles even though the metadata had loaded in seconds. One
+     * sequential read fills the cache at ~43 MB/s (60 s for a 2.5 GB slide)
+     * and tiles then come back in under a second. The VFS cache keeps the file
+     * for 48 h, so a repeat preview of the same slide skips this entirely.
+     *
+     * Best-effort: a failure here only costs speed, never correctness, because
+     * the mount still serves the reads.
+     */
+    private function warmVfsCache(string $path): void
+    {
+        $startedAt = microtime(true);
+        Log::info("[WsiPreviewJob] Sample #{$this->sampleId}: warming VFS cache for {$path}…");
+
+        $process = new Process(["dd", "if={$path}", "of=/dev/null", "bs=4M"]);
+        $process->setTimeout(1800);
+
+        try {
+            $process->mustRun();
+            Log::info(sprintf(
+                "[WsiPreviewJob] Sample #%d: VFS cache warmed in %.1f s",
+                $this->sampleId,
+                microtime(true) - $startedAt,
+            ));
+        } catch (\Throwable $e) {
+            Log::warning(
+                "[WsiPreviewJob] Sample #{$this->sampleId}: VFS cache warm failed — "
+                . "tiles may time out. " . $e->getMessage()
+            );
+        }
     }
 
     /**
