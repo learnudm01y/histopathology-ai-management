@@ -2,6 +2,47 @@
 
 @section('title', 'Samples')
 
+@push('styles')
+<style>
+    /* ── Samples toolbar ──────────────────────────────────────────────────
+       The buttons used to break mid-label ("Verify All Unverified / Samples")
+       and the count badges pushed themselves onto a second line, so every
+       button ended up a different height.
+
+       Two things caused it. The labels were long enough to wrap, and the
+       theme redefines `.btn.btn-sm { font-size: .875rem }` without touching
+       the padding — so btn-sm in this admin theme is not small at all.
+
+       These rules are written at three levels of specificity (.card wins over
+       the theme's `.btn.btn-x`) because the layout loads @stack('styles')
+       BEFORE the theme stylesheets, so a plain `.btn` override would lose. */
+    .card .samples-toolbar { gap: .4rem; }
+    .card .samples-toolbar .btn {
+        white-space: nowrap;
+        display: inline-flex;
+        align-items: center;
+        line-height: 1.2;
+        padding: .4rem .7rem;
+        font-size: .78rem;
+    }
+    .card .samples-toolbar .btn i {
+        font-size: .95rem;
+        margin-right: .3rem;
+    }
+    .card .samples-toolbar .btn .badge {
+        font-size: .68rem;
+        font-weight: 600;
+        padding: .2em .45em;
+        margin-left: .4rem;
+    }
+    .card .samples-toolbar .dropdown-menu { font-size: .8rem; min-width: 18rem; }
+    .card .samples-toolbar .dropdown-item { white-space: normal; padding: .45rem 1rem; }
+    .card .samples-toolbar .dropdown-item small { line-height: 1.25; }
+    .card .samples-toolbar .dropdown-header { font-size: .7rem; letter-spacing: .04em; }
+    .samples-heading { gap: .5rem; }
+</style>
+@endpush
+
 @section('content')
 <div class="page-header">
     <h3 class="page-title">Pathology Samples</h3>
@@ -153,70 +194,51 @@
     <div class="col-12 grid-margin">
         <div class="card">
             <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                    <h4 class="card-title mb-0">
+                <div class="d-flex justify-content-between align-items-center flex-wrap mb-3" style="gap:.75rem;">
+                    <h4 class="card-title mb-0 d-flex align-items-center samples-heading">
                         Samples
-                        <span class="badge badge-secondary ml-2">{{ $samples->total() }}</span>
-                    </h4>
-                    <div class="d-flex align-items-center" style="gap:.75rem;">
-                        <small class="text-muted">
-                            Showing {{ $samples->firstItem() ?? 0 }}–{{ $samples->lastItem() ?? 0 }}
-                            of {{ $samples->total() }}
+                        <span class="badge badge-secondary">{{ number_format($samples->total()) }}</span>
+                        <small class="text-muted font-weight-normal" style="font-size:.72rem;">
+                            {{ $samples->firstItem() ?? 0 }}–{{ $samples->lastItem() ?? 0 }} shown
                         </small>
-                        @php $rejectionParams = request()->only(\App\Support\SampleListFilters::KEYS); @endphp
+                    </h4>
 
-                        {{-- ── Full catalogue → Excel ──
-                             Every sample, whatever its status. The split button
-                             offers the same file limited to the filters the list
-                             is currently showing. --}}
+                    @php $rejectionParams = request()->only(\App\Support\SampleListFilters::KEYS); @endphp
+                    <div class="d-flex align-items-center flex-wrap samples-toolbar">
+
+                        {{-- ── Excel exports ──
+                             One button for every export the page offers. Two
+                             split-buttons side by side overflowed the row and
+                             carried more visual weight than a download deserves. --}}
                         <div class="btn-group">
-                            <a href="{{ route('admin.samples.export') }}"
-                               class="btn btn-info btn-sm"
-                               title="Download every sample in the database as an Excel file, whatever its status">
-                                <i class="mdi mdi-microsoft-excel mr-1"></i> Export All Samples
-                                <span class="badge badge-light ml-1">{{ number_format($stats['total']) }}</span>
-                            </a>
-                            <button type="button" class="btn btn-info btn-sm dropdown-toggle dropdown-toggle-split"
-                                    data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                                <span class="sr-only">Export options</span>
+                            <button type="button" class="btn btn-success dropdown-toggle"
+                                    data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"
+                                    title="Download the sample data as an Excel file">
+                                <i class="mdi mdi-file-excel mr-1"></i> Export
                             </button>
                             <div class="dropdown-menu dropdown-menu-right">
-                                <h6 class="dropdown-header">One row per sample &middot; all fields</h6>
+                                <h6 class="dropdown-header">Full catalogue &middot; one row per sample</h6>
                                 <a class="dropdown-item" href="{{ route('admin.samples.export') }}">
-                                    <i class="mdi mdi-database-export mr-1 text-info"></i>
+                                    <i class="mdi mdi-database-export mr-1 text-success"></i>
                                     All samples
-                                    <small class="text-muted d-block ml-4">Ignores every filter — the complete catalogue</small>
+                                    <span class="badge badge-light">{{ number_format($stats['total']) }}</span>
+                                    <small class="text-muted d-block ml-4">Every field, whatever the status — ignores the filters</small>
                                 </a>
                                 <a class="dropdown-item"
                                    href="{{ route('admin.samples.export', array_merge($rejectionParams, ['filtered' => 1])) }}">
                                     <i class="mdi mdi-filter-outline mr-1 text-primary"></i>
                                     Only what this list shows
-                                    <small class="text-muted d-block ml-4">Applies the organ / group / storage / search filters above</small>
+                                    <small class="text-muted d-block ml-4">Applies the organ / group / storage / search filters</small>
                                 </a>
-                            </div>
-                        </div>
 
-                        {{-- ── Rejection reasons → Excel ──
-                             Carries whatever filters the list is showing, so the
-                             file always matches what is on screen. --}}
-                        <div class="btn-group">
-                            <a href="{{ route('admin.samples.rejections.export', $rejectionParams) }}"
-                               class="btn btn-success btn-sm"
-                               title="Download an Excel file listing why each slide was rejected">
-                                <i class="mdi mdi-file-excel mr-1"></i> Export Rejection Reasons
-                                <span class="badge badge-light ml-1">{{ number_format($stats['rejected']) }}</span>
-                            </a>
-                            <button type="button" class="btn btn-success btn-sm dropdown-toggle dropdown-toggle-split"
-                                    data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-                                <span class="sr-only">Export options</span>
-                            </button>
-                            <div class="dropdown-menu dropdown-menu-right">
+                                <div class="dropdown-divider"></div>
                                 <h6 class="dropdown-header">
-                                    {{ number_format($stats['rejected']) }} rejected slide(s) &middot; current filters apply
+                                    Why slides are not accepted
+                                    <span class="badge badge-light">{{ number_format($stats['rejected']) }}</span>
                                 </h6>
                                 <a class="dropdown-item"
                                    href="{{ route('admin.samples.rejections.export', $rejectionParams) }}">
-                                    <i class="mdi mdi-file-excel-outline mr-1 text-success"></i>
+                                    <i class="mdi mdi-file-table-outline mr-1 text-success"></i>
                                     Rejected slides
                                     <small class="text-muted d-block ml-4">One row per slide, all reasons in one cell</small>
                                 </a>
@@ -226,7 +248,6 @@
                                     One row per reason
                                     <small class="text-muted d-block ml-4">For counting / pivoting reasons in Excel</small>
                                 </a>
-                                <div class="dropdown-divider"></div>
                                 <a class="dropdown-item"
                                    href="{{ route('admin.samples.rejections.export', array_merge($rejectionParams, ['status' => 'unusable'])) }}">
                                     <i class="mdi mdi-alert-circle-outline mr-1 text-warning"></i>
@@ -235,16 +256,17 @@
                                 </a>
                             </div>
                         </div>
-                        {{-- ── Verify All Unverified Samples ── --}}
-                        <button type="button" class="btn btn-outline-warning btn-sm"
+
+                        <button type="button" class="btn btn-outline-warning"
                                 id="bulkVerifyBtn"
                                 title="Queue all unverified / pending samples for slide verification (skips failed and already-verified)">
-                            <i class="mdi mdi-shield-search mr-1"></i> Verify All Unverified Samples
+                            <i class="mdi mdi-shield-check mr-1"></i> Verify Unverified
                         </button>
-                        <button type="button" class="btn btn-primary btn-sm" data-toggle="modal" data-target="#addSampleModal">
-                            <i class="mdi mdi-plus"></i> Add Sample
+                        <button type="button" class="btn btn-primary" data-toggle="modal" data-target="#addSampleModal">
+                            <i class="mdi mdi-plus mr-1"></i> Add Sample
                         </button>
-                        <button type="button" class="btn btn-danger btn-sm" data-toggle="modal" data-target="#bulkDeleteSamplesModal">
+                        <button type="button" class="btn btn-outline-danger" data-toggle="modal" data-target="#bulkDeleteSamplesModal"
+                                title="Delete samples in bulk by filter">
                             <i class="mdi mdi-delete-sweep mr-1"></i> Bulk Delete
                         </button>
                     </div>
@@ -1124,7 +1146,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title" id="bulkVerifyModalLabel">
-                    <i class="mdi mdi-shield-search mr-1"></i> Verify All Unverified Samples
+                    <i class="mdi mdi-shield-check mr-1"></i> Verify All Unverified Samples
                 </h5>
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close">
                     <span aria-hidden="true">&times;</span>
