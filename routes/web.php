@@ -8,6 +8,7 @@ use App\Http\Controllers\Admin\ImportsController;
 use App\Http\Controllers\Admin\InferenceController;
 use App\Http\Controllers\Admin\OperationsController;
 use App\Http\Controllers\Admin\SampleRejectionsController;
+use App\Http\Controllers\Admin\SamplesExportController;
 use App\Http\Controllers\Admin\WsiPreviewController;
 use App\Http\Controllers\Admin\Settings\AiModelsController;
 use App\Http\Controllers\Admin\Settings\CategoriesController;
@@ -48,6 +49,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
         // !! Must be before samples/{sample} to avoid route-model-binding collision !!
         Route::post('samples/verify-unverified', [DashboardController::class, 'verifyAllUnverified'])->name('samples.verify-unverified');
         Route::get('samples/rejections/export', [SampleRejectionsController::class, 'export'])->name('samples.rejections.export');
+        Route::get('samples/export', [SamplesExportController::class, 'export'])->name('samples.export');
         Route::get('samples/{sample}', [DashboardController::class, 'showSample'])->name('samples.show');
         Route::get('samples/{sample}/edit', [DashboardController::class, 'editSample'])->name('samples.edit');
         Route::put('samples/{sample}', [DashboardController::class, 'updateSample'])->name('samples.update');

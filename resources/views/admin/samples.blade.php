@@ -163,10 +163,42 @@
                             Showing {{ $samples->firstItem() ?? 0 }}–{{ $samples->lastItem() ?? 0 }}
                             of {{ $samples->total() }}
                         </small>
+                        @php $rejectionParams = request()->only(\App\Support\SampleListFilters::KEYS); @endphp
+
+                        {{-- ── Full catalogue → Excel ──
+                             Every sample, whatever its status. The split button
+                             offers the same file limited to the filters the list
+                             is currently showing. --}}
+                        <div class="btn-group">
+                            <a href="{{ route('admin.samples.export') }}"
+                               class="btn btn-info btn-sm"
+                               title="Download every sample in the database as an Excel file, whatever its status">
+                                <i class="mdi mdi-microsoft-excel mr-1"></i> Export All Samples
+                                <span class="badge badge-light ml-1">{{ number_format($stats['total']) }}</span>
+                            </a>
+                            <button type="button" class="btn btn-info btn-sm dropdown-toggle dropdown-toggle-split"
+                                    data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                                <span class="sr-only">Export options</span>
+                            </button>
+                            <div class="dropdown-menu dropdown-menu-right">
+                                <h6 class="dropdown-header">One row per sample &middot; all fields</h6>
+                                <a class="dropdown-item" href="{{ route('admin.samples.export') }}">
+                                    <i class="mdi mdi-database-export mr-1 text-info"></i>
+                                    All samples
+                                    <small class="text-muted d-block ml-4">Ignores every filter — the complete catalogue</small>
+                                </a>
+                                <a class="dropdown-item"
+                                   href="{{ route('admin.samples.export', array_merge($rejectionParams, ['filtered' => 1])) }}">
+                                    <i class="mdi mdi-filter-outline mr-1 text-primary"></i>
+                                    Only what this list shows
+                                    <small class="text-muted d-block ml-4">Applies the organ / group / storage / search filters above</small>
+                                </a>
+                            </div>
+                        </div>
+
                         {{-- ── Rejection reasons → Excel ──
                              Carries whatever filters the list is showing, so the
                              file always matches what is on screen. --}}
-                        @php $rejectionParams = request()->only(\App\Support\SampleListFilters::KEYS); @endphp
                         <div class="btn-group">
                             <a href="{{ route('admin.samples.rejections.export', $rejectionParams) }}"
                                class="btn btn-success btn-sm"
