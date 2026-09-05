@@ -35,9 +35,19 @@
         padding: .2em .45em;
         margin-left: .4rem;
     }
-    .card .samples-toolbar .dropdown-menu { font-size: .8rem; min-width: 18rem; }
-    .card .samples-toolbar .dropdown-item { white-space: normal; padding: .45rem 1rem; }
-    .card .samples-toolbar .dropdown-item small { line-height: 1.25; }
+    /* Six items with a line of explanation each add up to a tall menu, and with
+       Popper switched off (data-display="static") nothing flips it out of the
+       way when the toolbar sits low on the screen. So it scrolls inside itself
+       rather than running off the bottom of the page. */
+    .card .samples-toolbar .dropdown-menu {
+        font-size: .8rem;
+        min-width: 18rem;
+        max-height: min(70vh, 26rem);
+        overflow-y: auto;
+    }
+    .card .samples-toolbar .dropdown-item { white-space: normal; padding: .32rem 1rem; }
+    .card .samples-toolbar .dropdown-item small { line-height: 1.2; font-size: .71rem; }
+    .card .samples-toolbar .dropdown-divider { margin: .3rem 0; }
     .card .samples-toolbar .dropdown-header { font-size: .7rem; letter-spacing: .04em; }
     .samples-heading { gap: .5rem; }
 </style>
@@ -211,8 +221,17 @@
                              split-buttons side by side overflowed the row and
                              carried more visual weight than a download deserves. --}}
                         <div class="btn-group">
+                            {{-- data-display="static" takes Popper out of the loop.
+                                 Popper measures a scrolling ancestor as its boundary,
+                                 decides a menu this tall does not fit under the button,
+                                 flips it to placement "top-end" and writes an inline
+                                 transform — which threw the menu up and to the left,
+                                 nowhere near the control that opened it. Positioned
+                                 statically, .dropdown-menu-right anchors it to the
+                                 button's own right edge, which is all this needed. --}}
                             <button type="button" class="btn btn-success dropdown-toggle"
-                                    data-toggle="dropdown" aria-haspopup="true" aria-expanded="false"
+                                    data-toggle="dropdown" data-display="static"
+                                    aria-haspopup="true" aria-expanded="false"
                                     title="Download the sample data as an Excel file">
                                 <i class="mdi mdi-file-excel mr-1"></i> Export
                             </button>
