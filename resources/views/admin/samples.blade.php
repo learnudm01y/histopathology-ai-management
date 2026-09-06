@@ -891,6 +891,7 @@
                             <code>id, filename, md5, size, state</code>) → creates / updates samples.</li>
                         <li><strong>metadata.cart.*.json</strong> → creates samples + cases and links them.</li>
                         <li><strong>clinical.cart.*.json</strong> → creates / updates the full clinical record per case.</li>
+                        <li><strong>clinical CSV</strong> (<code>.csv</code> with <code>submitter_id, gdc_case_id, age, sex, race, …, file_ids, file_names</code>) → attaches clinical data to slides <strong>already in the system</strong> (never creates samples).</li>
                     </ul>
                     <small class="d-block mt-2">
                         Order doesn't matter — linkage happens automatically by GDC <code>case_id</code> and <code>file_id</code>.
@@ -906,6 +907,7 @@
                             @if($s['metadata']['files'])<li>Metadata — {{ $s['metadata']['rows'] }} rows; cases +{{ $s['metadata']['cases_created'] }}/✎{{ $s['metadata']['cases_updated'] }}; samples +{{ $s['metadata']['samples_created'] }}/✎{{ $s['metadata']['samples_updated'] }}</li>@endif
                             @if($s['clinical']['files'])<li>Clinical — {{ $s['clinical']['rows'] }} cases; clinical +{{ $s['clinical']['clinical_created'] }}/✎{{ $s['clinical']['clinical_updated'] }}</li>@endif
                             @if($s['clinical']['samples_linked'])<li>Linked {{ $s['clinical']['samples_linked'] }} sample(s) to cases</li>@endif
+                            @if(($s['clinical']['samples_unmatched'] ?? 0))<li class="text-warning">{{ $s['clinical']['samples_unmatched'] }} slide(s) named in the file are not in the system — skipped</li>@endif
                             @foreach($s['errors'] as $err)<li class="text-danger">{{ $err }}</li>@endforeach
                         </ul>
                     </div>
@@ -921,7 +923,7 @@
                                     <input type="file"
                                            class="custom-file-input @error('import_files') is-invalid @enderror @error('import_files.*') is-invalid @enderror"
                                            name="import_files[]" id="importFilesInput"
-                                           accept=".txt,.json,.tsv" multiple required>
+                                           accept=".txt,.json,.tsv,.csv" multiple required>
                                     <label class="custom-file-label" for="importFilesInput">Choose files…</label>
                                 </div>
                                 <small class="form-text text-muted">
