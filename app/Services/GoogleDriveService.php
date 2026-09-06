@@ -108,6 +108,12 @@ class GoogleDriveService
             'copy',
             $localPath,
             "{$this->remoteName}:{$remoteFolderPath}",
+            // Upload perf: Drive throttles each connection, so parallelise across
+            // files (--transfers) and send bigger chunks (upload-only) to lift the
+            // single-stream ceiling. See docs/notes: 4+ parallel = 17-27 MiB/s.
+            '--drive-chunk-size=256M',
+            '--transfers=8',
+            '--checkers=16',
         ], timeout: 7200);
 
         return $this->fetchFileMeta($remoteFolderPath . '/' . basename($localPath));
@@ -210,6 +216,9 @@ class GoogleDriveService
             'copy',
             $localFilePath,
             "{$this->remoteName}:{$remoteFolder}",
+            '--drive-chunk-size=256M',   // upload-only: fewer API roundtrips, higher throughput
+            '--transfers=8',
+            '--checkers=16',
         ], timeout: 3600);
 
         try {
@@ -236,6 +245,10 @@ class GoogleDriveService
             'copy',
             $localFolderPath,
             "{$this->remoteName}:{$remoteFolderPath}",
+            // Bulk TCGA folder = many files → --transfers parallelism helps most here.
+            '--drive-chunk-size=256M',
+            '--transfers=8',
+            '--checkers=16',
         ], timeout: 7200);
 
         $wsiFiles = $scanForWsi ? $this->findWsiFilesInFolder($remoteFolderPath) : [];
