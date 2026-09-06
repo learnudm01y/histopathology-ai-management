@@ -22,6 +22,7 @@ use Throwable;
  *   • manifest (.txt, TSV with id|filename|md5|size|state)
  *   • metadata.cart.*.json (slide-level metadata + associated case_id)
  *   • clinical.cart.*.json (case-level clinical data)
+ *   • clinical CSV (flat, one row per case; links to EXISTING samples only)
  *
  * All operations are idempotent (upsert by natural keys: file_id, case_id).
  * Linkage:
@@ -42,7 +43,7 @@ class ImportsController extends Controller
     {
         $request->validate([
             'import_files'   => ['required', 'array', 'min:1'],
-            'import_files.*' => ['required', 'file', 'max:51200', 'mimetypes:application/json,text/plain,text/tab-separated-values,application/octet-stream'],
+            'import_files.*' => ['required', 'file', 'max:51200', 'mimetypes:application/json,text/plain,text/tab-separated-values,text/csv,application/csv,application/vnd.ms-excel,application/octet-stream'],
             'data_source_id' => ['nullable', 'exists:data_sources,id'],
         ], [
             'import_files.required' => 'Please choose at least one file (manifest, metadata or clinical).',
@@ -53,7 +54,7 @@ class ImportsController extends Controller
         $summary = [
             'manifest' => ['files' => 0, 'rows' => 0, 'samples_created' => 0, 'samples_updated' => 0],
             'metadata' => ['files' => 0, 'rows' => 0, 'samples_created' => 0, 'samples_updated' => 0, 'cases_created' => 0, 'cases_updated' => 0],
-            'clinical' => ['files' => 0, 'rows' => 0, 'cases_created' => 0, 'cases_updated' => 0, 'clinical_created' => 0, 'clinical_updated' => 0, 'samples_linked' => 0],
+            'clinical' => ['files' => 0, 'rows' => 0, 'cases_created' => 0, 'cases_updated' => 0, 'clinical_created' => 0, 'clinical_updated' => 0, 'samples_linked' => 0, 'samples_unmatched' => 0],
             'unknown'  => 0,
             'errors'   => [],
         ];
@@ -74,6 +75,9 @@ class ImportsController extends Controller
                         break;
                     case 'clinical':
                         $this->importClinical($content, $summary);
+                        break;
+                    case 'clinical_csv':
+                        $this->importClinicalCsv($content, $summary);
                         break;
                     default:
                         $summary['unknown']++;
@@ -132,6 +136,18 @@ class ImportsController extends Controller
             return 'manifest';
         }
         if (str_contains($lower, 'manifest')) return 'manifest';
+
+        // Flat clinical CSV — one row per case, produced by our cohort tooling:
+        //   submitter_id,gdc_case_id,age,sex,race,histological_diagnosis,…,file_ids,file_names,md5sums
+        // A UTF-8 BOM on the first column name is common when the file came
+        // through Excel, so strip it before matching.
+        $csvHeader = str_replace("\xEF\xBB\xBF", '', $firstLine);
+        if (str_contains($csvHeader, ',')
+            && str_contains($csvHeader, 'submitter_id')
+            && str_contains($csvHeader, 'gdc_case_id')
+            && str_contains($csvHeader, 'file_names')) {
+            return 'clinical_csv';
+        }
 
         return 'unknown';
     }
@@ -436,6 +452,174 @@ class ImportsController extends Controller
     }
 
     // ─────────────────────────────────────────────────────────────────
+    //  Clinical (flat CSV, one row per case)
+    // ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Import a flat clinical CSV and attach its facts to slides ALREADY in the
+     * system. Expected columns:
+     *
+     *   submitter_id, gdc_case_id, age, sex, race, histological_diagnosis,
+     *   histological_subtype, icd_o_3_histology, cohort, cohort_label,
+     *   tcga_sample_code, tcga_analyte_code, slide_count,
+     *   file_ids, file_names, md5sums
+     *
+     * When a case carries more than one slide, file_ids / file_names / md5sums
+     * hold ';'-separated lists in matching order.
+     *
+     * Samples are NEVER created here: a row only links to slides that already
+     * exist, matched on samples.file_name first and samples.file_id second.
+     * Slides that are absent are counted in samples_unmatched and reported.
+     *
+     * The clinical record is written to clinical_slide_case_information because
+     * that is what SlideVerificationService reads (patientCase->clinicalInfo)
+     * for the gender / age_at_index checks.
+     */
+    private function importClinicalCsv(string $content, array &$summary): void
+    {
+        $summary['clinical']['files']++;
+
+        $rows = $this->parseCsvRows($content);
+        if (!$rows) return;
+
+        DB::transaction(function () use ($rows, &$summary) {
+            foreach ($rows as $row) {
+                $summary['clinical']['rows']++;
+
+                $caseUuid = trim((string) ($row['gdc_case_id'] ?? ''));
+                if ($caseUuid === '') continue;
+
+                $submitterId = $this->blankToNull($row['submitter_id'] ?? null);
+                $diagnosis   = $this->blankToNull($row['histological_diagnosis'] ?? null);
+                $subtype     = $this->blankToNull($row['histological_subtype'] ?? null);
+
+                // 1) Upsert the case shell (samples.case_id points at cases.id).
+                $caseAttrs = array_filter([
+                    'case_id'      => $caseUuid,
+                    'submitter_id' => $submitterId,
+                    'disease_type' => $diagnosis,
+                ], fn ($v) => $v !== null && $v !== '');
+
+                $caseRow = PatientCase::where('case_id', $caseUuid)->first();
+                if ($caseRow) {
+                    $caseRow->fill($caseAttrs)->save();
+                    $summary['clinical']['cases_updated']++;
+                } else {
+                    $caseRow = PatientCase::create($caseAttrs);
+                    $summary['clinical']['cases_created']++;
+                }
+
+                // 2) Upsert the clinical record the verification reads.
+                $clinicalAttrs = array_filter([
+                    'case_id'           => $caseUuid,
+                    'submitter_id'      => $submitterId,
+                    'disease_type'      => $diagnosis,
+                    'gender'            => $this->blankToNull($row['sex'] ?? null),
+                    'race'              => $this->blankToNull($row['race'] ?? null),
+                    'age_at_index'      => is_numeric($row['age'] ?? null) ? (int) $row['age'] : null,
+                    'primary_diagnosis' => $subtype ?: $diagnosis,
+                    'morphology'        => $this->blankToNull($row['icd_o_3_histology'] ?? null),
+                    'raw_json'          => $row,
+                ], fn ($v) => $v !== null && $v !== '');
+
+                $clinical = ClinicalCaseInformation::where('case_id', $caseUuid)->first();
+                if ($clinical) {
+                    $clinical->fill($clinicalAttrs)->save();
+                    $summary['clinical']['clinical_updated']++;
+                } else {
+                    ClinicalCaseInformation::create($clinicalAttrs);
+                    $summary['clinical']['clinical_created']++;
+                }
+
+                // 3) Attach only slides that already exist.
+                $names = $this->splitList($row['file_names'] ?? null);
+                $ids   = $this->splitList($row['file_ids'] ?? null);
+
+                foreach ($names as $i => $fileName) {
+                    $gdcFileId = $ids[$i] ?? null;
+
+                    $sample = Sample::where('file_name', $fileName)->first();
+                    if (!$sample && $gdcFileId) {
+                        $sample = Sample::where('file_id', $gdcFileId)->first();
+                    }
+                    if (!$sample) {
+                        $summary['clinical']['samples_unmatched']++;
+                        continue;
+                    }
+
+                    $dirty = false;
+                    if ((int) $sample->case_id !== (int) $caseRow->id) {
+                        $sample->case_id = $caseRow->id;
+                        $dirty = true;
+                    }
+                    // Record the GDC file UUID when the slide arrived without one.
+                    if ($gdcFileId && !$sample->file_id) {
+                        $sample->file_id = $gdcFileId;
+                        $dirty = true;
+                    }
+                    if ($dirty) {
+                        $sample->save();
+                        $summary['clinical']['samples_linked']++;
+                    }
+                }
+            }
+        });
+    }
+
+    /**
+     * Parse a CSV string into header-keyed rows. Strips a UTF-8 BOM from the
+     * first column name and skips short rows.
+     *
+     * @return array<int, array<string, string>>
+     */
+    private function parseCsvRows(string $content): array
+    {
+        $handle = fopen('php://memory', 'r+');
+        fwrite($handle, $content);
+        rewind($handle);
+
+        $header = fgetcsv($handle, 0, ',', '"', '');
+        if (!$header) {
+            fclose($handle);
+            return [];
+        }
+        $header[0] = preg_replace('/^\xEF\xBB\xBF/', '', (string) $header[0]);
+        $header    = array_map(fn ($h) => strtolower(trim((string) $h)), $header);
+        $width     = count($header);
+
+        $rows = [];
+        while (($line = fgetcsv($handle, 0, ',', '"', '')) !== false) {
+            if ($line === [null] || count($line) < $width) continue;
+            $rows[] = array_combine($header, array_slice($line, 0, $width));
+        }
+        fclose($handle);
+
+        return $rows;
+    }
+
+    /**
+     * Split a ';'-separated cell into trimmed, non-empty values.
+     *
+     * @return array<int, string>
+     */
+    private function splitList(?string $value): array
+    {
+        if ($value === null || trim($value) === '') return [];
+
+        return array_values(array_filter(
+            array_map('trim', explode(';', $value)),
+            fn ($v) => $v !== ''
+        ));
+    }
+
+    private function blankToNull(?string $value): ?string
+    {
+        $value = $value === null ? null : trim($value);
+
+        return ($value === null || $value === '') ? null : $value;
+    }
+
+    // ─────────────────────────────────────────────────────────────────
     //  Reconciliation:
     //    Whenever any import runs, link any sample whose entity carries a
     //    case_uuid (already in samples.case_id pointing to cases.id) — and
@@ -558,6 +742,7 @@ class ImportsController extends Controller
         if ($s['metadata']['files'])  $bits[] = "Metadata: {$s['metadata']['rows']} rows, cases (+{$s['metadata']['cases_created']}/✎{$s['metadata']['cases_updated']}), samples (+{$s['metadata']['samples_created']}/✎{$s['metadata']['samples_updated']})";
         if ($s['clinical']['files'])  $bits[] = "Clinical: {$s['clinical']['rows']} cases (+{$s['clinical']['clinical_created']}/✎{$s['clinical']['clinical_updated']})";
         if ($s['clinical']['samples_linked']) $bits[] = "Linked {$s['clinical']['samples_linked']} sample(s) to cases";
+        if ($s['clinical']['samples_unmatched']) $bits[] = "{$s['clinical']['samples_unmatched']} slide(s) in the file are not in the system — skipped";
         if ($s['unknown']) $bits[] = "{$s['unknown']} unrecognised file(s)";
         return $bits ? implode(' · ', $bits) : 'Nothing was imported.';
     }
