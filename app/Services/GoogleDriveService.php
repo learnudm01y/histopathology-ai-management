@@ -249,6 +249,11 @@ class GoogleDriveService
             '--drive-chunk-size=256M',
             '--transfers=8',
             '--checkers=16',
+            // Skip download-manager cruft (Free Download Manager .parcel control
+            // files are mode 0600/root-only and would fail the whole copy with
+            // "permission denied", falsely marking the sample corrupted).
+            '--exclude=*.parcel',
+            '--exclude=logs/**',
         ], timeout: 7200);
 
         $wsiFiles = $scanForWsi ? $this->findWsiFilesInFolder($remoteFolderPath) : [];
