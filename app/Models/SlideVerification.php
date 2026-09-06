@@ -241,7 +241,23 @@ class SlideVerification extends Model
             'mpp_x'               => $this->numCheck($this->mpp_x,               fn ($v) => $v > 0,          '> 0'),
             'mpp_y'               => $this->numCheck($this->mpp_y,               fn ($v) => $v > 0,          '> 0'),
             // C1 and C2 of the eligibility standard — mandatory.
-            'tissue_area_percent' => $this->numCheck($this->tissue_area_percent, fn ($v) => $v >= 10,        'min 10%'),
+            // "Sufficient tissue" passes on EITHER a >=10% tissue area OR a large
+            // absolute amount of tissue (>=50 tissue patches). Big TCGA slides
+            // have wide empty scan margins that drag the percentage below 10%
+            // even when they contain thousands of usable tissue patches, so the
+            // area percentage alone falsely rejected otherwise-good slides.
+            'tissue_area_percent' => (function () {
+                $pct     = $this->tissue_area_percent;
+                $patches = $this->tissue_patch_count;
+                if ($pct === null && $patches === null) {
+                    return ['not_checked', 'min 10% area or ≥ 50 tissue patches'];
+                }
+                if (($pct !== null && $pct >= 10) || ($patches !== null && $patches >= 50)) {
+                    return ['passed', $pct !== null ? "{$pct}%" : "{$patches} patches"];
+                }
+                return ['failed', ($pct ?? '—') . '% / ' . ($patches ?? '—')
+                    . ' patches — required ≥ 10% area or ≥ 50 patches'];
+            })(),
             'tissue_patch_count'  => $this->numCheck($this->tissue_patch_count,  fn ($v) => $v >= 50,        'min 50 patches'),
             // C5–C7 — advisory (see ADVISORY_CHECKS).
             'artifact_score'      => $this->numCheck($this->artifact_score,      fn ($v) => $v <= 0.30,      'max 0.30'),
