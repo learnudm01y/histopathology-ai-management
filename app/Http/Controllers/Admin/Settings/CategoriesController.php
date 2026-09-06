@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin\Settings;
 
 use App\Http\Controllers\Controller;
 use App\Models\Category;
+use App\Models\DiseaseSubtype;
 use App\Models\Organ;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -28,10 +29,18 @@ class CategoriesController extends Controller
         // Optional organ filter — the tree is big once every organ is populated.
         $selectedOrganId = $request->integer('organ_id') ?: null;
 
-        $categories = Category::withCount(['diseaseSubtypes', 'samples'])
+        // The slide counts are the point of this page as much as the tree is:
+        // `samples_count` is everything filed under the node, `stored_samples_count`
+        // only what actually reached storage — the two answer different questions
+        // ("how many do we have on paper" vs "how many can we train on today").
+        $categories = Category::withCount([
+                'diseaseSubtypes',
+                'samples',
+                'samples as stored_samples_count' => fn($q) => $q->where('storage_status', 'available'),
+            ])
             ->with([
                 'organ',
-                'rootDiseaseSubtypes' => fn($q) => $q->orderBy('name'),
+                'rootDiseaseSubtypes' => fn($q) => $q->withCount(DiseaseSubtype::treeCounts())->orderBy('name'),
                 'rootDiseaseSubtypes.childrenRecursive',
             ])
             ->forOrgan($selectedOrganId)

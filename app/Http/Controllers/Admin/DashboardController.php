@@ -133,6 +133,15 @@ class DashboardController extends Controller
             ->groupBy('category_id')
             ->map(fn ($group) => $group->values());
 
+        // A disease filter arrives from the slide counts on the taxonomy page and
+        // has no dropdown of its own — the disease list is organ-deep and would
+        // dwarf the toolbar — so it is carried as a chip the user can clear.
+        $activeDiseaseSubtype = null;
+        if ($request->filled('disease_subtype_id') && $request->disease_subtype_id !== 'none') {
+            $activeDiseaseSubtype = DiseaseSubtype::with(['organ', 'category'])
+                ->find($request->integer('disease_subtype_id'));
+        }
+
         $stats = [
             'total'           => Sample::count(),
             'available'       => Sample::where('storage_status', 'available')->count(),
@@ -141,7 +150,7 @@ class DashboardController extends Controller
             'rejected'        => Sample::where('quality_status', 'rejected')->count(),
         ];
 
-        return view('admin.samples', compact('samples', 'organs', 'categories', 'categoriesByOrgan', 'dataSources', 'stains', 'diseaseSubtypesByCategory', 'stats'));
+        return view('admin.samples', compact('samples', 'organs', 'categories', 'categoriesByOrgan', 'dataSources', 'stains', 'diseaseSubtypesByCategory', 'activeDiseaseSubtype', 'stats'));
     }
 
     public function storeSample(Request $request): RedirectResponse

@@ -78,12 +78,81 @@ class DiseaseSubtype extends Model
     /** `children` with the whole subtree eager-loaded, for rendering the tree. */
     public function childrenRecursive(): HasMany
     {
-        return $this->children()->with('childrenRecursive');
+        return $this->children()->withCount(self::treeCounts())->with('childrenRecursive');
     }
 
     public function samples(): HasMany
     {
         return $this->hasMany(Sample::class);
+    }
+
+    /**
+     * The two numbers the taxonomy page reports per disease: how many slides are
+     * filed under it at all, and how many of those actually reached storage.
+     * Defined once so the tree, its roll-ups and every other caller count alike.
+     *
+     * @return array<int|string, mixed>
+     */
+    public static function treeCounts(): array
+    {
+        return [
+            'samples',
+            'samples as stored_samples_count' => fn (Builder $q) => $q->where('storage_status', 'available'),
+        ];
+    }
+
+    /**
+     * Roll a `withCount` attribute up through the whole branch: this disease
+     * plus every finer disease under it. A slide is filed against the most
+     * specific disease available, so the honest answer to "how many slides does
+     * Malignant have" is the sum over its subtree, not the count on its own row.
+     */
+    public function branchCount(string $attribute): int
+    {
+        $own = $this->getAttribute($attribute);
+
+        if ($own === null) {
+            $this->loadCount(self::treeCounts());
+            $own = $this->getAttribute($attribute) ?? 0;
+        }
+
+        return (int) $own
+            + $this->loadedChildren()->sum(fn (self $child) => $child->branchCount($attribute));
+    }
+
+    /** Children the tree already eager-loaded, falling back to a query. */
+    public function loadedChildren(): Collection
+    {
+        foreach (['childrenRecursive', 'children'] as $relation) {
+            if ($this->relationLoaded($relation)) {
+                return $this->getRelation($relation);
+            }
+        }
+
+        return $this->children()->withCount(self::treeCounts())->get();
+    }
+
+    /**
+     * This disease and every finer disease below it, as ids. Walks level by
+     * level and stops at MAX_DEPTH so a corrupt parent chain cannot loop.
+     *
+     * @return array<int, int>
+     */
+    public static function subtreeIds(int $rootId): array
+    {
+        $ids   = [$rootId];
+        $front = [$rootId];
+
+        for ($level = 0; $level < self::MAX_DEPTH && $front !== []; $level++) {
+            $front = self::whereIn('parent_id', $front)
+                ->whereNotIn('id', $ids)
+                ->pluck('id')
+                ->all();
+
+            $ids = array_merge($ids, $front);
+        }
+
+        return $ids;
     }
 
     /**

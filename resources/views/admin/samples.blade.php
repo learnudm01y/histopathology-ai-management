@@ -189,8 +189,29 @@
                         <option value="missing"        @selected(request('storage_status') === 'missing')>Missing</option>
                     </select>
 
+                    {{-- Disease filter — set by the slide counts on the Categories
+                         page. Carried in hidden fields so re-filtering by organ or
+                         status keeps the disease the user drilled into. --}}
+                    @if(request()->filled('disease_subtype_id'))
+                        <input type="hidden" name="disease_subtype_id" value="{{ request('disease_subtype_id') }}">
+                        @if(request()->filled('subtree'))
+                            <input type="hidden" name="subtree" value="{{ request('subtree') }}">
+                        @endif
+                        <span class="badge badge-info d-inline-flex align-items-center" style="font-size:.75rem;padding:.4rem .55rem;">
+                            <i class="mdi mdi-file-tree mr-1"></i>
+                            @if(request('disease_subtype_id') === 'none')
+                                No disease assigned
+                            @else
+                                {{ $activeDiseaseSubtype?->qualified_name ?? 'Disease #' . request('disease_subtype_id') }}
+                                @if(request()->boolean('subtree')) <span class="ml-1">+ finer</span> @endif
+                            @endif
+                            <a href="{{ route('admin.samples', request()->except(['disease_subtype_id', 'subtree', 'page'])) }}"
+                               class="text-white ml-2" title="Remove the disease filter">&times;</a>
+                        </span>
+                    @endif
+
                     <button type="submit" class="btn btn-primary btn-sm">Filter</button>
-                    @if(request()->hasAny(['search','organ_id','category_id','storage_status']))
+                    @if(request()->hasAny(['search','organ_id','category_id','disease_subtype_id','storage_status']))
                         <a href="{{ route('admin.samples') }}" class="btn btn-outline-secondary btn-sm">Clear</a>
                     @endif
                 </form>

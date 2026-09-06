@@ -120,12 +120,35 @@
     color: #4a5568;
 }
 
-/* Add subtype form row */
+/* ── Slide-count badges ─────────────────────────────────────── */
+.tree-count-badge {
+    font-size: .72rem;
+    font-weight: 600;
+    padding: .3rem .45rem;
+    text-decoration: none;
+}
+a.tree-count-badge:hover { filter: brightness(.92); text-decoration: none; }
+.tree-count-badge .mdi { font-size: .78rem; vertical-align: -1px; }
+
+/* Add subtype form row. The slot around it is closed by default, so a tree of
+   diseases no longer reserves a blank row under every single node. */
+.tree-add-slot[hidden] { display: none !important; }
+.tree-add-slot-nested {
+    margin-left: 18px;
+    padding-left: 16px;
+    border-left: 2px dashed #dbe3ee;
+}
 .tree-add-row {
     display: flex;
     align-items: center;
     padding: 5px 4px;
     margin-top: 2px;
+    position: relative;
+}
+.tree-empty-hint {
+    font-size: .78rem;
+    color: #a0aec0;
+    padding: 4px 2px 6px;
     position: relative;
 }
 </style>
@@ -229,12 +252,23 @@
                         {{ $organCategories->sum('disease_subtypes_count') }} disease(s)
                     </span>
                     <span class="badge badge-light border ml-1">
-                        {{ $organCategories->sum('samples_count') }} slide(s)
+                        {{ number_format($organCategories->sum('samples_count')) }} slide(s)
+                    </span>
+                    <span class="badge badge-success ml-1"
+                          title="Downloaded and stored on Drive — the slides this organ can actually be trained on today">
+                        {{ number_format($organCategories->sum('stored_samples_count')) }} on Drive
                     </span>
                 </div>
 
                 <div class="category-tree organ-band-body">
                     @foreach($organCategories as $cat)
+                    @php
+                        // Everything the diseases under this group account for.
+                        // Whatever the group has on top of that was never given a
+                        // disease, and would be invisible if only the tree reported.
+                        $filedSlides   = $cat->rootDiseaseSubtypes->sum(fn ($s) => $s->branchCount('samples_count'));
+                        $unfiledSlides = max(0, $cat->samples_count - $filedSlides);
+                    @endphp
                     <div class="tree-node" id="cat-node-{{ $cat->id }}">
 
                         {{-- ── Category Header ── --}}
@@ -243,6 +277,7 @@
                             {{-- Toggle chevron --}}
                             <button class="tree-toggle-btn"
                                     type="button"
+                                    data-toggle-cat="{{ $cat->id }}"
                                     onclick="toggleSubtypes({{ $cat->id }}, this)">
                                 <i class="mdi mdi-chevron-right"></i>
                             </button>
@@ -256,11 +291,32 @@
                                 <small class="text-muted font-weight-normal ml-1">({{ $cat->disease_subtypes_count }})</small>
                             </span>
 
-                            {{-- Samples badge --}}
-                            <span class="badge badge-light border mr-2" title="Samples attached">
-                                <i class="mdi mdi-image-multiple" style="font-size:.7rem;vertical-align:middle;"></i>
-                                {{ $cat->samples_count }}
-                            </span>
+                            {{-- Slides filed under this group, and how many of them
+                                 are actually downloaded. `$unfiledSlides` is the gap
+                                 between this total and the sum of the diseases
+                                 below: slides that carry the group but no disease,
+                                 so they belong to no training class yet. --}}
+                            <a href="{{ route('admin.samples', array_filter(['organ_id' => $cat->organ_id, 'category_id' => $cat->id])) }}"
+                               class="badge tree-count-badge {{ $cat->samples_count > 0 ? 'badge-primary' : 'badge-light border text-muted' }} mr-1"
+                               title="{{ $cat->samples_count }} slide(s) are filed under this clinical group. Click to open them.">
+                                <i class="mdi mdi-image-multiple"></i> {{ number_format($cat->samples_count) }}
+                            </a>
+
+                            <a href="{{ route('admin.samples', array_filter(['organ_id' => $cat->organ_id, 'category_id' => $cat->id, 'storage_status' => 'available'])) }}"
+                               class="badge tree-count-badge {{ $cat->stored_samples_count > 0 ? 'badge-success' : 'badge-light border text-muted' }} mr-1"
+                               title="{{ $cat->stored_samples_count }} of {{ $cat->samples_count }} slide(s) are downloaded and stored on Drive. Click to open them.">
+                                <i class="mdi mdi-cloud-check"></i> {{ number_format($cat->stored_samples_count) }}
+                            </a>
+
+                            @if($unfiledSlides > 0)
+                                <a href="{{ route('admin.samples', array_filter(['organ_id' => $cat->organ_id, 'category_id' => $cat->id]) + ['disease_subtype_id' => 'none']) }}"
+                                   class="badge badge-warning tree-count-badge mr-2"
+                                   title="{{ $unfiledSlides }} slide(s) carry this clinical group but no disease, so they are counted here and under no disease below. Click to open and label them."><!--
+                                    -->{{ number_format($unfiledSlides) }} unfiled
+                                </a>
+                            @else
+                                <span class="mr-1"></span>
+                            @endif
 
                             {{-- Status --}}
                             @if($cat->is_active)
@@ -268,6 +324,14 @@
                             @else
                                 <span class="badge badge-secondary mr-3">Inactive</span>
                             @endif
+
+                            {{-- Add a disease — sits with the other row actions
+                                 rather than as a permanent blank row underneath --}}
+                            <button type="button" class="btn btn-outline-secondary btn-sm mr-1"
+                                    title="Add a disease to this clinical group"
+                                    onclick="toggleAddForm('cat-{{ $cat->id }}', this)">
+                                <i class="mdi mdi-plus"></i>
+                            </button>
 
                             {{-- Edit --}}
                             <a href="{{ route('admin.settings.categories.edit', $cat) }}"
@@ -291,13 +355,19 @@
                         <div class="collapse" id="subtypes-{{ $cat->id }}">
                             <div class="tree-subtypes-wrap">
 
-                                @foreach($cat->rootDiseaseSubtypes as $subtype)
+                                @forelse($cat->rootDiseaseSubtypes as $subtype)
                                     @include('admin.settings.categories._disease-node', [
                                         'cat' => $cat, 'subtype' => $subtype, 'depth' => 1,
                                     ])
-                                @endforeach
+                                @empty
+                                    <div class="tree-empty-hint">
+                                        No diseases in this group yet — use the
+                                        <i class="mdi mdi-plus"></i> button on the row above to add one.
+                                    </div>
+                                @endforelse
 
-                                {{-- ── Add a top-level disease to this group ── --}}
+                                {{-- Add a top-level disease. Opened by the group's
+                                     "+" button, so it costs no space while closed. --}}
                                 @include('admin.settings.categories._disease-add', [
                                     'cat' => $cat, 'parent' => null,
                                 ])
@@ -332,27 +402,48 @@ function toggleSubtypes(id, btn) {
     }
 }
 
+function expandCategory(id) {
+    var panel = document.getElementById('subtypes-' + id);
+    if (!panel) return;
+    panel.classList.add('show');
+    var chevron = document.querySelector('[data-toggle-cat="' + id + '"] .mdi');
+    if (chevron) chevron.classList.add('rotated');
+}
+
+// The "add a disease" forms are collapsed so they cost no vertical space; the
+// "+" on a row opens the one belonging to it, expanding the group first when the
+// row sits inside a panel that is still closed.
+function toggleAddForm(key, btn) {
+    var slot = document.getElementById('add-' + key);
+    if (!slot) return;
+
+    var opening = slot.hasAttribute('hidden');
+    if (opening) {
+        slot.removeAttribute('hidden');
+        var panel = slot.closest('.collapse');
+        if (panel) expandCategory(panel.id.replace('subtypes-', ''));
+        var input = slot.querySelector('input[name="name"]');
+        if (input) input.focus();
+    } else {
+        slot.setAttribute('hidden', '');
+    }
+
+    if (btn) {
+        btn.classList.toggle('btn-outline-secondary', !opening);
+        btn.classList.toggle('btn-secondary', opening);
+    }
+}
+
 $(function () {
     // Auto-expand after add / edit / delete subtype
     @if(session('open_category'))
-    var openId = {{ (int) session('open_category') }};
-    var panel = document.getElementById('subtypes-' + openId);
-    if (panel) {
-        panel.classList.add('show');
-        var btn = document.querySelector('[onclick="toggleSubtypes(' + openId + ', this)"] .mdi');
-        if (btn) btn.classList.add('rotated');
-    }
+    expandCategory({{ (int) session('open_category') }});
     @endif
 
-    // Auto-expand when there are validation errors (inline add)
+    // Auto-expand when there are validation errors (inline add). The form that
+    // failed renders already open, so this only has to reveal the panel holding it.
     @if($errors->any() && old('category_id'))
-    var errId = {{ (int) old('category_id') }};
-    var errPanel = document.getElementById('subtypes-' + errId);
-    if (errPanel) {
-        errPanel.classList.add('show');
-        var errBtn = document.querySelector('[onclick="toggleSubtypes(' + errId + ', this)"] .mdi');
-        if (errBtn) errBtn.classList.add('rotated');
-    }
+    expandCategory({{ (int) old('category_id') }});
     @endif
 });
 </script>
