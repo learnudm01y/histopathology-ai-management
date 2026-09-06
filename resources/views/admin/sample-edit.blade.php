@@ -296,13 +296,24 @@
         blank.textContent = list.length ? '— None —' : (catId ? '— No subtypes —' : '— None —');
         sel.appendChild(blank);
 
-        list.forEach(function (s) {
-            var opt = document.createElement('option');
-            opt.value       = s.name;
-            opt.textContent = s.name;
-            if (s.name === selectedValue) opt.selected = true;
-            sel.appendChild(opt);
-        });
+        // Diseases nest, so the flat list is walked as a tree and each level is
+        // indented: without it "Infiltrating ductal carcinoma" would sit beside
+        // the "Malignant" it actually belongs under.
+        (function emit(parentId, depth) {
+            list.filter(function (s) {
+                    return String(s.parent_id == null ? '' : s.parent_id) === String(parentId);
+                })
+                .forEach(function (s) {
+                    var opt = document.createElement('option');
+                    opt.value       = s.name;
+                    // Non-breaking spaces: a browser collapses ordinary ones in
+                    // an <option> and the indent would vanish.
+                    opt.textContent = (depth ? '  '.repeat(depth) + '└ ' : '') + s.name;
+                    if (s.name === selectedValue) opt.selected = true;
+                    sel.appendChild(opt);
+                    if (depth < 10) emit(s.id, depth + 1);
+                });
+        })('', 0);
     }
 
     // Re-populate when category changes (clear previous subtype selection)

@@ -785,11 +785,17 @@
                         </div>
                         <div class="col-md-4">
                             <div class="form-group">
-                                <label>Disease Subtype</label>
-                                <select name="disease_subtype_id" id="modal_disease_subtype_id" class="form-control">
+                                <label>Disease</label>
+                                {{-- Unnamed: the drill-down below can go deeper, and only the most
+                                     specific disease chosen is posted, through the hidden field. --}}
+                                <select id="modal_disease_subtype_id" class="form-control">
                                     <option value="">— Select category first —</option>
                                 </select>
-                                <small class="form-text text-muted">Select a category first to load available subtypes.</small>
+                                {{-- One extra <select> per level of refinement, grown on demand. --}}
+                                <div id="modal_disease_chain"></div>
+                                <input type="hidden" name="disease_subtype_id" id="modal_disease_subtype_value"
+                                       value="{{ old('disease_subtype_id') }}">
+                                <small class="form-text text-muted" id="modal_disease_help">Select a clinical group first to load available diseases.</small>
                             </div>
                         </div>
                         <div class="col-md-4">
@@ -1378,43 +1384,169 @@
         updateDiseaseSubtypeDropdown();
     }
 
-    // ── Populate disease subtype dropdown based on category selection ────────
-    function updateDiseaseSubtypeDropdown() {
-        var catId   = document.getElementById('modal_category_id').value;
-        var select  = document.getElementById('modal_disease_subtype_id');
-        select.innerHTML = '';
+    // -- Disease drill-down: Disease -> finer Disease -> ... ------------------
+    // Diseases nest, so one <select> is grown per level and only the deepest
+    // choice is posted. Stopping at a disease that has finer diseases under it
+    // would file the slide against a class the taxonomy can already refine, so
+    // every level that appears must be answered.
+    function diseaseChildren(catId, parentId) {
+        var all  = catId ? (diseaseSubtypesByCategory[catId] || []) : [];
+        var want = String(parentId == null ? '' : parentId);
+        return all.filter(function (s) {
+            return String(s.parent_id == null ? '' : s.parent_id) === want;
+        });
+    }
 
+    /** Root-to-node id path for a disease, so old() input can be restored. */
+    function diseaseChainFor(catId, id) {
+        var all  = catId ? (diseaseSubtypesByCategory[catId] || []) : [];
+        var byId = {};
+        all.forEach(function (s) { byId[String(s.id)] = s; });
+
+        var path = [], node = byId[String(id)], guard = 0;
+        while (node && guard++ < 10) {
+            path.unshift(String(node.id));
+            node = node.parent_id == null ? null : byId[String(node.parent_id)];
+        }
+        return path;
+    }
+
+    /** Build one refinement <select> listing the children of the level above. */
+    function buildDiseaseLevel(parentName, options) {
+        var wrap = document.createElement('div');
+        wrap.className = 'mt-2';
+
+        var label = document.createElement('label');
+        label.className = 'small text-muted mb-1 d-block';
+        label.textContent = 'Refine "' + parentName + '"';
+        wrap.appendChild(label);
+
+        var sel = document.createElement('select');
+        sel.className = 'form-control disease-refine-select';
+        // A level only exists because its parent is not the final answer.
+        sel.required = true;
+        sel.appendChild(new Option('- Select -', ''));
+        options.forEach(function (o) { sel.appendChild(new Option(o.name, o.id)); });
+        sel.addEventListener('change', function () { refineDiseaseChain(null); });
+        wrap.appendChild(sel);
+
+        return { wrap: wrap, select: sel };
+    }
+
+    /**
+     * Rebuild every level below the top-level disease picker.
+     * `wanted` is an id path being restored (deepest last); null keeps whatever
+     * the user has already chosen further down.
+     */
+    function refineDiseaseChain(wanted) {
+        var catId = document.getElementById('modal_category_id').value;
+        var chain = document.getElementById('modal_disease_chain');
+        var rest  = wanted ? wanted.slice() : [];
+
+        if (!wanted) {
+            chain.querySelectorAll('.disease-refine-select').forEach(function (s) {
+                if (s.value) rest.push(s.value);
+            });
+        }
+
+        chain.innerHTML = '';
+
+        var topSelect   = document.getElementById('modal_disease_subtype_id');
+        var current     = topSelect.value;
+        var currentName = current ? topSelect.options[topSelect.selectedIndex].text.trim() : '';
+        var guard       = 0;
+
+        while (current && guard++ < 10) {
+            var kids = diseaseChildren(catId, current);
+            if (!kids.length) break;
+
+            var level = buildDiseaseLevel(currentName, kids);
+            chain.appendChild(level.wrap);
+
+            var want  = rest.shift();
+            var match = kids.filter(function (k) { return String(k.id) === String(want); })[0];
+            if (!match) break;
+
+            level.select.value = String(match.id);
+            current     = String(match.id);
+            currentName = match.name;
+        }
+
+        syncDiseaseValue();
+    }
+
+    /** Post the deepest disease chosen, and say so when it is not a leaf yet. */
+    function syncDiseaseValue() {
+        var selects = [document.getElementById('modal_disease_subtype_id')].concat(
+            Array.prototype.slice.call(
+                document.querySelectorAll('#modal_disease_chain .disease-refine-select')
+            )
+        );
+
+        var deepest = '';
+        selects.forEach(function (s) { if (s.value) deepest = s.value; });
+
+        // An unanswered level means the diagnosis is still coarser than the
+        // taxonomy allows, so nothing is posted until it is answered.
+        var pending = selects.some(function (s) { return s.required && !s.value; });
+        document.getElementById('modal_disease_subtype_value').value = pending ? '' : deepest;
+
+        var help = document.getElementById('modal_disease_help');
+        if (pending) {
+            help.textContent = 'This disease is refined further — pick the exact one.';
+            help.className   = 'form-text text-danger';
+        } else {
+            help.textContent = document.getElementById('modal_category_id').value
+                ? 'Pick the most specific disease available.'
+                : 'Select a clinical group first to load available diseases.';
+            help.className   = 'form-text text-muted';
+        }
+
+        updatePreviews();
+    }
+
+    function updateDiseaseSubtypeDropdown(wanted) {
+        var catId  = document.getElementById('modal_category_id').value;
+        var select = document.getElementById('modal_disease_subtype_id');
+        var roots  = diseaseChildren(catId, '');
+        var path   = Array.isArray(wanted) ? wanted : [];
+
+        select.innerHTML = '';
         var defaultOpt = document.createElement('option');
         defaultOpt.value = '';
-
-        var subtypes = catId ? (diseaseSubtypesByCategory[catId] || []) : [];
-        defaultOpt.textContent = subtypes.length
-            ? '— Select subtype —'
-            : (catId ? '— No subtypes for this category —' : '— Select category first —');
+        defaultOpt.textContent = roots.length
+            ? '- Select disease -'
+            : (catId ? '- No diseases for this group -' : '- Select category first -');
         select.appendChild(defaultOpt);
 
-        subtypes.forEach(function (sub) {
+        roots.forEach(function (sub) {
             var opt = document.createElement('option');
             opt.value = sub.id;
             opt.textContent = sub.name;
             select.appendChild(opt);
         });
 
-        updatePreviews();
+        if (path.length) select.value = path[0];
+        refineDiseaseChain(path.slice(1));
     }
 
     // ── Build and display tissue_name / sample_id previews ───────────────────
     function updatePreviews() {
         var sourceSelect  = document.getElementById('modal_data_source_id');
         var catSelect     = document.getElementById('modal_category_id');
-        var subtypeSelect = document.getElementById('modal_disease_subtype_id');
 
         var sourceName  = sourceSelect.value
             ? sourceSelect.options[sourceSelect.selectedIndex].text.trim() : '';
         var catName     = catSelect.value
             ? catSelect.options[catSelect.selectedIndex].text.trim() : '';
-        var subtypeName = subtypeSelect.value
-            ? subtypeSelect.options[subtypeSelect.selectedIndex].text.trim() : '';
+        // The label is the most specific disease chosen, so the generated folder
+        // name matches the diagnosis the slide is actually filed under.
+        var deepestSelect = document.getElementById('modal_disease_subtype_id');
+        document.querySelectorAll('#modal_disease_chain .disease-refine-select').forEach(function (s) {
+            if (s.value) deepestSelect = s;
+        });
+        var subtypeName = deepestSelect.value
+            ? deepestSelect.options[deepestSelect.selectedIndex].text.trim() : '';
 
         var previewEl   = document.getElementById('tissue_name_preview');
         var sampleEl    = document.getElementById('sample_id_preview');
@@ -1441,9 +1573,15 @@
     document.getElementById('modal_organ_id').addEventListener('change', function () {
         updateClinicalGroupDropdown(false);
     });
-    document.getElementById('modal_category_id').addEventListener('change', updateDiseaseSubtypeDropdown);
+    // Wrapped on purpose: passing the handler straight through would hand the
+    // Event object in as the restore path.
+    document.getElementById('modal_category_id').addEventListener('change', function () {
+        updateDiseaseSubtypeDropdown();
+    });
     document.getElementById('modal_data_source_id').addEventListener('change', updatePreviews);
-    document.getElementById('modal_disease_subtype_id').addEventListener('change', updatePreviews);
+    document.getElementById('modal_disease_subtype_id').addEventListener('change', function () {
+        refineDiseaseChain(null);
+    });
 
     // Initial state — an organ may already be selected via old() input.
     updateClinicalGroupDropdown(true);
@@ -1458,7 +1596,11 @@
         // Restore the group + subtype dropdowns for the previously chosen organ
         updateClinicalGroupDropdown(true);
         @if(old('disease_subtype_id'))
-        document.getElementById('modal_disease_subtype_id').value = '{{ old('disease_subtype_id') }}';
+        // Restore every level, not just the leaf: the drill-down is rebuilt from
+        // the chosen disease's ancestors.
+        updateDiseaseSubtypeDropdown(diseaseChainFor(
+            document.getElementById('modal_category_id').value, '{{ old('disease_subtype_id') }}'
+        ));
         @endif
     });
     @endif

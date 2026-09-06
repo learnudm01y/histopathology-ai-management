@@ -86,6 +86,30 @@ class DiseaseSubtype extends Model
         return $this->hasMany(Sample::class);
     }
 
+    /**
+     * Validation closure: a slide must be labelled with the most specific
+     * disease available. Picking "Malignant" while "Infiltrating ductal
+     * carcinoma" sits under it would file the slide against a coarse class the
+     * taxonomy already knows how to refine, and nothing later can recover the
+     * detail that was never captured.
+     */
+    public static function leafRule(): \Closure
+    {
+        return function (string $attribute, $value, \Closure $fail): void {
+            if (blank($value)) {
+                return;
+            }
+
+            $children = self::where('parent_id', $value)->orderBy('name')->pluck('name');
+            if ($children->isEmpty()) {
+                return;
+            }
+
+            $name = self::whereKey($value)->value('name') ?? 'this disease';
+            $fail("\"{$name}\" is refined further — pick one of: " . $children->implode(', ') . '.');
+        };
+    }
+
     /** Diseases belonging to one organ, regardless of clinical group. */
     public function scopeForOrgan(Builder $query, ?int $organId): Builder
     {

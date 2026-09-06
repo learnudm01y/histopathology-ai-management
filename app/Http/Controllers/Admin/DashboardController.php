@@ -125,9 +125,11 @@ class DashboardController extends Controller
         $dataSources = DataSource::where('is_active', true)->orderBy('name')->get();
         $stains      = Stain::where('is_active', true)->orderBy('stain_type')->orderBy('name')->get();
 
-        // Group disease subtypes by category_id for JS-driven dropdown
+        // Group disease subtypes by category_id for the JS-driven picker. parent_id
+        // travels with each row so the picker can grow the drill-down one level at
+        // a time without another round trip.
         $diseaseSubtypesByCategory = DiseaseSubtype::orderBy('name')
-            ->get(['id', 'category_id', 'name'])
+            ->get(['id', 'category_id', 'parent_id', 'name'])
             ->groupBy('category_id')
             ->map(fn ($group) => $group->values());
 
@@ -158,7 +160,8 @@ class DashboardController extends Controller
             'category_id'          => ['nullable', Rule::exists('categories', 'id')
                                         ->where('organ_id', $request->integer('organ_id'))],
             'disease_subtype_id'   => ['nullable', Rule::exists('disease_subtypes', 'id')
-                                        ->where('organ_id', $request->integer('organ_id'))],
+                                        ->where('organ_id', $request->integer('organ_id')),
+                                        DiseaseSubtype::leafRule()],
             'stain_id'             => ['nullable', 'exists:stains,id'],
             'stain_marker'         => ['nullable', 'string', 'max:100'],
         ];
@@ -599,7 +602,8 @@ class DashboardController extends Controller
             'category_id'        => ['nullable', Rule::exists('categories', 'id')
                                       ->where('organ_id', $request->integer('organ_id'))],
             'disease_subtype_id' => ['nullable', Rule::exists('disease_subtypes', 'id')
-                                      ->where('organ_id', $request->integer('organ_id'))],
+                                      ->where('organ_id', $request->integer('organ_id')),
+                                      DiseaseSubtype::leafRule()],
             'stain_id'           => ['nullable', 'exists:stains,id'],
             'stain_marker'       => ['nullable', 'string', 'max:100'],
             'file_name'          => ['required', 'string', 'max:260'],
@@ -693,7 +697,7 @@ class DashboardController extends Controller
         $categoriesByOrgan = $categories->groupBy('organ_id')->map(fn ($g) => $g->values());
         $stains      = Stain::where('is_active', true)->orderBy('stain_type')->orderBy('name')->get();
         $diseaseSubtypesByCategory = DiseaseSubtype::orderBy('name')
-            ->get(['id', 'category_id', 'name'])
+            ->get(['id', 'category_id', 'parent_id', 'name'])
             ->groupBy('category_id')
             ->map(fn ($g) => $g->values());
 
