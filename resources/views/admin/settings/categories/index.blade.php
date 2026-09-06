@@ -79,6 +79,12 @@
     margin-top: 4px;
     padding-bottom: 2px;
 }
+/* A disease refined by finer diseases — indented one step further in */
+.tree-subtypes-wrap-nested {
+    margin-left: 18px;
+    border-left-color: #dbe3ee;
+}
+.tree-subtype-row-nested { background: #fdfefe; }
 
 /* Subtype leaf row */
 .tree-subtype-row {
@@ -201,11 +207,13 @@
                 @else
                 <div class="alert alert-light border py-2 px-3 mb-3" style="font-size:.82rem;">
                     <i class="mdi mdi-information-outline mr-1 text-info"></i>
-                    <strong>Organ → Clinical Group → Disease.</strong>
+                    <strong>Organ → Clinical Group → Disease → finer Disease.</strong>
                     The organ is the root and is never typed here — it comes from
                     <a href="{{ route('admin.settings.organs.index') }}">Organs</a>. A disease name is unique
                     <em>within its organ</em>, so "Adenocarcinoma" of the lung and of the colon stay two
-                    separate entities. In training, a run is scoped to one organ, each <strong>disease</strong>
+                    separate entities. A disease can be refined further — add
+                    "Infiltrating ductal carcinoma" under "Malignant" from the row's own <em>+</em> field.
+                    In training, a run is scoped to one organ, each <strong>disease</strong>
                     becomes a class, and its <strong>clinical group</strong> is the auxiliary coarse label.
                 </div>
 
@@ -283,60 +291,19 @@
                         <div class="collapse" id="subtypes-{{ $cat->id }}">
                             <div class="tree-subtypes-wrap">
 
-                                @foreach($cat->diseaseSubtypes as $subtype)
-                                <div class="tree-subtype-row">
-                                    {{-- Leaf marker, NOT an expander: the taxonomy is exactly two
-                                         levels deep, so nothing nests under a subtype. --}}
-                                    <i class="mdi mdi-circle-medium tree-subtype-icon"
-                                       title="Disease subtype — this is the leaf level used as a training class"></i>
-                                    <span class="tree-subtype-name">{{ $subtype->name }}</span>
-
-                                    @if($subtype->is_active)
-                                        <span class="badge badge-success mr-2" style="font-size:.7rem;">Active</span>
-                                    @else
-                                        <span class="badge badge-secondary mr-2" style="font-size:.7rem;">Inactive</span>
-                                    @endif
-
-                                    <a href="{{ route('admin.settings.subtypes.edit', [$cat, $subtype]) }}"
-                                       class="btn btn-outline-primary btn-sm mr-1" style="padding:.2rem .5rem;">
-                                        <i class="mdi mdi-pencil" style="font-size:.85rem;"></i>
-                                    </a>
-
-                                    <form action="{{ route('admin.settings.subtypes.destroy', [$cat, $subtype]) }}"
-                                          method="POST" class="d-inline"
-                                          onsubmit="return confirm('Delete subtype \'{{ addslashes($subtype->name) }}\'?')">
-                                        @csrf @method('DELETE')
-                                        <button type="submit" class="btn btn-outline-danger btn-sm"
-                                                style="padding:.2rem .5rem;">
-                                            <i class="mdi mdi-delete" style="font-size:.85rem;"></i>
-                                        </button>
-                                    </form>
-                                </div>
+                                @foreach($cat->rootDiseaseSubtypes as $subtype)
+                                    @include('admin.settings.categories._disease-node', [
+                                        'cat' => $cat, 'subtype' => $subtype, 'depth' => 1,
+                                    ])
                                 @endforeach
 
-                                {{-- ── Add Subtype inline form ── --}}
-                                <div class="tree-add-row">
-                                    <form action="{{ route('admin.settings.subtypes.store', $cat) }}"
-                                          method="POST"
-                                          class="d-flex align-items-center w-100">
-                                        @csrf
-                                        <input type="hidden" name="category_id" value="{{ $cat->id }}">
-                                        <i class="mdi mdi-plus-circle-outline mr-2 text-muted"></i>
-                                        <input type="text" name="name"
-                                               class="form-control form-control-sm mr-2 {{ $errors->any() && old('category_id') == $cat->id ? 'is-invalid' : '' }}"
-                                               placeholder="New disease subtype name…"
-                                               style="max-width:300px;"
-                                               value="{{ old('category_id') == $cat->id ? old('name') : '' }}">
-                                        @if($errors->any() && old('category_id') == $cat->id)
-                                            <span class="text-danger small mr-2">{{ $errors->first('name') }}</span>
-                                        @endif
-                                        <button type="submit" class="btn btn-outline-primary btn-sm">
-                                            <i class="mdi mdi-plus mr-1"></i>Add
-                                        </button>
-                                    </form>
-                                </div>
+                                {{-- ── Add a top-level disease to this group ── --}}
+                                @include('admin.settings.categories._disease-add', [
+                                    'cat' => $cat, 'parent' => null,
+                                ])
 
                             </div>{{-- /.tree-subtypes-wrap --}}
+
                         </div>{{-- /.collapse --}}
 
                     </div>{{-- /.tree-node --}}

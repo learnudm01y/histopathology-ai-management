@@ -54,6 +54,16 @@ class Category extends Model
         return $this->hasMany(DiseaseSubtype::class);
     }
 
+    /**
+     * Only the diseases sitting directly under the group. Diseases nest inside
+     * one another, so the tree is rendered from these roots downwards — taking
+     * `diseaseSubtypes` instead would flatten every level into one list.
+     */
+    public function rootDiseaseSubtypes(): HasMany
+    {
+        return $this->hasMany(DiseaseSubtype::class)->whereNull('parent_id');
+    }
+
     /** Groups belonging to one organ. */
     public function scopeForOrgan(Builder $query, ?int $organId): Builder
     {

@@ -31,7 +31,8 @@ class CategoriesController extends Controller
         $categories = Category::withCount(['diseaseSubtypes', 'samples'])
             ->with([
                 'organ',
-                'diseaseSubtypes' => fn($q) => $q->orderBy('name'),
+                'rootDiseaseSubtypes' => fn($q) => $q->orderBy('name'),
+                'rootDiseaseSubtypes.childrenRecursive',
             ])
             ->forOrgan($selectedOrganId)
             ->orderBy('organ_id')
