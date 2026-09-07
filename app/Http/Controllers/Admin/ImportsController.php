@@ -150,15 +150,19 @@ class ImportsController extends Controller
         }
         if (str_contains($lower, 'manifest')) return 'manifest';
 
-        // Flat clinical CSV — one row per case, produced by our cohort tooling:
-        //   submitter_id,gdc_case_id,age,sex,race,histological_diagnosis,…,file_ids,file_names,md5sums
+        // Flat clinical CSV. Two shapes are in circulation and both are the same
+        // fact filed differently:
+        //   one row per CASE  — …,file_ids,file_names,md5sums  (';'-separated lists)
+        //   one row per SLIDE — …,file_id,file_name,md5sum     (a single value)
+        // Matching on the singular stem accepts both; requiring `file_names`
+        // rejected every per-slide export as an unrecognised file.
         // A UTF-8 BOM on the first column name is common when the file came
         // through Excel, so strip it before matching.
         $csvHeader = str_replace("\xEF\xBB\xBF", '', $firstLine);
         if (str_contains($csvHeader, ',')
             && str_contains($csvHeader, 'submitter_id')
             && str_contains($csvHeader, 'gdc_case_id')
-            && str_contains($csvHeader, 'file_names')) {
+            && (str_contains($csvHeader, 'file_name') || str_contains($csvHeader, 'file_id'))) {
             return 'clinical_csv';
         }
 
@@ -622,8 +626,8 @@ class ImportsController extends Controller
                 }
 
                 // 3) Attach only slides that already exist.
-                $names = $this->splitList($row['file_names'] ?? null);
-                $ids   = $this->splitList($row['file_ids'] ?? null);
+                $names = $this->slideCells($row, 'file_names', 'file_name');
+                $ids   = $this->slideCells($row, 'file_ids', 'file_id');
 
                 foreach ($names as $i => $fileName) {
                     $gdcFileId = $ids[$i] ?? null;
@@ -685,6 +689,23 @@ class ImportsController extends Controller
         fclose($handle);
 
         return $rows;
+    }
+
+    /**
+     * The slide values of a clinical row, whichever shape the file uses.
+     *
+     * A per-case export lists every slide of the patient in one ';'-separated
+     * cell (`file_names`); a per-slide export gives each slide its own row with
+     * a single value (`file_name`). Reading both here means neither producer
+     * has to be reshaped before it can be imported, and a per-slide file no
+     * longer parses into zero slides while still reporting a successful case.
+     *
+     * @param  array<string, mixed>  $row
+     * @return array<int, string>
+     */
+    private function slideCells(array $row, string $plural, string $singular): array
+    {
+        return $this->splitList($row[$plural] ?? $row[$singular] ?? null);
     }
 
     /**
