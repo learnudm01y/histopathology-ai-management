@@ -34,7 +34,7 @@ class Operation extends Model
     ];
 
     /** Statuses that mean the operation is over and its record is now frozen. */
-    public const TERMINAL = ['completed', 'completed_with_failures', 'failed'];
+    public const TERMINAL = ['completed', 'completed_with_failures', 'failed', 'cancelled'];
 
     protected $fillable = [
         'name', 'type', 'status', 'total_items', 'completed_items',
@@ -152,6 +152,15 @@ class Operation extends Model
      */
     public function recount(): void
     {
+        // A cancelled run stays cancelled. The counters below describe how far
+        // it got, but the reason it stopped is an operator decision and must
+        // not be recomputed away into "completed".
+        if ($this->status === 'cancelled') {
+            $this->refreshCounters();
+
+            return;
+        }
+
         $byStatus = $this->items()
             ->selectRaw('status, COUNT(*) as total')
             ->groupBy('status')
@@ -179,6 +188,21 @@ class Operation extends Model
             'finished_at'     => in_array($status, self::TERMINAL, true)
                 ? ($this->finished_at ?? now())
                 : null,
+        ])->save();
+    }
+
+    /** Counters only — used where the status itself must not be re-derived. */
+    private function refreshCounters(): void
+    {
+        $byStatus = $this->items()
+            ->selectRaw('status, COUNT(*) as total')
+            ->groupBy('status')
+            ->pluck('total', 'status');
+
+        $this->forceFill([
+            'total_items'     => (int) $byStatus->sum(),
+            'completed_items' => (int) ($byStatus['completed'] ?? 0),
+            'failed_items'    => (int) ($byStatus['failed'] ?? 0),
         ])->save();
     }
 
@@ -211,6 +235,7 @@ class Operation extends Model
             'completed'               => 'success',
             'completed_with_failures' => 'warning',
             'failed'                  => 'danger',
+            'cancelled'               => 'secondary',
             default                   => 'info',
         };
     }

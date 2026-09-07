@@ -3,9 +3,11 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\DeleteOperationArtifactsJob;
 use App\Models\AiModel;
 use App\Models\Operation;
 use App\Models\ServerName;
+use App\Services\OperationCanceller;
 use App\Services\OperationDispatcher;
 use App\Services\OperationProgress;
 use Illuminate\Http\JsonResponse;
@@ -31,7 +33,82 @@ class OperationsAuditController extends Controller
     public function __construct(
         private readonly OperationProgress $progress,
         private readonly OperationDispatcher $dispatcher,
+        private readonly OperationCanceller $canceller,
     ) {
+    }
+
+    /**
+     * Stop a running operation.
+     *
+     * Nothing that already finished is undone — a slide that was tiled stays
+     * tiled and keeps its patches. Stopping only prevents the work that has
+     * not happened yet.
+     */
+    public function cancel(Operation $operation): RedirectResponse
+    {
+        // Sync first: the run may have finished in the seconds between the page
+        // being rendered and the button being pressed, and cancelling a
+        // finished operation would rewrite a completed record as "cancelled".
+        $this->progress->sync($operation);
+
+        if (! $operation->refresh()->is_running) {
+            return back()->with('error', "\"{$operation->name}\" has already finished — there is nothing left to stop.");
+        }
+
+        $result = $this->canceller->cancel($operation);
+
+        return back()->with('success', sprintf(
+            'Stopped "%s": %d slide(s) cancelled, %d queued job(s) removed. %s',
+            $operation->name,
+            $result['cancelled_items'],
+            $result['dequeued_jobs'],
+            $result['slides_reset'] > 0
+                ? "{$result['slides_reset']} slide(s) returned to pending; any job still mid-run will stop at its next checkpoint."
+                : 'Slides that already finished keep their output.'
+        ));
+    }
+
+    /**
+     * Delete an operation, and optionally the files it produced.
+     *
+     * Two different actions behind one button, because they answer two
+     * different questions: "stop showing me this record" and "throw away the
+     * patches this run made". The second is queued — purging dozens of Drive
+     * folders takes minutes — and never touches the whole-slide images.
+     */
+    public function destroy(Request $request, Operation $operation): RedirectResponse
+    {
+        $validated = $request->validate([
+            'delete_files' => ['nullable', 'boolean'],
+            'confirm'      => ['required', 'in:DELETE'],
+        ], [
+            'confirm.required' => 'Type DELETE to confirm.',
+            'confirm.in'       => 'Type DELETE exactly to confirm.',
+        ]);
+
+        if ($operation->is_running) {
+            return back()->with('error',
+                "\"{$operation->name}\" is still running. Stop it first, then delete it.");
+        }
+
+        $name = $operation->name;
+
+        if ($request->boolean('delete_files')) {
+            // The record is deleted by the job, after the files it points at
+            // are gone — deleting it here first would leave the job with no
+            // list of what to purge.
+            DeleteOperationArtifactsJob::dispatch($operation->id, true);
+
+            return redirect()
+                ->route('admin.operations.audit.index')
+                ->with('success', "Deleting \"{$name}\" and the files it produced. The slides themselves are untouched; this runs in the background and the record disappears when it finishes.");
+        }
+
+        $operation->delete();
+
+        return redirect()
+            ->route('admin.operations.audit.index')
+            ->with('success', "Deleted the record for \"{$name}\". The files it produced were kept.");
     }
 
     public function index(Request $request): View

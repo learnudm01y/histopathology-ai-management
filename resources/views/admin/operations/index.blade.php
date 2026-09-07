@@ -3,6 +3,25 @@
 @section('title', 'Operations Audit')
 
 @section('content')
+@if(session('success'))
+    <div class="alert alert-success alert-dismissible fade show" role="alert">
+        <i class="mdi mdi-check-circle-outline mr-1"></i> {{ session('success') }}
+        <button type="button" class="close" data-dismiss="alert"><span>&times;</span></button>
+    </div>
+@endif
+@if(session('error'))
+    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+        <i class="mdi mdi-alert-circle-outline mr-1"></i> {{ session('error') }}
+        <button type="button" class="close" data-dismiss="alert"><span>&times;</span></button>
+    </div>
+@endif
+@if($errors->any())
+    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+        <i class="mdi mdi-alert-circle-outline mr-1"></i> {{ $errors->first() }}
+        <button type="button" class="close" data-dismiss="alert"><span>&times;</span></button>
+    </div>
+@endif
+
 <div class="page-header">
     <h3 class="page-title">Operations Audit</h3>
     <nav aria-label="breadcrumb">
@@ -91,6 +110,7 @@
                             <option value="completed"               @selected($filters['status'] === 'completed')>Completed</option>
                             <option value="completed_with_failures" @selected($filters['status'] === 'completed_with_failures')>Completed with failures</option>
                             <option value="failed"                  @selected($filters['status'] === 'failed')>Failed</option>
+                            <option value="cancelled"               @selected($filters['status'] === 'cancelled')>Cancelled</option>
                         </select>
 
                         <button type="submit" class="btn btn-primary btn-sm">
@@ -126,6 +146,7 @@
                                 <th>Status</th>
                                 <th>By</th>
                                 <th>Started</th>
+                                <th class="text-right">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -166,10 +187,33 @@
                                 <td class="text-muted">
                                     {{ $operation->started_at?->format('Y-m-d H:i') ?? $operation->created_at->format('Y-m-d H:i') }}
                                 </td>
+                                <td class="text-right text-nowrap">
+                                    @if($operation->is_running)
+                                        {{-- Stopping is offered only while there is something left to stop. --}}
+                                        <form method="POST" action="{{ route('admin.operations.audit.cancel', $operation) }}"
+                                              class="d-inline"
+                                              onsubmit="return confirm('Stop “{{ $operation->name }}”?\n\nSlides that already finished keep their output. Only the work that has not run yet is cancelled.');">
+                                            @csrf
+                                            <button type="submit" class="btn btn-sm btn-outline-warning" title="Stop this operation">
+                                                <i class="mdi mdi-stop"></i> Stop
+                                            </button>
+                                        </form>
+                                    @else
+                                        <button type="button" class="btn btn-sm btn-outline-danger op-delete-btn"
+                                                data-op-id="{{ $operation->id }}"
+                                                data-op-name="{{ $operation->name }}"
+                                                data-op-type="{{ $operation->type }}"
+                                                data-op-slides="{{ $operation->completed_items }}"
+                                                data-op-url="{{ route('admin.operations.audit.destroy', $operation) }}"
+                                                title="Delete this operation">
+                                            <i class="mdi mdi-delete-outline"></i> Delete
+                                        </button>
+                                    @endif
+                                </td>
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="8" class="text-center text-muted py-4">
+                                <td colspan="9" class="text-center text-muted py-4">
                                     <i class="mdi mdi-history icon-md d-block mb-2"></i>
                                     No operations recorded yet. Dispatch one from
                                     <a href="{{ route('admin.workflow') }}">Operations</a> and it will appear here.
@@ -187,4 +231,7 @@
         </div>
     </div>
 </div>
+
+
+@include("admin.operations._delete-modal")
 @endsection

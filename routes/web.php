@@ -92,6 +92,8 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::get('operations/audit/{operation}',  [OperationsAuditController::class, 'show'])->name('operations.audit.show');
         Route::get('operations/audit/{operation}/progress',      [OperationsAuditController::class, 'progress'])->name('operations.audit.progress');
         Route::post('operations/audit/{operation}/dispatch-next', [OperationsAuditController::class, 'dispatchNext'])->name('operations.audit.dispatch-next');
+        Route::post('operations/audit/{operation}/cancel',        [OperationsAuditController::class, 'cancel'])->name('operations.audit.cancel');
+        Route::delete('operations/audit/{operation}',             [OperationsAuditController::class, 'destroy'])->name('operations.audit.destroy');
 
         // AI Diagnosis Test (formerly 'output')
         Route::get('ai-diagnosis-test', [InferenceController::class, 'index'])->name('ai-diagnosis-test');

@@ -52,6 +52,27 @@
                             <span id="op-completed">{{ $operation->completed_items }}</span> /
                             <span id="op-total">{{ $operation->total_items }}</span> slides
                         </small>
+                        <div class="mt-2">
+                            @if($operation->is_running)
+                                <form method="POST" action="{{ route('admin.operations.audit.cancel', $operation) }}"
+                                      class="d-inline"
+                                      onsubmit="return confirm('Stop “{{ $operation->name }}”?\n\nSlides that already finished keep their output. Only the work that has not run yet is cancelled.');">
+                                    @csrf
+                                    <button type="submit" class="btn btn-sm btn-outline-warning">
+                                        <i class="mdi mdi-stop"></i> Stop
+                                    </button>
+                                </form>
+                            @else
+                                <button type="button" class="btn btn-sm btn-outline-danger op-delete-btn"
+                                        data-op-id="{{ $operation->id }}"
+                                        data-op-name="{{ $operation->name }}"
+                                        data-op-type="{{ $operation->type }}"
+                                        data-op-slides="{{ $operation->completed_items }}"
+                                        data-op-url="{{ route('admin.operations.audit.destroy', $operation) }}">
+                                    <i class="mdi mdi-delete-outline"></i> Delete
+                                </button>
+                            @endif
+                        </div>
                     </div>
                 </div>
 
@@ -304,6 +325,8 @@
         </div>
     </div>
 </div>
+
+@include('admin.operations._delete-modal')
 @endsection
 
 @push('scripts')

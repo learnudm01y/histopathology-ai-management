@@ -76,10 +76,23 @@ class PatchExtractionJob implements ShouldQueue
             $localWsi    = $this->downloadWsi($sample, $drive, $wsiDir);
             Log::info("[PatchExtraction] Sample #{$this->sampleId}: WSI ready at {$localWsi}");
 
+            if ($this->wasCancelled()) {
+                $this->removeDirectory($tempDir);
+                return;
+            }
+
             // ── 2. Extract patches ───────────────────────────────────────────
             $patchesDir = $tempDir . DIRECTORY_SEPARATOR . 'patches';
             $result     = $this->runExtraction($localWsi, $patchesDir, $patchSize, $magnification);
             Log::info("[PatchExtraction] Sample #{$this->sampleId}: {$result['patches_extracted']} patches extracted, {$result['patches_skipped']} skipped");
+
+            // Checked again before the upload: uploading patches for a run the
+            // operator stopped would leave files on Drive that no operation
+            // accounts for, which is exactly what "stop" is supposed to prevent.
+            if ($this->wasCancelled()) {
+                $this->removeDirectory($tempDir);
+                return;
+            }
 
             // ── 3. Compress patches into a single archive ─────────────────────
             // Uploading 1 archive file = 1 rclone API call instead of N calls
@@ -151,6 +164,36 @@ class PatchExtractionJob implements ShouldQueue
      *                        NOT when it is the parent folder
      *   3. file_id         — Drive file-ID fallback
      */
+    /**
+     * Has this slide been pulled out from under us?
+     *
+     * Cancelling an operation resets its slides to `pending`. This job set the
+     * column to `processing` itself at the start, so finding anything else
+     * there means someone stopped the run while we were working — there is no
+     * separate kill signal, and none is needed.
+     */
+    private function wasCancelled(): bool
+    {
+        try {
+            DB::reconnect();
+            $status = Sample::where('id', $this->sampleId)->value('tiling_status');
+        } catch (\Throwable $e) {
+            // A DB hiccup is not a cancellation; carry on rather than throw the
+            // work away over a dropped connection.
+            Log::warning("[PatchExtraction] Sample #{$this->sampleId}: cancellation check failed: {$e->getMessage()}");
+
+            return false;
+        }
+
+        if ($status === 'processing') {
+            return false;
+        }
+
+        Log::info("[PatchExtraction] Sample #{$this->sampleId}: operation was stopped (status is now '{$status}') — aborting before any files are written.");
+
+        return true;
+    }
+
     private function downloadWsi(Sample $sample, GoogleDriveService $drive, string $destDir): string
     {
         $fileName = $sample->file_name ?? 'slide.svs';
