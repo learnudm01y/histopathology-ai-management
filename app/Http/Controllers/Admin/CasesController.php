@@ -8,7 +8,6 @@ use App\Models\DataSource;
 use App\Models\DiseaseSubtype;
 use App\Models\Organ;
 use App\Models\PatientCase;
-use App\Support\CaseTaxonomyCounts;
 use App\Support\SimpleXlsxWriter;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -60,14 +59,6 @@ class CasesController extends Controller
 
         $cases = $query->paginate(20)->withQueryString();
 
-        // The tree counts follow every filter EXCEPT the taxonomy ones. Feeding
-        // them the taxonomy filter too would collapse the tree onto the node
-        // already selected, which is precisely the context needed to move to a
-        // sibling disease.
-        $counts = CaseTaxonomyCounts::build(
-            tap(PatientCase::query(), fn ($q) => $this->applyBaseFilters($q, $request))
-        );
-
         $stats = [
             'total'             => PatientCase::count(),
             'with_clinical'     => PatientCase::whereHas('clinicalInfo')->count(),
@@ -83,25 +74,18 @@ class CasesController extends Controller
 
         $dataSources = DataSource::orderBy('name')->get(['id', 'name']);
 
-        $selectedOrganId = $request->filled('organ_id') ? $request->integer('organ_id') : null;
-
-        $organs = Organ::orderBy('name')->get(['id', 'name']);
-
-        // The whole tree, always — the pickers have to keep offering the groups
-        // and diseases of every organ so switching organ stays a client-side
-        // change. Only the rendered breakdown narrows to the chosen organ.
+        // Options for the Organ → Group → Disease pickers. The whole tree is
+        // loaded regardless of what is selected: the three selects narrow one
+        // another in the browser, so switching organ must not need a round trip.
+        $organs   = Organ::orderBy('name')->get(['id', 'name']);
         $taxonomy = $this->taxonomyTree();
 
         $categoryOptions = $taxonomy->flatten(1)->values();
         $diseaseOptions  = $this->diseaseOptions($taxonomy);
 
-        $bands = $selectedOrganId === null
-            ? $taxonomy
-            : $taxonomy->filter(fn ($categories, $organId) => (int) $organId === $selectedOrganId);
-
         return view('admin.cases.index', compact(
             'cases', 'stats', 'projects', 'dataSources',
-            'counts', 'bands', 'organs', 'selectedOrganId', 'categoryOptions', 'diseaseOptions'
+            'organs', 'categoryOptions', 'diseaseOptions'
         ));
     }
 
@@ -178,8 +162,7 @@ class CasesController extends Controller
         // queried per case) so a large export stays at a couple of queries per chunk.
         if ($full) {
             $query->with(['samples' => fn ($q) => $q
-                ->select('id', 'case_id', 'entity_submitter_id', 'organ_id', 'category_id', 'disease_subtype_id')
-                ->with(['category:id,label_en', 'diseaseSubtype:id,name'])
+                ->select('id', 'case_id', 'entity_submitter_id')
                 ->orderBy('entity_submitter_id')]);
         }
 
@@ -225,13 +208,6 @@ class CasesController extends Controller
      */
     private function applyFilters(Builder $query, Request $request): void
     {
-        $this->applyBaseFilters($query, $request);
-        $this->applyTaxonomyFilters($query, $request);
-    }
-
-    /** Everything except the Organ → Group → Disease drill-down. */
-    private function applyBaseFilters(Builder $query, Request $request): void
-    {
         if ($request->filled('search')) {
             $term = $request->search;
             $query->where(function ($q) use ($term) {
@@ -267,6 +243,8 @@ class CasesController extends Controller
         if ($request->filled('fully_linked')) {
             $query->has('samples')->whereHas('clinicalInfo');
         }
+
+        $this->applyTaxonomyFilters($query, $request);
     }
 
     /**
@@ -276,8 +254,7 @@ class CasesController extends Controller
      * All three conditions go inside ONE whereHas so they must be satisfied by
      * the SAME slide. Drilling into Breast › Tumor › IDC has to mean "this case
      * has a breast IDC slide", not "a breast slide somewhere and an IDC slide
-     * somewhere", which is also exactly how CaseTaxonomyCounts counts — so a
-     * badge in the tree and the list it opens can never disagree.
+     * somewhere" — which would quietly overcount every mixed case.
      */
     private function applyTaxonomyFilters(Builder $query, Request $request): void
     {
@@ -332,7 +309,7 @@ class CasesController extends Controller
     {
         $headers = [
             'ID', 'Submitter ID', 'Case UUID', 'Project', 'Disease Type', 'Primary Site',
-            'Organ', 'Data Source', 'Slides', 'Slide IDs', 'Diseases', 'Clinical', 'Created At', 'Updated At',
+            'Organ', 'Data Source', 'Slides', 'Slide IDs', 'Clinical', 'Created At', 'Updated At',
         ];
 
         foreach (self::CLINICAL_COLUMNS as $column) {
@@ -385,7 +362,6 @@ class CasesController extends Controller
             $case->dataSource?->name,
             (int) $case->samples_count,
             $case->samples->pluck('entity_submitter_id')->filter()->implode(', ') ?: null,
-            $case->disease_labels->implode(', ') ?: null,
             $clinical ? 'Yes' : 'No',
             $case->created_at?->format('Y-m-d H:i:s'),
             $case->updated_at?->format('Y-m-d H:i:s'),
