@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Collection;
 
 class PatientCase extends Model
 {
@@ -35,5 +36,26 @@ class PatientCase extends Model
     public function clinicalInfo(): HasOne
     {
         return $this->hasOne(ClinicalCaseInformation::class, 'case_id', 'case_id');
+    }
+
+    /**
+     * What this case is a case *of*, read off its slides.
+     *
+     * A case has no diagnosis column — the label lives on the slide, where the
+     * taxonomy puts it. A slide filed only under a clinical group falls back to
+     * that group's name, because "we know it is a Tumor but not which one" is a
+     * different answer from "we know nothing". A case whose slides carry two
+     * diseases honestly reports both rather than picking one.
+     *
+     * @return \Illuminate\Support\Collection<int, string>
+     */
+    public function getDiseaseLabelsAttribute(): Collection
+    {
+        return $this->samples
+            ->map(fn (Sample $sample) => $sample->diseaseSubtype?->name ?? $sample->category?->label_en)
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values();
     }
 }

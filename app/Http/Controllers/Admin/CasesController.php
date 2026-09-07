@@ -3,8 +3,12 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\Category;
 use App\Models\DataSource;
+use App\Models\DiseaseSubtype;
+use App\Models\Organ;
 use App\Models\PatientCase;
+use App\Support\CaseTaxonomyCounts;
 use App\Support\SimpleXlsxWriter;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -48,13 +52,30 @@ class CasesController extends Controller
     public function index(Request $request): View
     {
         $query = PatientCase::query()
-            ->with(['clinicalInfo', 'dataSource'])
+            ->with([
+                'clinicalInfo',
+                'dataSource',
+                // The diagnosis of a case lives on its slides, so the taxonomy
+                // column reads it from there. Narrow select + tiny relations:
+                // 20 cases per page must not drag whole slide rows along.
+                'samples' => fn ($q) => $q
+                    ->select('id', 'case_id', 'organ_id', 'category_id', 'disease_subtype_id')
+                    ->with(['organ:id,name', 'category:id,label_en', 'diseaseSubtype:id,name']),
+            ])
             ->withCount('samples')
             ->orderByDesc('id');
 
         $this->applyFilters($query, $request);
 
         $cases = $query->paginate(20)->withQueryString();
+
+        // The tree counts follow every filter EXCEPT the taxonomy ones. Feeding
+        // them the taxonomy filter too would collapse the tree onto the node
+        // already selected, which is precisely the context needed to move to a
+        // sibling disease.
+        $counts = CaseTaxonomyCounts::build(
+            tap(PatientCase::query(), fn ($q) => $this->applyBaseFilters($q, $request))
+        );
 
         $stats = [
             'total'             => PatientCase::count(),
@@ -71,7 +92,79 @@ class CasesController extends Controller
 
         $dataSources = DataSource::orderBy('name')->get(['id', 'name']);
 
-        return view('admin.cases.index', compact('cases', 'stats', 'projects', 'dataSources'));
+        $selectedOrganId = $request->filled('organ_id') ? $request->integer('organ_id') : null;
+
+        $organs = Organ::orderBy('name')->get(['id', 'name']);
+
+        // The whole tree, always — the pickers have to keep offering the groups
+        // and diseases of every organ so switching organ stays a client-side
+        // change. Only the rendered breakdown narrows to the chosen organ.
+        $taxonomy = $this->taxonomyTree();
+
+        $categoryOptions = $taxonomy->flatten(1)->values();
+        $diseaseOptions  = $this->diseaseOptions($taxonomy);
+
+        $bands = $selectedOrganId === null
+            ? $taxonomy
+            : $taxonomy->filter(fn ($categories, $organId) => (int) $organId === $selectedOrganId);
+
+        return view('admin.cases.index', compact(
+            'cases', 'stats', 'projects', 'dataSources',
+            'counts', 'bands', 'organs', 'selectedOrganId', 'categoryOptions', 'diseaseOptions'
+        ));
+    }
+
+    /**
+     * Organ → Clinical Group → Disease → finer Disease, grouped by organ.
+     *
+     * Groups with no organ are left out: they predate the organ root and have
+     * no place in an organ-first breakdown — the Taxonomy page is where they
+     * get assigned one.
+     */
+    private function taxonomyTree(): \Illuminate\Support\Collection
+    {
+        return Category::query()
+            ->with([
+                'organ:id,name',
+                'rootDiseaseSubtypes' => fn ($q) => $q->orderBy('name'),
+                'rootDiseaseSubtypes.childrenRecursive',
+            ])
+            ->whereNotNull('organ_id')
+            ->orderBy('organ_id')
+            ->orderBy('label_en')
+            ->get()
+            ->groupBy('organ_id');
+    }
+
+    /**
+     * The disease picker's options, in tree order and indented by depth, each
+     * tagged with its organ and group so the three selects can filter one
+     * another in the browser without a round trip.
+     *
+     * @return array<int, array{id:int, organ_id:int|null, category_id:int|null, label:string}>
+     */
+    private function diseaseOptions(\Illuminate\Support\Collection $taxonomy): array
+    {
+        $options = [];
+
+        $walk = function ($subtypes, int $depth) use (&$walk, &$options): void {
+            foreach ($subtypes as $subtype) {
+                $options[] = [
+                    'id'          => $subtype->id,
+                    'organ_id'    => $subtype->organ_id,
+                    'category_id' => $subtype->category_id,
+                    'label'       => str_repeat('— ', $depth - 1) . $subtype->name,
+                ];
+
+                $walk($subtype->loadedChildren(), $depth + 1);
+            }
+        };
+
+        foreach ($taxonomy->flatten(1) as $category) {
+            $walk($category->rootDiseaseSubtypes, 1);
+        }
+
+        return $options;
     }
 
     /**
@@ -94,7 +187,8 @@ class CasesController extends Controller
         // queried per case) so a large export stays at a couple of queries per chunk.
         if ($full) {
             $query->with(['samples' => fn ($q) => $q
-                ->select('id', 'case_id', 'entity_submitter_id')
+                ->select('id', 'case_id', 'entity_submitter_id', 'organ_id', 'category_id', 'disease_subtype_id')
+                ->with(['category:id,label_en', 'diseaseSubtype:id,name'])
                 ->orderBy('entity_submitter_id')]);
         }
 
@@ -140,6 +234,13 @@ class CasesController extends Controller
      */
     private function applyFilters(Builder $query, Request $request): void
     {
+        $this->applyBaseFilters($query, $request);
+        $this->applyTaxonomyFilters($query, $request);
+    }
+
+    /** Everything except the Organ → Group → Disease drill-down. */
+    private function applyBaseFilters(Builder $query, Request $request): void
+    {
         if ($request->filled('search')) {
             $term = $request->search;
             $query->where(function ($q) use ($term) {
@@ -177,6 +278,55 @@ class CasesController extends Controller
         }
     }
 
+    /**
+     * Organ → Clinical Group → Disease, matched through the case's slides —
+     * a case has no diagnosis column of its own.
+     *
+     * All three conditions go inside ONE whereHas so they must be satisfied by
+     * the SAME slide. Drilling into Breast › Tumor › IDC has to mean "this case
+     * has a breast IDC slide", not "a breast slide somewhere and an IDC slide
+     * somewhere", which is also exactly how CaseTaxonomyCounts counts — so a
+     * badge in the tree and the list it opens can never disagree.
+     */
+    private function applyTaxonomyFilters(Builder $query, Request $request): void
+    {
+        $organId    = $request->filled('organ_id') ? $request->integer('organ_id') : null;
+        $categoryId = $request->filled('category_id') ? $request->integer('category_id') : null;
+        $disease    = $request->filled('disease_subtype_id') ? (string) $request->disease_subtype_id : null;
+
+        if ($organId === null && $categoryId === null && $disease === null) {
+            return;
+        }
+
+        $subtree = $request->boolean('subtree');
+
+        $query->whereHas('samples', function ($q) use ($organId, $categoryId, $disease, $subtree) {
+            if ($organId !== null) {
+                $q->where('organ_id', $organId);
+            }
+
+            if ($categoryId !== null) {
+                $q->where('category_id', $categoryId);
+            }
+
+            if ($disease === null) {
+                return;
+            }
+
+            // 'none' isolates the cases whose slides carry a clinical group but
+            // no disease — the gap between a group's total and its diseases.
+            if ($disease === 'none') {
+                $q->whereNull('disease_subtype_id');
+            } elseif ($subtree) {
+                // A coarse disease owns its refinements: a case labelled only
+                // "IDC" is still a "Malignant" case.
+                $q->whereIn('disease_subtype_id', DiseaseSubtype::subtreeIds((int) $disease));
+            } else {
+                $q->where('disease_subtype_id', (int) $disease);
+            }
+        });
+    }
+
     /** Headers matching the on-screen table. */
     private function tableHeaders(): array
     {
@@ -191,7 +341,7 @@ class CasesController extends Controller
     {
         $headers = [
             'ID', 'Submitter ID', 'Case UUID', 'Project', 'Disease Type', 'Primary Site',
-            'Organ', 'Data Source', 'Slides', 'Slide IDs', 'Clinical', 'Created At', 'Updated At',
+            'Organ', 'Data Source', 'Slides', 'Slide IDs', 'Diseases', 'Clinical', 'Created At', 'Updated At',
         ];
 
         foreach (self::CLINICAL_COLUMNS as $column) {
@@ -244,6 +394,7 @@ class CasesController extends Controller
             $case->dataSource?->name,
             (int) $case->samples_count,
             $case->samples->pluck('entity_submitter_id')->filter()->implode(', ') ?: null,
+            $case->disease_labels->implode(', ') ?: null,
             $clinical ? 'Yes' : 'No',
             $case->created_at?->format('Y-m-d H:i:s'),
             $case->updated_at?->format('Y-m-d H:i:s'),
