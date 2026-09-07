@@ -892,6 +892,7 @@
                         <li><strong>metadata.cart.*.json</strong> → creates samples + cases and links them.</li>
                         <li><strong>clinical.cart.*.json</strong> → creates / updates the full clinical record per case.</li>
                         <li><strong>clinical CSV</strong> (<code>.csv</code> with <code>submitter_id, gdc_case_id, age, sex, race, …, file_ids, file_names</code>) → attaches clinical data to slides <strong>already in the system</strong> (never creates samples).</li>
+                        <li><strong>cohort JSON</strong> (<code>.json</code> with <code>batches → patients → slides</code>) → same as the CSV, but every batch in one file.</li>
                     </ul>
                     <small class="d-block mt-2">
                         Order doesn't matter — linkage happens automatically by GDC <code>case_id</code> and <code>file_id</code>.

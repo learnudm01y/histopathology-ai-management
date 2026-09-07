@@ -23,6 +23,7 @@ use Throwable;
  *   • metadata.cart.*.json (slide-level metadata + associated case_id)
  *   • clinical.cart.*.json (case-level clinical data)
  *   • clinical CSV (flat, one row per case; links to EXISTING samples only)
+ *   • cohort JSON (nested batches → patients → slides; same link-only rules)
  *
  * All operations are idempotent (upsert by natural keys: file_id, case_id).
  * Linkage:
@@ -79,6 +80,9 @@ class ImportsController extends Controller
                     case 'clinical_csv':
                         $this->importClinicalCsv($content, $summary);
                         break;
+                    case 'clinical_batch_json':
+                        $this->importClinicalBatchJson($content, $summary);
+                        break;
                     default:
                         $summary['unknown']++;
                         $summary['errors'][] = "Unrecognised file format: {$name}";
@@ -117,6 +121,15 @@ class ImportsController extends Controller
             if (is_array($decoded)) {
                 $first = $decoded[0] ?? $decoded;
                 if (is_array($first)) {
+                    // Our own cohort export: batches → patients → slides. Checked
+                    // before the GDC shapes and before the filename fallback,
+                    // which would otherwise route it to the GDC clinical reader
+                    // and silently import nothing.
+                    if (Arr::has($decoded, 'batches')
+                        || Arr::has($decoded, 'patients')
+                        || (Arr::has($first, 'gdc_case_id') && Arr::has($first, 'slides'))) {
+                        return 'clinical_batch_json';
+                    }
                     if (Arr::has($first, 'associated_entities') || Arr::has($first, 'data_format')) {
                         return 'metadata';
                     }
@@ -482,6 +495,83 @@ class ImportsController extends Controller
         $rows = $this->parseCsvRows($content);
         if (!$rows) return;
 
+        $this->applyClinicalRows($rows, $summary);
+    }
+
+    /**
+     * Import our own nested cohort JSON — the multi-batch companion to the flat
+     * CSV above, carrying every batch in one file:
+     *
+     *   { "batches": [ { "patients": [ { …case facts…, "slides": [ {file_id, file_name} ] } ] } ] }
+     *
+     * A bare { "patients": [...] } object and a plain list of patient objects
+     * are accepted too. Each patient carries the same fields as a CSV row, so
+     * the slides are flattened onto file_names / file_ids and handed to the
+     * shared importer — same rules, including "link only, never create".
+     */
+    private function importClinicalBatchJson(string $content, array &$summary): void
+    {
+        $summary['clinical']['files']++;
+
+        $decoded = json_decode($content, true);
+        if (!is_array($decoded)) return;
+
+        $rows = $this->flattenCohortJson($decoded);
+        if (!$rows) return;
+
+        $this->applyClinicalRows($rows, $summary);
+    }
+
+    /**
+     * Flatten nested cohort JSON into the header-keyed rows the CSV path yields.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function flattenCohortJson(array $decoded): array
+    {
+        if (isset($decoded['batches']) && is_array($decoded['batches'])) {
+            $patients = [];
+            foreach ($decoded['batches'] as $batch) {
+                foreach ($batch['patients'] ?? [] as $patient) {
+                    $patients[] = $patient;
+                }
+            }
+        } elseif (isset($decoded['patients']) && is_array($decoded['patients'])) {
+            $patients = $decoded['patients'];
+        } else {
+            $patients = array_values(array_filter($decoded, 'is_array'));
+        }
+
+        $rows = [];
+        foreach ($patients as $patient) {
+            if (!is_array($patient) || !isset($patient['gdc_case_id'])) continue;
+
+            $names = [];
+            $ids   = [];
+            foreach ($patient['slides'] ?? [] as $slide) {
+                if (!is_array($slide)) continue;
+                $names[] = (string) ($slide['file_name'] ?? '');
+                $ids[]   = (string) ($slide['file_id'] ?? '');
+            }
+
+            // Keep the untouched patient object under raw_json; only add the
+            // two list columns the shared importer reads.
+            $patient['file_names'] = implode(';', $names);
+            $patient['file_ids']   = implode(';', $ids);
+            $rows[] = $patient;
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Shared writer for both clinical shapes: upsert the case, upsert the
+     * clinical record the verification reads, then attach existing slides.
+     *
+     * @param array<int, array<string, mixed>> $rows
+     */
+    private function applyClinicalRows(array $rows, array &$summary): void
+    {
         DB::transaction(function () use ($rows, &$summary) {
             foreach ($rows as $row) {
                 $summary['clinical']['rows']++;
