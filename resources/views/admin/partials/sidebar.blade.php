@@ -37,13 +37,16 @@
         <li class="nav-item {{ $inOperations ? 'active' : '' }}">
             <a class="nav-link sidebar-submenu-toggle" href="#operations-dropdown"
                data-target="#operations-dropdown"
-               aria-expanded="{{ $inOperations ? 'true' : 'false' }}"
+               aria-expanded="false"
                aria-controls="operations-dropdown">
                 <i class="menu-icon typcn typcn-cog"></i>
                 <span class="menu-title">Operations</span>
                 <i class="menu-arrow"></i>
             </a>
-            <div class="sidebar-submenu {{ $inOperations ? 'show' : '' }}" id="operations-dropdown">
+            {{-- Always collapsed on load: the menu opens only when clicked, even
+                 while you are on one of its own pages. The parent stays
+                 highlighted so the section is still identifiable. --}}
+            <div class="sidebar-submenu" id="operations-dropdown">
                 <ul class="nav flex-column sub-menu">
                     <li class="nav-item">
                         <a class="nav-link {{ $routeName === 'admin.workflow' ? 'active' : '' }}"
