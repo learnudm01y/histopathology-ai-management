@@ -21,8 +21,22 @@ use Illuminate\View\View;
 
 class DashboardController extends Controller
 {
-    public function index(): View
+    public function index(\App\Services\OperationProgress $operationProgress): View
     {
+        // Work that is still in flight, brought up to date before it is shown so
+        // the bars reflect the slides rather than the moment of dispatch.
+        $activeOperations = \App\Models\Operation::whereNotIn('status', \App\Models\Operation::TERMINAL)
+            ->latest('id')
+            ->limit(10)
+            ->get();
+        $operationProgress->syncMany($activeOperations);
+        $activeOperations = $activeOperations->fresh()->filter->is_running->values();
+
+        $recentOperations = \App\Models\Operation::whereIn('status', \App\Models\Operation::TERMINAL)
+            ->latest('id')
+            ->limit(5)
+            ->get();
+
         $sampleStats = [
             'total'           => Sample::count(),
             'available'       => Sample::where('storage_status', 'available')->count(),
@@ -104,7 +118,10 @@ class DashboardController extends Controller
             'totals'     => $diseaseTotals->toArray(),
         ];
 
-        return view('admin.dashboard', compact('sampleStats', 'caseStats', 'verifStats', 'failedVerifications', 'rejectedSamples', 'diseaseChartData'));
+        return view('admin.dashboard', compact(
+            'sampleStats', 'caseStats', 'verifStats', 'failedVerifications',
+            'rejectedSamples', 'diseaseChartData', 'activeOperations', 'recentOperations'
+        ));
     }
 
     public function samples(Request $request): View
@@ -836,6 +853,11 @@ class DashboardController extends Controller
             'tile_size_px'           => $request->input('tile_size_px'),
             'filter_magnification_id'=> $request->input('filter_magnification_id'), // Step-3 sample filter (separate from op context)
             'category_id'            => $request->input('category_id'),
+            // The exact disease a slide is filed under — IDC, ILC — which is the
+            // level a tiling run is actually chosen at. `subtree` widens it to
+            // every finer disease under the one picked.
+            'disease_subtype_id'     => $request->input('disease_subtype_id'),
+            'subtree'                => $request->input('subtree'),
             'is_usable'      => $request->input('is_usable'),                 // 1|0|null
             'ai_model_id'    => $request->input('ai_model_id'),
         ];
@@ -885,6 +907,14 @@ class DashboardController extends Controller
         if ($filters['category_id']) {
             $query->where('samples.category_id', $filters['category_id']);
         }
+        if ($filters['disease_subtype_id']) {
+            // "Malignant" with the subtree on has to include the IDC and ILC
+            // slides beneath it, or selecting a parent silently returns only the
+            // slides nobody bothered to refine.
+            $query->whereIn('samples.disease_subtype_id', $filters['subtree']
+                ? \App\Models\DiseaseSubtype::subtreeIds((int) $filters['disease_subtype_id'])
+                : [(int) $filters['disease_subtype_id']]);
+        }
         if ($filters['is_usable'] === '1' || $filters['is_usable'] === '0') {
             $query->where('samples.is_usable', (bool) $filters['is_usable']);
         }
@@ -906,6 +936,15 @@ class DashboardController extends Controller
         $stains        = Stain::orderBy('name')->get(['id', 'name', 'abbreviation']);
         $dataSources   = DataSource::orderBy('name')->get(['id', 'name']);
         $categories    = Category::orderBy('label_en')->get(['id', 'label_en']);
+
+        // Every disease, with the path above it, so the picker can group them
+        // Organ › Clinical Group and still show where a nested disease sits.
+        $diseaseSubtypes = \App\Models\DiseaseSubtype::with([
+                'organ:id,name', 'category:id,label_en', 'parent:id,name',
+            ])
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get(['id', 'organ_id', 'category_id', 'parent_id', 'name']);
         $diseaseTypes  = \App\Models\PatientCase::whereNotNull('disease_type')
             ->where('disease_type', '!=', '')
             ->distinct()
@@ -934,7 +973,7 @@ class DashboardController extends Controller
 
         return view('admin.workflow', compact(
             'filters', 'samples',
-            'organs', 'stains', 'dataSources', 'categories',
+            'organs', 'stains', 'dataSources', 'categories', 'diseaseSubtypes',
             'diseaseTypes', 'tileSizes', 'magnifications', 'aiModels',
             'servers', 'patchSizes'
         ));

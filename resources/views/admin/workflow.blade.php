@@ -718,6 +718,50 @@
                             </div>
                         </div>
 
+                        {{-- ── Disease (sub-category) ────────────────────────────────────────
+                             The level a tiling run is really chosen at: not "tumour" but
+                             IDC or ILC. Grouped by Organ › Clinical Group so the same
+                             disease name under two organs stays distinguishable, and a
+                             nested disease is shown under the coarser one it refines. --}}
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label>
+                                        Disease (sub-category)
+                                        <small class="text-muted font-weight-normal ml-1">— e.g. IDC, ILC</small>
+                                    </label>
+                                    <select name="disease_subtype_id" class="form-control">
+                                        <option value="">— Any —</option>
+                                        @foreach($diseaseSubtypes->groupBy(fn ($d) => ($d->organ?->name ?? 'Unassigned') . ' › ' . ($d->category?->label_en ?? '—')) as $groupLabel => $group)
+                                            <optgroup label="{{ $groupLabel }}">
+                                                @foreach($group as $subtype)
+                                                    <option value="{{ $subtype->id }}"
+                                                        {{ (string)$filters['disease_subtype_id'] === (string)$subtype->id ? 'selected' : '' }}>
+                                                        {{ $subtype->parent ? $subtype->parent->name . ' › ' : '' }}{{ $subtype->name }}
+                                                    </option>
+                                                @endforeach
+                                            </optgroup>
+                                        @endforeach
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-group">
+                                    <label class="d-block">&nbsp;</label>
+                                    <div class="custom-control custom-checkbox mt-2">
+                                        <input type="checkbox" class="custom-control-input" id="f-subtree"
+                                               name="subtree" value="1" {{ $filters['subtree'] ? 'checked' : '' }}>
+                                        <label class="custom-control-label" for="f-subtree">
+                                            Include finer diseases
+                                            <small class="text-muted d-block">
+                                                Picking a coarse disease also returns every disease nested under it.
+                                            </small>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="row">
                             <div class="col-md-3">
                                 <div class="form-group">

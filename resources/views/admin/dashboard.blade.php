@@ -12,6 +12,83 @@
     </nav>
 </div>
 
+{{-- ── Running Operations ───────────────────────────────────────────────────
+     Work in flight, at the top because it is the one thing on this page that
+     changes while you watch it. The bars are refreshed from
+     /admin/operations/audit/active so a run advances without a reload; the
+     section stays in the DOM when empty so the poller has somewhere to render
+     a run that starts while the page is open. --}}
+<div id="ops-live-section" class="{{ $activeOperations->isEmpty() ? 'd-none' : '' }}">
+    <h5 class="text-muted font-weight-bold mb-2" style="font-size:.8rem; letter-spacing:.05em; text-transform:uppercase;">
+        <i class="mdi mdi-progress-clock mr-1"></i>Operations in progress
+        <span class="badge badge-info ml-1" id="ops-live-count">{{ $activeOperations->count() }}</span>
+    </h5>
+    <div class="row grid-margin">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <div id="ops-live-list">
+                        @foreach($activeOperations as $operation)
+                            <div class="ops-live-row py-2 {{ !$loop->last ? 'border-bottom' : '' }}" data-op-id="{{ $operation->id }}">
+                                <div class="d-flex justify-content-between align-items-center flex-wrap" style="gap:.5rem;">
+                                    <div style="min-width:220px;flex:1 1 320px;">
+                                        <a href="{{ route('admin.operations.audit.show', $operation) }}"
+                                           class="font-weight-medium ops-live-name">{{ $operation->name }}</a>
+                                        <div class="small text-muted ops-live-meta">
+                                            {{ $operation->completed_items }} of {{ $operation->total_items }} slides
+                                            @if($operation->failed_items) · <span class="text-danger">{{ $operation->failed_items }} failed</span> @endif
+                                        </div>
+                                    </div>
+                                    <div class="text-right" style="min-width:60px;">
+                                        <span class="h5 mb-0 text-info ops-live-percent">{{ $operation->progress_percent }}%</span>
+                                    </div>
+                                </div>
+                                <div class="progress mt-2" style="height:6px;">
+                                    <div class="progress-bar progress-bar-striped progress-bar-animated bg-info ops-live-bar"
+                                         role="progressbar" style="width: {{ $operation->progress_percent }}%"></div>
+                                </div>
+                            </div>
+                        @endforeach
+                    </div>
+                    <div class="text-right mt-2">
+                        <a href="{{ route('admin.operations.audit.index') }}" class="btn btn-sm btn-outline-primary">
+                            <i class="mdi mdi-history mr-1"></i>Operations Audit
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if($recentOperations->isNotEmpty())
+<div class="row grid-margin">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-body py-3">
+                <div class="d-flex justify-content-between align-items-center flex-wrap mb-2" style="gap:.5rem;">
+                    <h6 class="mb-0 text-muted font-weight-bold" style="font-size:.78rem; letter-spacing:.05em; text-transform:uppercase;">
+                        Last operations
+                    </h6>
+                    <a href="{{ route('admin.operations.audit.index') }}" class="small">Review all</a>
+                </div>
+                @foreach($recentOperations as $operation)
+                    <div class="d-flex justify-content-between align-items-center py-1 flex-wrap" style="gap:.5rem;">
+                        <a href="{{ route('admin.operations.audit.show', $operation) }}" class="text-truncate" style="max-width:70%;">
+                            {{ $operation->name }}
+                        </a>
+                        <span>
+                            <span class="badge badge-light border mr-1">{{ $operation->total_items }} slides</span>
+                            <span class="badge badge-{{ $operation->status_colour }}">{{ $operation->status_label }}</span>
+                        </span>
+                    </div>
+                @endforeach
+            </div>
+        </div>
+    </div>
+</div>
+@endif
+
 {{-- ── Samples Statistics ───────────────────────────────────────────────── --}}
 <h5 class="text-muted font-weight-bold mb-2" style="font-size:.8rem; letter-spacing:.05em; text-transform:uppercase;">
     <i class="mdi mdi-flask-outline mr-1"></i> Samples
@@ -663,4 +740,91 @@
 }());
 </script>
 @endif
+@endpush
+
+@push('scripts')
+<script>
+// ── Live operation progress ──────────────────────────────────────────────────
+// The bars above are a snapshot of the moment the page rendered; tiling a slide
+// takes minutes, so without this the only way to watch a run is to keep hitting
+// refresh. Polls the same endpoint the audit list syncs from, so the two never
+// disagree, and stops entirely once nothing is running — an idle dashboard
+// should not talk to the server for ever.
+(function () {
+    var section = document.getElementById('ops-live-section');
+    var list    = document.getElementById('ops-live-list');
+    var counter = document.getElementById('ops-live-count');
+    if (!section || !list) return;
+
+    var ENDPOINT = @json(route('admin.operations.audit.active'));
+    var EVERY_MS = 10000;
+    var timer    = null;
+
+    function row(op) {
+        var el = document.createElement('div');
+        el.className = 'ops-live-row py-2 border-bottom';
+        el.dataset.opId = op.id;
+        el.innerHTML =
+            '<div class="d-flex justify-content-between align-items-center flex-wrap" style="gap:.5rem;">' +
+              '<div style="min-width:220px;flex:1 1 320px;">' +
+                '<a class="font-weight-medium ops-live-name"></a>' +
+                '<div class="small text-muted ops-live-meta"></div>' +
+              '</div>' +
+              '<div class="text-right" style="min-width:60px;">' +
+                '<span class="h5 mb-0 text-info ops-live-percent"></span>' +
+              '</div>' +
+            '</div>' +
+            '<div class="progress mt-2" style="height:6px;">' +
+              '<div class="progress-bar progress-bar-striped progress-bar-animated bg-info ops-live-bar"' +
+              ' role="progressbar" style="width:0%"></div>' +
+            '</div>';
+        list.appendChild(el);
+        return el;
+    }
+
+    function paint(operations) {
+        var seen = {};
+
+        operations.forEach(function (op) {
+            seen[op.id] = true;
+            var el = list.querySelector('[data-op-id="' + op.id + '"]') || row(op);
+
+            var link = el.querySelector('.ops-live-name');
+            link.textContent = op.name;
+            link.setAttribute('href', op.url);
+
+            var meta = op.completed + ' of ' + op.total + ' slides';
+            if (op.failed > 0) meta += ' · ' + op.failed + ' failed';
+            el.querySelector('.ops-live-meta').textContent = meta;
+
+            el.querySelector('.ops-live-percent').textContent = op.percent + '%';
+            el.querySelector('.ops-live-bar').style.width = op.percent + '%';
+        });
+
+        // A run that finished since the last poll leaves the live list; the
+        // page keeps whatever the last poll said until it is reloaded.
+        Array.prototype.forEach.call(list.querySelectorAll('.ops-live-row'), function (el) {
+            if (!seen[el.dataset.opId]) el.remove();
+        });
+
+        if (counter) counter.textContent = operations.length;
+        section.classList.toggle('d-none', operations.length === 0);
+
+        if (operations.length === 0 && timer) {
+            clearInterval(timer);
+            timer = null;
+        }
+    }
+
+    function poll() {
+        fetch(ENDPOINT, { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (data) { if (Array.isArray(data)) paint(data); })
+            .catch(function () { /* a dropped poll is not worth a visible error */ });
+    }
+
+    timer = setInterval(poll, EVERY_MS);
+    poll();
+}());
+</script>
 @endpush

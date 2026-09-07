@@ -28,11 +28,33 @@
             </a>
         </li>
 
-        <li class="nav-item {{ $routeName === 'admin.workflow' ? 'active' : '' }}">
-            <a class="nav-link" href="{{ route('admin.workflow') }}">
+        @php
+            // Running work and reviewing what ran are two halves of the same
+            // job, so they live under one menu rather than as unrelated pages.
+            $inOperations = $routeName === 'admin.workflow'
+                || str_starts_with($routeName ?? '', 'admin.operations.');
+        @endphp
+        <li class="nav-item {{ $inOperations ? 'active' : '' }}">
+            <a class="nav-link sidebar-submenu-toggle" href="#operations-dropdown"
+               data-target="#operations-dropdown"
+               aria-expanded="{{ $inOperations ? 'true' : 'false' }}"
+               aria-controls="operations-dropdown">
                 <i class="menu-icon typcn typcn-cog"></i>
                 <span class="menu-title">Operations</span>
+                <i class="menu-arrow"></i>
             </a>
+            <div class="sidebar-submenu {{ $inOperations ? 'show' : '' }}" id="operations-dropdown">
+                <ul class="nav flex-column sub-menu">
+                    <li class="nav-item">
+                        <a class="nav-link {{ $routeName === 'admin.workflow' ? 'active' : '' }}"
+                           href="{{ route('admin.workflow') }}">Run Operation</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {{ str_starts_with($routeName ?? '', 'admin.operations.audit') ? 'active' : '' }}"
+                           href="{{ route('admin.operations.audit.index') }}">Operations Audit</a>
+                    </li>
+                </ul>
+            </div>
         </li>
 
         <li class="nav-item {{ $routeName === 'admin.ai-diagnosis-test' ? 'active' : '' }}">

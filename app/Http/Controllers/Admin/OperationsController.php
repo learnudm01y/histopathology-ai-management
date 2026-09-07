@@ -7,6 +7,9 @@ use App\Jobs\FeatureExtractionJob;
 use App\Jobs\PatchExtractionJob;
 use App\Jobs\TrainingJob;
 use App\Models\AiModel;
+use App\Models\Magnification;
+use App\Models\Operation;
+use App\Models\PatchSize;
 use App\Models\Sample;
 use App\Models\ServerName;
 use App\Models\TrainingRun;
@@ -36,6 +39,34 @@ class OperationsController extends Controller
             'magnification_id' => ['required', 'integer', 'exists:magnifications,id'],
         ]);
 
+        // Recorded BEFORE anything is queued: if the dispatch loop dies half way
+        // the audit still shows what was asked for, which is the case worth
+        // reviewing. The slides are read once here and reused by the loop.
+        $samples       = Sample::with('patientCase:id,submitter_id')
+            ->whereIn('id', $validated['sample_ids'])
+            ->get();
+        $server        = ServerName::find($validated['server_id']);
+        $patchSize     = PatchSize::find($validated['patch_size_id']);
+        $magnification = Magnification::find($validated['magnification_id']);
+
+        $operation = Operation::start(
+            'patch_extraction',
+            $this->operationName('patch_extraction', [
+                $patchSize ? $patchSize->size_px . 'px' : null,
+                $magnification?->label,
+                $server?->name,
+            ], $samples->count()),
+            $samples,
+            [
+                'server_id'        => (int) $validated['server_id'],
+                'server'           => $server?->name,
+                'patch_size_id'    => (int) $validated['patch_size_id'],
+                'patch_size'       => $patchSize ? $patchSize->size_px . 'px' : null,
+                'magnification_id' => (int) $validated['magnification_id'],
+                'magnification'    => $magnification?->label,
+            ],
+        );
+
         $count = 0;
         foreach ($validated['sample_ids'] as $sampleId) {
             // Mark as processing immediately so the UI reflects the queued state
@@ -60,7 +91,7 @@ class OperationsController extends Controller
 
         return redirect()
             ->back()
-            ->with('success', "{$count} sample(s) queued for patch extraction. You can monitor progress via the Tiling Status column.");
+            ->with('success', "{$count} sample(s) queued for patch extraction as \"{$operation->name}\". Follow it on the Dashboard, or review it under Operations → Operations Audit.");
     }
 
     /**
@@ -80,17 +111,21 @@ class OperationsController extends Controller
             'ai_model_id'  => ['required', 'integer', 'exists:ai_models,id'],
         ]);
 
-        $count = 0;
-        $skipped = 0;
+        $count    = 0;
+        $skipped  = 0;
+        $accepted = collect();
+
         foreach ($validated['sample_ids'] as $sampleId) {
             /** @var Sample|null $sample */
-            $sample = Sample::find($sampleId);
+            $sample = Sample::with('patientCase:id,submitter_id')->find($sampleId);
 
             // Only allow samples whose patches are ready
             if (!$sample || $sample->tiling_status !== 'done' || !$sample->tiles_gdrive_path) {
                 $skipped++;
                 continue;
             }
+
+            $accepted->push($sample);
 
             $sample->update([
                 'feature_extraction_status'      => 'processing',
@@ -108,7 +143,33 @@ class OperationsController extends Controller
             $count++;
         }
 
+        // Only the slides that were actually queued are recorded. A slide
+        // skipped for missing patches was never part of this run, and putting
+        // it in the audit would misreport what the operation touched.
         $msg = "{$count} sample(s) queued for feature extraction.";
+
+        if ($count > 0) {
+            $server  = ServerName::find($validated['server_id']);
+            $aiModel = AiModel::find($validated['ai_model_id']);
+
+            $operation = Operation::start(
+                'feature_extraction',
+                $this->operationName('feature_extraction', [
+                    $aiModel?->name,
+                    $server?->name,
+                ], $count),
+                $accepted,
+                [
+                    'server_id'   => (int) $validated['server_id'],
+                    'server'      => $server?->name,
+                    'ai_model_id' => (int) $validated['ai_model_id'],
+                    'ai_model'    => $aiModel?->name,
+                ],
+            );
+
+            $msg = "{$count} sample(s) queued for feature extraction as \"{$operation->name}\".";
+        }
+
         if ($skipped > 0) {
             $msg .= " {$skipped} skipped (patches not ready).";
         }
@@ -453,13 +514,38 @@ class OperationsController extends Controller
         }
         $run->samples()->sync($pivotData);
 
+        $organName = \App\Models\Organ::whereKey($organId)->value('name') ?? "organ#{$organId}";
+
+        // ── Audit record ──────────────────────────────────────────────────────
+        // Only the slides that survived eligibility filtering are recorded, so
+        // the audit answers "what was this model actually trained on" rather
+        // than "what was ticked in the form". training_run_id is what lets the
+        // progress derive from the run the remote GPU service reports on.
+        $operation = Operation::start(
+            'training',
+            $this->operationName('training', [
+                $organName,
+                $labelType,
+                'run #' . $run->id,
+            ], count($eligibleSampleIds)),
+            Sample::with('patientCase:id,submitter_id')->whereIn('id', $eligibleSampleIds)->get(),
+            [
+                'training_run_id' => $run->id,
+                'organ'           => $organName,
+                'label_type'      => $labelType,
+                'model_type'      => $validated['model_type'],
+                'n_classes'       => $spec['n_classes'],
+                'epochs'          => (int) $validated['epochs'],
+                'server_id'       => (int) $validated['server_id'],
+            ],
+        );
+
         // ── Log split + class distribution ────────────────────────────────────
         $nTest = count(array_filter($eligiblePhases, fn($p) => $p == 3));
         $classSummary = [];
         foreach ($spec['label_map'] as $idx => $name) {
             $classSummary[] = "{$idx}:{$name}=" . ($spec['class_counts'][$idx] ?? 0);
         }
-        $organName = \App\Models\Organ::whereKey($organId)->value('name') ?? "organ#{$organId}";
         \Illuminate\Support\Facades\Log::info(
             "[TrainingDispatch] Run #{$run->id} — organ={$organName} — "
             . "split: Train={$nTrainEligible} | Val={$nValEligible} | Test={$nTest} — "
@@ -482,6 +568,7 @@ class OperationsController extends Controller
             $msg .= ' Warning: no Validation slide for: ' . implode(', ', $missingInVal)
                   . ' — validation metrics for those classes will be undefined.';
         }
+        $msg .= " Recorded as \"{$operation->name}\" under Operations → Operations Audit.";
 
         return redirect()->back()->with('success', $msg);
     }
@@ -490,6 +577,25 @@ class OperationsController extends Controller
      * Re-index a derived spec so class order follows the operator-supplied map.
      * Matching is by display name (already validated as set-equal beforehand).
      */
+    /**
+     * A name a person can pick out of a list weeks later: what ran, on what
+     * settings, over how many slides, and when.
+     *
+     *   "Patch Extraction (Tiling) · 512px · 20x · TITAN-A · 27 slide(s) · 2026-09-07 15:04"
+     *
+     * @param  array<int, string|null>  $details  settings worth naming; nulls drop out
+     */
+    private function operationName(string $type, array $details, int $slideCount): string
+    {
+        $parts = array_merge(
+            [Operation::TYPES[$type] ?? ucfirst(str_replace('_', ' ', $type))],
+            array_values(array_filter($details, fn ($d) => filled($d))),
+            [$slideCount . ' slide(s)', now()->format('Y-m-d H:i')],
+        );
+
+        return implode(' · ', $parts);
+    }
+
     private function reorderSpecTo(array $spec, array $desiredOrder): array
     {
         $oldIndexByName = [];

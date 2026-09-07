@@ -6,6 +6,7 @@ use App\Http\Controllers\Admin\CasesController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\ImportsController;
 use App\Http\Controllers\Admin\InferenceController;
+use App\Http\Controllers\Admin\OperationsAuditController;
 use App\Http\Controllers\Admin\OperationsController;
 use App\Http\Controllers\Admin\SampleRejectionsController;
 use App\Http\Controllers\Admin\SamplesExportController;
@@ -82,6 +83,13 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::post('workflow/dispatch/feature-extraction', [OperationsController::class, 'dispatchFeatureExtraction'])->name('workflow.dispatch.feature-extraction');
         Route::post('workflow/dispatch/training', [OperationsController::class, 'dispatchTraining'])->name('workflow.dispatch.training');
         Route::post('workflow/training/class-preview', [OperationsController::class, 'trainingClassPreview'])->name('workflow.training.class-preview');
+
+        // Operations Audit — review of what each dispatch actually covered.
+        // 'active' is registered before '{operation}' so it is not swallowed by
+        // the route-model binding.
+        Route::get('operations/audit',              [OperationsAuditController::class, 'index'])->name('operations.audit.index');
+        Route::get('operations/audit/active',       [OperationsAuditController::class, 'active'])->name('operations.audit.active');
+        Route::get('operations/audit/{operation}',  [OperationsAuditController::class, 'show'])->name('operations.audit.show');
 
         // AI Diagnosis Test (formerly 'output')
         Route::get('ai-diagnosis-test', [InferenceController::class, 'index'])->name('ai-diagnosis-test');
