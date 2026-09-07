@@ -51,6 +51,29 @@ class RefileDiseasesFromClinical extends Command
         '8520/3' => 'ILC',   // Infiltrating lobular carcinoma, NOS
     ];
 
+    /**
+     * A GDC clinical record describes the PATIENT, not the slide. A breast
+     * cancer case ships its tumour slides alongside adjacent normal tissue, and
+     * both inherit the same "Infiltrating duct carcinoma" diagnosis — so the
+     * diagnosis alone would label healthy tissue as carcinoma.
+     *
+     * The TCGA barcode says which is which: TCGA-XX-YYYY-<sample type><vial>,
+     * where 01-09 are tumour and 10-19 are normal tissue.
+     *
+     * Returns null when the barcode is not a TCGA one and the question cannot
+     * be answered from it.
+     */
+    private static function isNormalTissue(?string $barcode): ?bool
+    {
+        if (! preg_match('/^TCGA-[^-]+-[^-]+-(\d{2})[A-Z]?/i', (string) $barcode, $m)) {
+            return null;
+        }
+
+        $type = (int) $m[1];
+
+        return $type >= 10 && $type <= 19;
+    }
+
     public function handle(): int
     {
         $apply = (bool) $this->option('apply');
@@ -70,6 +93,7 @@ class RefileDiseasesFromClinical extends Command
             ->select([
                 'samples.id', 'samples.organ_id', 'samples.category_id',
                 'samples.disease_subtype_id', 'samples.file_name',
+                'samples.entity_submitter_id',
                 'clin.morphology', 'clin.primary_diagnosis',
             ]);
 
@@ -80,12 +104,14 @@ class RefileDiseasesFromClinical extends Command
         $rows = $query->get();
         $this->line('  slides with a clinical morphology code: ' . $rows->count());
 
-        $moved      = [];   // target name => count
-        $already    = 0;
-        $conflicts  = [];
-        $unmapped   = [];   // morphology => count
-        $noTarget   = [];   // "organ:name" => count
-        $updates    = [];   // sample id => [disease_subtype_id, disease_subtype]
+        $moved        = [];   // target name => count
+        $already      = 0;
+        $conflicts    = [];
+        $unmapped     = [];   // morphology => count
+        $noTarget     = [];   // "organ:name" => count
+        $wrongGroup   = [];   // target name => count of slides in another group
+        $normalTissue = [];   // slides whose barcode says adjacent normal tissue
+        $updates      = [];   // sample id => target DiseaseSubtype
 
         // Ancestor ids per disease, so "is the slide on a coarser parent?" is a
         // lookup rather than a query per slide.
@@ -107,6 +133,27 @@ class RefileDiseasesFromClinical extends Command
             if (! $target) {
                 $key = $row->organ_id . ':' . $name;
                 $noTarget[$key] = ($noTarget[$key] ?? 0) + 1;
+                continue;
+            }
+
+            // The disease has to live in the slide's own clinical group. Without
+            // this, every normal-tissue slide of a cancer patient would be filed
+            // under a carcinoma, because the group is the only thing that says
+            // the slide is not a tumour at all.
+            if ((int) $target->category_id !== (int) $row->category_id) {
+                $wrongGroup[$name] = ($wrongGroup[$name] ?? 0) + 1;
+                continue;
+            }
+
+            // Even inside the tumour group, a barcode can say the slide is the
+            // patient's adjacent normal tissue. The diagnosis belongs to the
+            // patient; this slide is not the tumour it describes.
+            if (self::isNormalTissue($row->entity_submitter_id) === true) {
+                $normalTissue[] = [
+                    $row->id,
+                    mb_substr((string) $row->entity_submitter_id, 0, 30),
+                    $code . ' → ' . $name,
+                ];
                 continue;
             }
 
@@ -157,6 +204,26 @@ class RefileDiseasesFromClinical extends Command
                 collect($unmapped)->map(fn ($n, $c) => [$c, $n])->values()->all()
             );
             $this->line('   Mixed and unreported tumours are distinct entities; they need a human decision.');
+        }
+
+        if ($wrongGroup !== []) {
+            $this->newLine();
+            $this->line('<options=bold>Left alone — the diagnosis is the patient\'s, not the slide\'s</>');
+            foreach ($wrongGroup as $name => $n) {
+                $this->line("     {$n} slide(s) whose case says \"{$name}\" sit in another clinical group");
+            }
+            $this->line('   These are the normal-tissue slides of a cancer patient. Filing them under');
+            $this->line('   a carcinoma would teach the model that healthy tissue is that carcinoma.');
+        }
+
+        if ($normalTissue !== []) {
+            $this->newLine();
+            $this->warn('   In the tumour group, but the barcode says adjacent NORMAL tissue (' . count($normalTissue) . '):');
+            $this->table(['sample', 'barcode', 'record says'], array_slice($normalTissue, 0, 10));
+            if (count($normalTissue) > 10) {
+                $this->line('   … and ' . (count($normalTissue) - 10) . ' more.');
+            }
+            $this->line('   Left untouched: these look mis-grouped and need moving to a normal group.');
         }
 
         if ($noTarget !== []) {
