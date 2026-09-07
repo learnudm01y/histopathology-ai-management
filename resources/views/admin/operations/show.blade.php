@@ -3,6 +3,19 @@
 @section('title', 'Operation — ' . $operation->name)
 
 @section('content')
+@if(session('success'))
+    <div class="alert alert-success alert-dismissible fade show" role="alert">
+        <i class="mdi mdi-check-circle-outline mr-1"></i> {{ session('success') }}
+        <button type="button" class="close" data-dismiss="alert"><span>&times;</span></button>
+    </div>
+@endif
+@if(session('error'))
+    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+        <i class="mdi mdi-alert-circle-outline mr-1"></i> {{ session('error') }}
+        <button type="button" class="close" data-dismiss="alert"><span>&times;</span></button>
+    </div>
+@endif
+
 <div class="page-header">
     <h3 class="page-title">Operation Review</h3>
     <nav aria-label="breadcrumb">
@@ -34,14 +47,17 @@
                         </div>
                     </div>
                     <div class="text-right">
-                        <div class="h2 mb-0 text-{{ $operation->status_colour }}">{{ $operation->progress_percent }}%</div>
-                        <small class="text-muted">{{ $operation->completed_items }} / {{ $operation->total_items }} slides</small>
+                        <div class="h2 mb-0 text-{{ $operation->status_colour }}" id="op-percent">{{ $operation->progress_percent }}%</div>
+                        <small class="text-muted">
+                            <span id="op-completed">{{ $operation->completed_items }}</span> /
+                            <span id="op-total">{{ $operation->total_items }}</span> slides
+                        </small>
                     </div>
                 </div>
 
                 <div class="progress mt-3" style="height:8px;">
-                    <div class="progress-bar bg-{{ $operation->status_colour }}"
-                         role="progressbar" style="width: {{ $operation->progress_percent }}%"></div>
+                    <div class="progress-bar bg-{{ $operation->status_colour }} {{ $operation->is_running ? 'progress-bar-striped progress-bar-animated' : '' }}"
+                         id="op-bar" role="progressbar" style="width: {{ $operation->progress_percent }}%"></div>
                 </div>
 
                 <div class="row mt-4">
@@ -56,13 +72,32 @@
                     </div>
                     <div class="col-md-3 col-6 mb-2">
                         <p class="text-muted mb-0 small">Completed</p>
-                        <h5 class="mb-0 text-success">{{ number_format($operation->completed_items) }}</h5>
+                        <h5 class="mb-0 text-success" id="op-completed-stat">{{ number_format($operation->completed_items) }}</h5>
                     </div>
                     <div class="col-md-3 col-6 mb-2">
                         <p class="text-muted mb-0 small">Failed</p>
-                        <h5 class="mb-0 text-danger">{{ number_format($operation->failed_items) }}</h5>
+                        <h5 class="mb-0 text-danger" id="op-failed-stat">{{ number_format($operation->failed_items) }}</h5>
                     </div>
                 </div>
+
+                {{-- Where this run sits in the chain. --}}
+                @if($parent || $followUps->isNotEmpty())
+                    <hr>
+                    <div class="d-flex flex-wrap align-items-center" style="gap:.5rem; font-size:.85rem;">
+                        @if($parent)
+                            <span class="text-muted">Continued from</span>
+                            <a href="{{ route('admin.operations.audit.show', $parent) }}" class="badge badge-light border">
+                                <i class="mdi mdi-arrow-left mr-1"></i>{{ $parent->name }}
+                            </a>
+                        @endif
+                        @foreach($followUps as $child)
+                            <span class="text-muted">Handed on to</span>
+                            <a href="{{ route('admin.operations.audit.show', $child) }}" class="badge badge-{{ $child->status_colour }}">
+                                {{ $child->name }} <i class="mdi mdi-arrow-right ml-1"></i>
+                            </a>
+                        @endforeach
+                    </div>
+                @endif
 
                 @if(filled($operation->params))
                     <hr>
@@ -85,6 +120,91 @@
         </div>
     </div>
 </div>
+
+{{-- ── Continue the pipeline ─────────────────────────────────────────────────
+     Only the slides this run FINISHED are offered onward. Handing the next
+     stage a failed slide would queue a job that can only fail again, and record
+     work that was never possible. --}}
+@if($nextStage === 'feature_extraction')
+<div class="row grid-margin">
+    <div class="col-12">
+        <div class="card border-left-info">
+            <div class="card-body">
+                <h4 class="card-title mb-1">
+                    <i class="mdi mdi-arrow-right-bold-circle-outline mr-1 text-info"></i>Continue: Feature Extraction
+                </h4>
+                <p class="text-muted small mb-3">
+                    Runs over the
+                    <strong><span id="op-ready-count">{{ $readyIds->count() }}</span> slide(s)</strong>
+                    this operation has finished tiling.
+                    @if($operation->failed_items > 0)
+                        The {{ $operation->failed_items }} failed slide(s) are left out — their patches were never produced.
+                    @endif
+                    @if($operation->is_running)
+                        <span class="text-info d-block mt-1">
+                            <i class="mdi mdi-progress-clock mr-1"></i>This operation is still running; you can start now with
+                            what is finished, or wait and take the rest in one go.
+                        </span>
+                    @endif
+                </p>
+
+                <form method="POST" action="{{ route('admin.operations.audit.dispatch-next', $operation) }}">
+                    @csrf
+                    <div class="d-flex flex-wrap align-items-end" style="gap:.75rem;">
+                        <div class="form-group mb-0" style="min-width:220px;">
+                            <label class="small text-muted mb-1">Server</label>
+                            <select name="server_id" class="form-control" required>
+                                <option value="">— Choose server —</option>
+                                @foreach($servers as $srv)
+                                    <option value="{{ $srv->id }}">{{ $srv->name }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                        <div class="form-group mb-0" style="min-width:220px;">
+                            <label class="small text-muted mb-1">Feature model</label>
+                            <select name="ai_model_id" class="form-control" required>
+                                <option value="">— Choose model —</option>
+                                @foreach($aiModels as $m)
+                                    <option value="{{ $m->id }}" {{ $m->is_default ? 'selected' : '' }}>{{ $m->name }}</option>
+                                @endforeach
+                            </select>
+                        </div>
+                        <div class="form-group mb-0">
+                            <button type="submit" class="btn btn-info" id="op-next-btn"
+                                    {{ $readyIds->isEmpty() ? 'disabled' : '' }}>
+                                <i class="mdi mdi-play mr-1"></i>Run on
+                                <span id="op-ready-count-btn">{{ $readyIds->count() }}</span> slide(s)
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+@elseif($nextStage === 'training')
+<div class="row grid-margin">
+    <div class="col-12">
+        <div class="card border-left-info">
+            <div class="card-body">
+                <h4 class="card-title mb-1">
+                    <i class="mdi mdi-arrow-right-bold-circle-outline mr-1 text-info"></i>Continue: Training
+                </h4>
+                <p class="text-muted small mb-3">
+                    {{ $readyIds->count() }} slide(s) here have features ready.
+                    {{-- Training is not offered inline: a run needs a train/val/test phase per
+                         slide and a class map, which are decisions, not a button. --}}
+                    A training run needs a train / validation / test split and a label type
+                    chosen per run, so it is set up on the Operations page rather than launched from here.
+                </p>
+                <a href="{{ route('admin.workflow', ['operation_type' => 'training']) }}" class="btn btn-info">
+                    <i class="mdi mdi-school-outline mr-1"></i>Set up a training run
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+@endif
 
 {{-- ── Items ─────────────────────────────────────────────────────────────── --}}
 <div class="row">
@@ -159,8 +279,8 @@
                                         <span class="text-muted small">—</span>
                                     @endif
                                 </td>
-                                <td>
-                                    <span class="badge badge-{{ $item->status_colour }}">{{ ucfirst($item->status) }}</span>
+                                <td data-item-id="{{ $item->id }}">
+                                    <span class="badge badge-{{ $item->status_colour }} item-status-badge">{{ ucfirst($item->status) }}</span>
                                     @if($operation->type === 'patch_extraction' && $item->sample?->tile_count)
                                         <div class="small text-muted mt-1">{{ number_format($item->sample->tile_count) }} tiles</div>
                                     @endif
@@ -185,3 +305,71 @@
     </div>
 </div>
 @endsection
+
+@push('scripts')
+<script>
+// ── Follow this operation from its own page ──────────────────────────────────
+// Tiling a slide takes minutes and a run holds dozens of them, so without this
+// the only way to see the run advance is to keep reloading. Polls the same
+// derived progress the audit list uses, updates the header, each slide's badge
+// and the "run on N slides" button, then stops as soon as the run settles.
+(function () {
+    var bar = document.getElementById('op-bar');
+    if (!bar || !@json($operation->is_running)) return;
+
+    var ENDPOINT = @json(route('admin.operations.audit.progress', $operation));
+    var EVERY_MS = 8000;
+
+    var COLOURS = {
+        completed: 'success', failed: 'danger', processing: 'info',
+        skipped: 'secondary', pending: 'light'
+    };
+
+    function text(id, value) {
+        var el = document.getElementById(id);
+        if (el) el.textContent = value;
+    }
+
+    function paint(d) {
+        bar.style.width = d.percent + '%';
+        bar.className = 'progress-bar bg-' + d.colour +
+            (d.running ? ' progress-bar-striped progress-bar-animated' : '');
+
+        text('op-percent', d.percent + '%');
+        text('op-completed', d.completed);
+        text('op-total', d.total);
+        text('op-completed-stat', d.completed.toLocaleString());
+        text('op-failed-stat', d.failed.toLocaleString());
+        text('op-ready-count', d.readyForNext);
+        text('op-ready-count-btn', d.readyForNext);
+
+        // The next stage becomes available the moment the first slide lands.
+        var next = document.getElementById('op-next-btn');
+        if (next) next.disabled = d.readyForNext === 0;
+
+        Object.keys(d.items || {}).forEach(function (itemId) {
+            var cell = document.querySelector('[data-item-id="' + itemId + '"] .item-status-badge');
+            if (!cell) return;                       // on another page of the table
+            var status = d.items[itemId];
+            cell.className = 'badge badge-' + (COLOURS[status] || 'light') + ' item-status-badge';
+            cell.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+        });
+
+        // A run that has settled needs one reload to pick up the parts of the
+        // page that are rendered server-side — the finished timestamp, the
+        // status badge, the follow-up links.
+        if (!d.running) {
+            clearInterval(timer);
+            window.location.reload();
+        }
+    }
+
+    var timer = setInterval(function () {
+        fetch(ENDPOINT, { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (d) { if (d) paint(d); })
+            .catch(function () { /* a dropped poll is not worth a visible error */ });
+    }, EVERY_MS);
+}());
+</script>
+@endpush

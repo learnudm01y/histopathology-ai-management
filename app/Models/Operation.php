@@ -103,6 +103,47 @@ class Operation extends Model
     }
 
     /**
+     * A name a person can pick out of a list weeks later: what ran, on what
+     * settings, over how many slides, and when.
+     *
+     *   "Feature Extraction · TITAN · RunPod-A · 29 slide(s) · 2026-09-07 18:20"
+     *
+     * @param  array<int, string|null>  $details  settings worth naming; nulls drop out
+     */
+    public static function buildName(string $type, array $details, int $slideCount): string
+    {
+        $parts = array_merge(
+            [self::TYPES[$type] ?? ucfirst(str_replace('_', ' ', $type))],
+            array_values(array_filter($details, fn ($d) => filled($d))),
+            [$slideCount . ' slide(s)', now()->format('Y-m-d H:i')],
+        );
+
+        return implode(' · ', $parts);
+    }
+
+    /** The operation this one was launched from, when it continues a chain. */
+    public function parent(): ?self
+    {
+        $parentId = $this->params['source_operation_id'] ?? null;
+
+        return $parentId ? self::find($parentId) : null;
+    }
+
+    /**
+     * Operations launched from this one.
+     *
+     * The link lives in the child's `params` rather than a column: an operation
+     * is identified by what it was asked to do, and "which run fed me" is part
+     * of that request, not a separate relationship to maintain.
+     *
+     * @return \Illuminate\Database\Eloquent\Collection<int, self>
+     */
+    public function children(): \Illuminate\Database\Eloquent\Collection
+    {
+        return self::where('params->source_operation_id', $this->id)->latest('id')->get();
+    }
+
+    /**
      * Recompute the counters from the items.
      *
      * Deliberately a recount rather than an increment: several slides of one

@@ -90,6 +90,8 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::get('operations/audit',              [OperationsAuditController::class, 'index'])->name('operations.audit.index');
         Route::get('operations/audit/active',       [OperationsAuditController::class, 'active'])->name('operations.audit.active');
         Route::get('operations/audit/{operation}',  [OperationsAuditController::class, 'show'])->name('operations.audit.show');
+        Route::get('operations/audit/{operation}/progress',      [OperationsAuditController::class, 'progress'])->name('operations.audit.progress');
+        Route::post('operations/audit/{operation}/dispatch-next', [OperationsAuditController::class, 'dispatchNext'])->name('operations.audit.dispatch-next');
 
         // AI Diagnosis Test (formerly 'output')
         Route::get('ai-diagnosis-test', [InferenceController::class, 'index'])->name('ai-diagnosis-test');

@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Jobs\FeatureExtractionJob;
 use App\Jobs\PatchExtractionJob;
 use App\Jobs\TrainingJob;
 use App\Models\AiModel;
@@ -20,6 +19,10 @@ use Illuminate\Support\Facades\DB;
 
 class OperationsController extends Controller
 {
+    public function __construct(private readonly \App\Services\OperationDispatcher $dispatcher)
+    {
+    }
+
     /**
      * Dispatch patch extraction for the selected samples.
      *
@@ -51,7 +54,7 @@ class OperationsController extends Controller
 
         $operation = Operation::start(
             'patch_extraction',
-            $this->operationName('patch_extraction', [
+            Operation::buildName('patch_extraction', [
                 $patchSize ? $patchSize->size_px . 'px' : null,
                 $magnification?->label,
                 $server?->name,
@@ -111,67 +114,20 @@ class OperationsController extends Controller
             'ai_model_id'  => ['required', 'integer', 'exists:ai_models,id'],
         ]);
 
-        $count    = 0;
-        $skipped  = 0;
-        $accepted = collect();
+        // Shared with the dispatch offered on an operation's own review page, so
+        // both routes apply the same eligibility rules and write the same record.
+        $result = $this->dispatcher->featureExtraction(
+            array_map('intval', $validated['sample_ids']),
+            (int) $validated['server_id'],
+            (int) $validated['ai_model_id'],
+        );
 
-        foreach ($validated['sample_ids'] as $sampleId) {
-            /** @var Sample|null $sample */
-            $sample = Sample::with('patientCase:id,submitter_id')->find($sampleId);
+        $msg = $result['operation']
+            ? "{$result['queued']} sample(s) queued for feature extraction as \"{$result['operation']->name}\"."
+            : '0 sample(s) queued for feature extraction.';
 
-            // Only allow samples whose patches are ready
-            if (!$sample || $sample->tiling_status !== 'done' || !$sample->tiles_gdrive_path) {
-                $skipped++;
-                continue;
-            }
-
-            $accepted->push($sample);
-
-            $sample->update([
-                'feature_extraction_status'      => 'processing',
-                'feature_extraction_ai_model_id' => $validated['ai_model_id'],
-                'feature_extraction_server_id'   => $validated['server_id'],
-                'feature_extraction_error'       => null,
-            ]);
-
-            FeatureExtractionJob::dispatch(
-                (int) $sampleId,
-                (int) $validated['server_id'],
-                (int) $validated['ai_model_id'],
-            );
-
-            $count++;
-        }
-
-        // Only the slides that were actually queued are recorded. A slide
-        // skipped for missing patches was never part of this run, and putting
-        // it in the audit would misreport what the operation touched.
-        $msg = "{$count} sample(s) queued for feature extraction.";
-
-        if ($count > 0) {
-            $server  = ServerName::find($validated['server_id']);
-            $aiModel = AiModel::find($validated['ai_model_id']);
-
-            $operation = Operation::start(
-                'feature_extraction',
-                $this->operationName('feature_extraction', [
-                    $aiModel?->name,
-                    $server?->name,
-                ], $count),
-                $accepted,
-                [
-                    'server_id'   => (int) $validated['server_id'],
-                    'server'      => $server?->name,
-                    'ai_model_id' => (int) $validated['ai_model_id'],
-                    'ai_model'    => $aiModel?->name,
-                ],
-            );
-
-            $msg = "{$count} sample(s) queued for feature extraction as \"{$operation->name}\".";
-        }
-
-        if ($skipped > 0) {
-            $msg .= " {$skipped} skipped (patches not ready).";
+        if ($result['skipped'] > 0) {
+            $msg .= " {$result['skipped']} skipped (patches not ready).";
         }
 
         return redirect()->back()->with('success', $msg);
@@ -523,7 +479,7 @@ class OperationsController extends Controller
         // progress derive from the run the remote GPU service reports on.
         $operation = Operation::start(
             'training',
-            $this->operationName('training', [
+            Operation::buildName('training', [
                 $organName,
                 $labelType,
                 'run #' . $run->id,
@@ -577,25 +533,6 @@ class OperationsController extends Controller
      * Re-index a derived spec so class order follows the operator-supplied map.
      * Matching is by display name (already validated as set-equal beforehand).
      */
-    /**
-     * A name a person can pick out of a list weeks later: what ran, on what
-     * settings, over how many slides, and when.
-     *
-     *   "Patch Extraction (Tiling) · 512px · 20x · TITAN-A · 27 slide(s) · 2026-09-07 15:04"
-     *
-     * @param  array<int, string|null>  $details  settings worth naming; nulls drop out
-     */
-    private function operationName(string $type, array $details, int $slideCount): string
-    {
-        $parts = array_merge(
-            [Operation::TYPES[$type] ?? ucfirst(str_replace('_', ' ', $type))],
-            array_values(array_filter($details, fn ($d) => filled($d))),
-            [$slideCount . ' slide(s)', now()->format('Y-m-d H:i')],
-        );
-
-        return implode(' · ', $parts);
-    }
-
     private function reorderSpecTo(array $spec, array $desiredOrder): array
     {
         $oldIndexByName = [];
