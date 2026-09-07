@@ -314,16 +314,6 @@ a.tree-count-badge:hover { filter: brightness(.92); text-decoration: none; }
                     </button>
                 </div>
 
-                <div class="alert alert-light border py-2 px-3 mb-3" style="font-size:.82rem;">
-                    <i class="mdi mdi-information-outline mr-1 text-info"></i>
-                    <strong>Organ → Clinical Group → Disease.</strong>
-                    A case has no diagnosis of its own — it inherits whatever its slides were filed
-                    under — so it is counted here once per disease its slides carry. Every badge is
-                    <strong>distinct cases</strong>, never slides, and a coarse disease answers for its
-                    whole branch. That is why an organ's total can be smaller than its groups added up:
-                    one case with slides in two groups is still one case. Click any badge to list it.
-                </div>
-
                 @forelse($visible as $organId => $organCategories)
                     @php
                         $organ      = $organCategories->first()->organ;
@@ -476,7 +466,6 @@ a.tree-count-badge:hover { filter: brightness(.92); text-decoration: none; }
                                 <th>Project</th>
                                 <th>Disease Type</th>
                                 <th>Primary Site</th>
-                                <th>Disease (taxonomy)</th>
                                 <th class="text-center">Slides</th>
                                 <th class="text-center">Clinical</th>
                                 <th>Actions</th>
@@ -493,16 +482,6 @@ a.tree-count-badge:hover { filter: brightness(.92); text-decoration: none; }
                                     @else — @endif
                                 </td>
                                 <td>{{ $c->disease_type ?? '—' }}</td>
-                                {{-- What the taxonomy says this case is, read off its
-                                     slides. "Disease Type" beside it is the free-text
-                                     label the source file shipped with. --}}
-                                <td>
-                                    @forelse($c->disease_labels as $label)
-                                        <span class="badge badge-outline-info mr-1">{{ $label }}</span>
-                                    @empty
-                                        <span class="text-muted small">unclassified</span>
-                                    @endforelse
-                                </td>
                                 <td class="text-center">
                                     @if($c->samples_count > 0)
                                         <span class="badge badge-warning">{{ $c->samples_count }}</span>
@@ -526,7 +505,7 @@ a.tree-count-badge:hover { filter: brightness(.92); text-decoration: none; }
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="9" class="text-center text-muted py-4">
+                                <td colspan="8" class="text-center text-muted py-4">
                                     No cases found. Import a clinical / metadata file from the
                                     <a href="{{ route('admin.samples') }}">Samples</a> page.
                                 </td>

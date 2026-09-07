@@ -52,16 +52,7 @@ class CasesController extends Controller
     public function index(Request $request): View
     {
         $query = PatientCase::query()
-            ->with([
-                'clinicalInfo',
-                'dataSource',
-                // The diagnosis of a case lives on its slides, so the taxonomy
-                // column reads it from there. Narrow select + tiny relations:
-                // 20 cases per page must not drag whole slide rows along.
-                'samples' => fn ($q) => $q
-                    ->select('id', 'case_id', 'organ_id', 'category_id', 'disease_subtype_id')
-                    ->with(['organ:id,name', 'category:id,label_en', 'diseaseSubtype:id,name']),
-            ])
+            ->with(['clinicalInfo', 'dataSource'])
             ->withCount('samples')
             ->orderByDesc('id');
 
