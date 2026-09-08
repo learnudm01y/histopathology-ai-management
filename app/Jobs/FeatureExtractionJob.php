@@ -303,5 +303,49 @@ class FeatureExtractionJob implements ShouldQueue
             'feature_extraction_status' => 'failed',
             'feature_extraction_error'  => $message,
         ]);
+
+        $this->markItemFailed($message);
+    }
+
+    /**
+     * Laravel's hook for a job that died OUTSIDE its own error handling —
+     * an uncaught exception, or the retry limit being reached.
+     *
+     * Without this, such a death was silent: the slide and its operation item
+     * stayed "processing" for ever, so a run whose endpoint had gone away kept
+     * reporting work in flight that nothing was doing. The run must record what
+     * actually happened to every slide, including the ways it can fail that its
+     * own try/catch never sees.
+     */
+    public function failed(\Throwable $e): void
+    {
+        $reason = $e instanceof \Illuminate\Queue\MaxAttemptsExceededException
+            ? 'Gave up after ' . $this->tries . ' attempts — the GPU worker never accepted this slide.'
+            : $e->getMessage();
+
+        Log::error("[FeatureExtractionJob] Job died for sample #{$this->sampleId}: {$reason}");
+
+        Sample::whereKey($this->sampleId)->update([
+            'feature_extraction_status' => 'failed',
+            'feature_extraction_error'  => $reason,
+        ]);
+
+        $this->markItemFailed($reason);
+    }
+
+    /** Record the outcome against the run that dispatched this slide. */
+    private function markItemFailed(string $message): void
+    {
+        if (! $this->operationId) {
+            return;
+        }
+
+        OperationItem::where('operation_id', $this->operationId)
+            ->where('sample_id', $this->sampleId)
+            ->update([
+                'status'      => 'failed',
+                'message'     => mb_substr($message, 0, 500),
+                'updated_at'  => now(),
+            ]);
     }
 }
