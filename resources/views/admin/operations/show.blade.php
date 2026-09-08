@@ -160,279 +160,283 @@
     </div>
 </div>
 
-{{-- ── GPU pod ──────────────────────────────────────────────────────────────
-     Feature extraction is submitted and then processed remotely, so the pod is
-     what limits throughput, not the queue. Giving each operation its own pod is
-     the only thing that makes two of them run at once. --}}
-@if($operation->type === 'feature_extraction')
+{{-- ── Actions ──────────────────────────────────────────────────────────────
+     One row of buttons rather than a stack of cards. Each action's detail and
+     its form live in a modal, so the page keeps the same shape however many
+     actions happen to apply to this run. --}}
+@php
+    $canContinue = $nextStage === 'feature_extraction';
+    $canTrain    = $nextStage === 'training';
+    $canPod      = $operation->type === 'feature_extraction';
+    $canResume   = $operation->type === 'feature_extraction' && $stalledCount > 0;
+    $canAdd      = $awaitingFromParent->isNotEmpty();
+    $canRetry    = $operation->type === 'patch_extraction' && $retryableCount > 0
+                   && (! $operation->is_fully_resolved || $missingOutput > 0);
+@endphp
+
+@if($canContinue || $canTrain || $canPod || $canResume || $canAdd || $canRetry)
 <div class="row grid-margin">
     <div class="col-12">
-        <div class="card border-left-info">
-            <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center flex-wrap mb-2" style="gap:.5rem;">
-                    <h4 class="card-title mb-0">
-                        <i class="mdi mdi-expansion-card-variant mr-1 text-info"></i>GPU pod for this operation
-                    </h4>
-                    <button type="button" class="btn btn-sm btn-outline-info" id="pods-refresh">
-                        <i class="mdi mdi-refresh mr-1"></i>Load pods &amp; live prices
-                    </button>
+        <div class="card">
+            <div class="card-body py-3">
+                <div class="d-flex flex-wrap align-items-center" style="gap:.5rem;">
+                    @if($canContinue)
+                        <button type="button" class="btn btn-info" data-toggle="modal" data-target="#modal-continue">
+                            <i class="mdi mdi-play mr-1"></i>Run Feature Extraction
+                            <span class="badge badge-light ml-1" id="op-ready-count-btn">{{ $readyIds->count() }}</span>
+                        </button>
+                    @endif
+
+                    @if($canTrain)
+                        <a href="{{ route('admin.workflow', ['operation_type' => 'training']) }}" class="btn btn-info">
+                            <i class="mdi mdi-school-outline mr-1"></i>Set up training
+                        </a>
+                    @endif
+
+                    @if($canPod)
+                        <button type="button" class="btn btn-outline-info" data-toggle="modal" data-target="#modal-pod">
+                            <i class="mdi mdi-expansion-card-variant mr-1"></i>GPU pod
+                            @if($operation->params['pod_name'] ?? null)
+                                <span class="badge badge-info ml-1">{{ $operation->params['pod_name'] }}</span>
+                            @endif
+                        </button>
+                    @endif
+
+                    @if($canResume)
+                        <button type="button" class="btn btn-outline-info" data-toggle="modal" data-target="#modal-resume">
+                            <i class="mdi mdi-restart mr-1"></i>Resume
+                            <span class="badge badge-light ml-1">{{ $stalledCount }}</span>
+                        </button>
+                    @endif
+
+                    @if($canAdd)
+                        <button type="button" class="btn btn-outline-warning" data-toggle="modal" data-target="#modal-add">
+                            <i class="mdi mdi-plus mr-1"></i>Add missing
+                            <span class="badge badge-light ml-1">{{ $awaitingFromParent->count() }}</span>
+                        </button>
+                    @endif
+
+                    @if($canRetry)
+                        <button type="button" class="btn btn-outline-warning" data-toggle="modal" data-target="#modal-retry">
+                            <i class="mdi mdi-refresh mr-1"></i>Retry
+                            <span class="badge badge-light ml-1">{{ $retryableCount }}</span>
+                        </button>
+                    @endif
                 </div>
-
-                @if($operation->params['pod_id'] ?? null)
-                    <p class="small mb-3">
-                        Currently running on
-                        <strong>{{ $operation->params['pod_name'] ?? $operation->params['pod_id'] }}</strong>
-                        @if($operation->params['pod_gpu'] ?? null)
-                            · {{ $operation->params['pod_gpu'] }}
-                        @endif
-                        @if($operation->params['pod_cost_per_hr'] ?? null)
-                            · <span class="text-info">${{ number_format($operation->params['pod_cost_per_hr'], 3) }}/hr</span>
-                        @endif
-                    </p>
-                @else
-                    <p class="text-muted small mb-3">
-                        This operation uses whichever pod the server points at. Choose one below to give it
-                        a pod of its own — then a second operation can run on a different pod at the same time.
-                    </p>
-                @endif
-
-                <div id="pods-panel" class="text-muted small">
-                    Press <em>Load pods &amp; live prices</em> to fetch what is available and what it costs.
-                </div>
             </div>
         </div>
     </div>
 </div>
 @endif
 
-{{-- ── Resume a run the worker forgot ───────────────────────────────────────
-     The GPU worker keeps its queue in memory, so a restart drops whatever was
-     waiting while this page goes on showing it as in flight. --}}
-@if($operation->type === 'feature_extraction' && $stalledCount > 0)
-<div class="row grid-margin">
-    <div class="col-12">
-        <div class="card border-left-info">
-            <div class="card-body">
-                <h4 class="card-title mb-1">
-                    <i class="mdi mdi-restart mr-1 text-info"></i>Resume unfinished slides
-                </h4>
-                <p class="text-muted small mb-3">
-                    <strong>{{ $stalledCount }} slide(s)</strong> in this run have not reported back.
-                    Resuming asks the worker about each one first: any it is still working on are
-                    left alone, and only the ones it has forgotten are queued again —
-                    <strong>inside this same operation</strong>, with their attempt count raised.
-                    Pressing it while the run is healthy does nothing.
-                </p>
-                <form method="POST" action="{{ route('admin.operations.audit.resume', $operation) }}">
-                    @csrf
-                    <button type="submit" class="btn btn-info">
-                        <i class="mdi mdi-restart mr-1"></i>Resume {{ $stalledCount }} slide(s)
-                    </button>
-                </form>
-            </div>
+@push('modals')
+
+@if($canContinue)
+<div class="modal fade" id="modal-continue" tabindex="-1" role="dialog" aria-hidden="true">
+  <div class="modal-dialog modal-lg" role="document">
+    <div class="modal-content">
+      <form method="POST" action="{{ route('admin.operations.audit.dispatch-next', $operation) }}">
+        @csrf
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="mdi mdi-play mr-1 text-info"></i>Run Feature Extraction</h5>
+          <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
         </div>
+        <div class="modal-body">
+          <p class="text-muted small">
+            Runs over the <strong><span id="op-ready-count">{{ $readyIds->count() }}</span> slide(s)</strong>
+            of this operation whose patches are on Drive right now.
+            @if($operation->failed_items > 0)
+              The {{ $operation->failed_items }} slide(s) that failed are left out — their patches were never produced.
+            @endif
+          </p>
+          {{-- Three equal columns. The fields keep their width whatever is
+               chosen in them, so nothing reflows as options load. --}}
+          <div class="form-row">
+            <div class="form-group col-12 col-md-4">
+              <label class="small text-muted mb-1">Server</label>
+              <select name="server_id" class="form-control" required>
+                <option value="">— Choose server —</option>
+                @foreach($servers as $srv)
+                  <option value="{{ $srv->id }}">{{ $srv->name }}</option>
+                @endforeach
+              </select>
+            </div>
+            <div class="form-group col-12 col-md-4">
+              <label class="small text-muted mb-1">Feature model</label>
+              <select name="ai_model_id" class="form-control" required>
+                <option value="">— Choose model —</option>
+                @foreach($aiModels as $m)
+                  <option value="{{ $m->id }}" {{ $m->is_default ? 'selected' : '' }}>{{ $m->name }}</option>
+                @endforeach
+              </select>
+            </div>
+            <div class="form-group col-12 col-md-4">
+              <label class="small text-muted mb-1">
+                GPU pod
+                <button type="button" class="btn btn-link btn-sm p-0 ml-1" id="next-pods-load"
+                        style="font-size:.75rem; vertical-align:baseline;">refresh</button>
+              </label>
+              {{-- Status is carried by the placeholder option, never by a line
+                   under the field: text appearing after a load would push the
+                   layout around. --}}
+              <select name="pod_id" class="form-control" id="next-pod-select">
+                <option value="">— whichever the server points at —</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-info" id="op-next-btn" {{ $readyIds->isEmpty() ? 'disabled' : '' }}>
+            <i class="mdi mdi-play mr-1"></i>Run on {{ $readyIds->count() }} slide(s)
+          </button>
+        </div>
+      </form>
     </div>
+  </div>
 </div>
 @endif
 
-{{-- ── Slides still owed by the source run ──────────────────────────────────
-     This run covers what was ready when it started. The rest belong to the
-     same piece of work, so they join it here rather than starting a second run
-     over the same intent. --}}
-@if($awaitingFromParent->isNotEmpty())
-<div class="row grid-margin">
-    <div class="col-12">
-        <div class="card border-left-warning">
-            <div class="card-body">
-                <h4 class="card-title mb-1">
-                    <i class="mdi mdi-plus-box-outline mr-1 text-warning"></i>Slides still to be added
-                </h4>
-                <p class="text-muted small mb-3">
-                    <strong>{{ $awaitingFromParent->count() }} slide(s)</strong> of
-                    <a href="{{ route('admin.operations.audit.show', $parent) }}">{{ $parent->reference }}</a>
-                    are not in this run — they had no patches when it started.
-                    @if($addableNow > 0)
-                        <span class="text-success d-block mt-1">
-                            <i class="mdi mdi-check-circle-outline mr-1"></i>{{ $addableNow }} of them are tiled now
-                            and can be added to this run.
-                        </span>
-                    @else
-                        <span class="text-warning d-block mt-1">
-                            <i class="mdi mdi-clock-outline mr-1"></i>None are tiled yet. Re-run them in
-                            {{ $parent->reference }} first; they can be added here once their patches exist.
-                        </span>
-                    @endif
-                </p>
-                <form method="POST" action="{{ route('admin.operations.audit.add-missing', $operation) }}"
-                      onsubmit="return confirm('Add {{ $addableNow }} slide(s) to {{ $operation->reference }}?');">
-                    @csrf
-                    <button type="submit" class="btn btn-warning" {{ $addableNow === 0 ? 'disabled' : '' }}>
-                        <i class="mdi mdi-plus mr-1"></i>Add {{ $addableNow }} slide(s) to this run
-                    </button>
-                </form>
-            </div>
-        </div>
+@if($canPod)
+<div class="modal fade" id="modal-pod" tabindex="-1" role="dialog" aria-hidden="true">
+  <div class="modal-dialog modal-lg" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="mdi mdi-expansion-card-variant mr-1 text-info"></i>GPU pod for this operation</h5>
+        <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+      </div>
+      <div class="modal-body">
+        @if($operation->params['pod_id'] ?? null)
+          <p class="small">
+            Currently running on <strong>{{ $operation->params['pod_name'] ?? $operation->params['pod_id'] }}</strong>
+            @if($operation->params['pod_gpu'] ?? null) · {{ $operation->params['pod_gpu'] }} @endif
+            @if($operation->params['pod_cost_per_hr'] ?? null)
+              · <span class="text-info">${{ number_format($operation->params['pod_cost_per_hr'], 3) }}/hr</span>
+            @endif
+          </p>
+        @else
+          <p class="text-muted small">
+            This operation uses whichever pod the server points at. Choosing one gives it a pod of its
+            own, so a second operation can run on a different pod at the same time.
+          </p>
+        @endif
+        <button type="button" class="btn btn-sm btn-outline-info mb-3" id="pods-refresh">
+          <i class="mdi mdi-refresh mr-1"></i>Load pods &amp; live prices
+        </button>
+        <div id="pods-panel" class="text-muted small"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-dismiss="modal">Close</button>
+      </div>
     </div>
+  </div>
 </div>
 @endif
 
-{{-- ── Retry ────────────────────────────────────────────────────────────────
-     A retry opens a new operation under the same settings; this record keeps
-     saying what happened here. --}}
-@if($operation->type === 'patch_extraction' && $retryableCount > 0 && (! $operation->is_fully_resolved || $missingOutput > 0))
-<div class="row grid-margin">
-    <div class="col-12">
-        <div class="card border-left-warning">
-            <div class="card-body">
-                <h4 class="card-title mb-1">
-                    <i class="mdi mdi-refresh mr-1 text-warning"></i>Re-run {{ $missingOutput > 0 ? 'missing' : 'failed' }} slides
-                </h4>
-                @if($missingOutput > 0)
-                    {{-- Recorded as completed, but the patches are not there any more —
-                         most often because another operation covering the same slides was
-                         deleted with its files. The next stage skips these silently. --}}
-                    <div class="alert alert-warning py-2 px-3 mb-3" style="font-size:.85rem;">
-                        <i class="mdi mdi-alert-outline mr-1"></i>
-                        <strong>{{ $missingOutput }} slide(s) recorded as completed no longer have their patches.</strong>
-                        Their files were removed after this run finished, so Feature Extraction
-                        skips them. Re-running restores them to this operation.
-                    </div>
-                @endif
-                <p class="text-muted small mb-3">
-                    <strong>{{ $retryableCount }} slide(s)</strong> in this run need work.
-                    They are re-queued <strong>inside this operation</strong> — it stays their group and
-                    reports how they end up, keeping a count of the attempts it took.
-                    @if($rescuedBy->isNotEmpty())
-                        <span class="text-success d-block mt-1">
-                            <i class="mdi mdi-check-circle-outline mr-1"></i>{{ $rescuedBy->count() }} of them
-                            {{ $rescuedBy->count() === 1 ? 'has' : 'have' }} since been tiled by a later run —
-                            retrying would only repeat work that is already done.
-                        </span>
-                    @endif
-                    Retrying re-queues exactly those, with the same settings this run used
-                    @if(filled($operation->params['patch_size'] ?? null))
-                        ({{ $operation->params['patch_size'] }}@if(filled($operation->params['magnification'] ?? null)), {{ $operation->params['magnification'] }}@endif)
-                    @endif
-                    — a new record is opened and this one is left as it stands.
-                </p>
-                <form method="POST" action="{{ route('admin.operations.audit.retry-failed', $operation) }}"
-                      onsubmit="return confirm('Re-queue {{ $retryableCount }} slide(s) from “{{ $operation->name }}”?');">
-                    @csrf
-                    <button type="submit" class="btn btn-warning">
-                        <i class="mdi mdi-refresh mr-1"></i>Retry {{ $retryableCount }} slide(s)
-                    </button>
-                </form>
-            </div>
+@if($canResume)
+<div class="modal fade" id="modal-resume" tabindex="-1" role="dialog" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <form method="POST" action="{{ route('admin.operations.audit.resume', $operation) }}">
+        @csrf
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="mdi mdi-restart mr-1 text-info"></i>Resume unfinished slides</h5>
+          <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
         </div>
+        <div class="modal-body">
+          <p class="text-muted small mb-0">
+            <strong>{{ $stalledCount }} slide(s)</strong> have not reported back. Resuming asks the worker
+            about each one first: any it is still working on are left alone, and only the ones it has
+            forgotten are queued again — inside this same operation, with their attempt count raised.
+            Pressing it while the run is healthy does nothing.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-info">
+            <i class="mdi mdi-restart mr-1"></i>Resume {{ $stalledCount }} slide(s)
+          </button>
+        </div>
+      </form>
     </div>
+  </div>
 </div>
 @endif
 
-{{-- ── Continue the pipeline ─────────────────────────────────────────────────
-     Only the slides this run FINISHED are offered onward. Handing the next
-     stage a failed slide would queue a job that can only fail again, and record
-     work that was never possible. --}}
-@if($nextStage === 'feature_extraction')
-<div class="row grid-margin">
-    <div class="col-12">
-        <div class="card border-left-info">
-            <div class="card-body">
-                <h4 class="card-title mb-1">
-                    <i class="mdi mdi-arrow-right-bold-circle-outline mr-1 text-info"></i>Continue: Feature Extraction
-                </h4>
-                <p class="text-muted small mb-3">
-                    Runs over the
-                    <strong><span id="op-ready-count">{{ $readyIds->count() }}</span> slide(s)</strong>
-                    of this operation whose patches are on Drive right now.
-                    @if($missingOutput > 0)
-                        <span class="text-warning d-block mt-1">
-                            <i class="mdi mdi-alert-outline mr-1"></i>{{ $missingOutput }} other slide(s) are recorded as
-                            completed but their patches are gone, so they cannot go forward until they are re-run.
-                        </span>
-                    @endif
-                    @if($operation->failed_items > 0)
-                        The {{ $operation->failed_items }} failed slide(s) are left out — their patches were never produced.
-                    @endif
-                    @if($operation->is_running)
-                        <span class="text-info d-block mt-1">
-                            <i class="mdi mdi-progress-clock mr-1"></i>This operation is still running; you can start now with
-                            what is finished, or wait and take the rest in one go.
-                        </span>
-                    @endif
-                </p>
-
-                <form method="POST" action="{{ route('admin.operations.audit.dispatch-next', $operation) }}">
-                    @csrf
-                    <div class="d-flex flex-wrap align-items-end" style="gap:.75rem;">
-                        <div class="form-group mb-0" style="min-width:220px;">
-                            <label class="small text-muted mb-1">Server</label>
-                            <select name="server_id" class="form-control" required>
-                                <option value="">— Choose server —</option>
-                                @foreach($servers as $srv)
-                                    <option value="{{ $srv->id }}">{{ $srv->name }}</option>
-                                @endforeach
-                            </select>
-                        </div>
-                        <div class="form-group mb-0" style="min-width:220px;">
-                            <label class="small text-muted mb-1">Feature model</label>
-                            <select name="ai_model_id" class="form-control" required>
-                                <option value="">— Choose model —</option>
-                                @foreach($aiModels as $m)
-                                    <option value="{{ $m->id }}" {{ $m->is_default ? 'selected' : '' }}>{{ $m->name }}</option>
-                                @endforeach
-                            </select>
-                        </div>
-                        {{-- Choosing the pod HERE is what makes two runs on two
-                             cards possible: the run is bound before its first job
-                             leaves. Left empty, it uses whichever pod the server
-                             currently points at — the old behaviour. --}}
-                        <div class="form-group mb-0" style="min-width:260px;">
-                            <label class="small text-muted mb-1">
-                                GPU pod
-                                <button type="button" class="btn btn-link btn-sm p-0 ml-1" id="next-pods-load"
-                                        style="font-size:.75rem; vertical-align:baseline;">refresh</button>
-                            </label>
-                            <select name="pod_id" class="form-control" id="next-pod-select">
-                                <option value="">— whichever the server points at —</option>
-                            </select>
-                            <small class="text-muted d-block mt-1" id="next-pod-hint" style="font-size:.72rem;"></small>
-                        </div>
-                        <div class="form-group mb-0">
-                            <button type="submit" class="btn btn-info" id="op-next-btn"
-                                    {{ $readyIds->isEmpty() ? 'disabled' : '' }}>
-                                <i class="mdi mdi-play mr-1"></i>Run on
-                                <span id="op-ready-count-btn">{{ $readyIds->count() }}</span> slide(s)
-                            </button>
-                        </div>
-                    </div>
-                </form>
-            </div>
+@if($canAdd)
+<div class="modal fade" id="modal-add" tabindex="-1" role="dialog" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <form method="POST" action="{{ route('admin.operations.audit.add-missing', $operation) }}">
+        @csrf
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="mdi mdi-plus-box-outline mr-1 text-warning"></i>Slides still to be added</h5>
+          <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
         </div>
-    </div>
-</div>
-@elseif($nextStage === 'training')
-<div class="row grid-margin">
-    <div class="col-12">
-        <div class="card border-left-info">
-            <div class="card-body">
-                <h4 class="card-title mb-1">
-                    <i class="mdi mdi-arrow-right-bold-circle-outline mr-1 text-info"></i>Continue: Training
-                </h4>
-                <p class="text-muted small mb-3">
-                    {{ $readyIds->count() }} slide(s) here have features ready.
-                    {{-- Training is not offered inline: a run needs a train/val/test phase per
-                         slide and a class map, which are decisions, not a button. --}}
-                    A training run needs a train / validation / test split and a label type
-                    chosen per run, so it is set up on the Operations page rather than launched from here.
-                </p>
-                <a href="{{ route('admin.workflow', ['operation_type' => 'training']) }}" class="btn btn-info">
-                    <i class="mdi mdi-school-outline mr-1"></i>Set up a training run
-                </a>
-            </div>
+        <div class="modal-body">
+          <p class="text-muted small mb-0">
+            <strong>{{ $awaitingFromParent->count() }} slide(s)</strong> of
+            <a href="{{ route('admin.operations.audit.show', $parent) }}">{{ $parent->reference }}</a>
+            are not in this run — they had no patches when it started.
+            @if($addableNow > 0)
+              <span class="text-success d-block mt-2">
+                <i class="mdi mdi-check-circle-outline mr-1"></i>{{ $addableNow }} of them are tiled now
+                and can be added to this run.
+              </span>
+            @else
+              <span class="text-warning d-block mt-2">
+                <i class="mdi mdi-clock-outline mr-1"></i>None are tiled yet. Re-run them in
+                {{ $parent->reference }} first.
+              </span>
+            @endif
+          </p>
         </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-warning" {{ $addableNow === 0 ? 'disabled' : '' }}>
+            <i class="mdi mdi-plus mr-1"></i>Add {{ $addableNow }} slide(s)
+          </button>
+        </div>
+      </form>
     </div>
+  </div>
 </div>
 @endif
+
+@if($canRetry)
+<div class="modal fade" id="modal-retry" tabindex="-1" role="dialog" aria-hidden="true">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <form method="POST" action="{{ route('admin.operations.audit.retry-failed', $operation) }}">
+        @csrf
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="mdi mdi-refresh mr-1 text-warning"></i>Retry slides</h5>
+          <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted small mb-0">
+            <strong>{{ $retryableCount }} slide(s)</strong> need running again.
+            @if($missingOutput > 0)
+              <span class="d-block mt-2">{{ $missingOutput }} of them count as done here, but their patches
+              are no longer on Drive.</span>
+            @endif
+            They stay in this operation and it records how they finish; the attempt count rises, so the
+            earlier failure is still on record.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-warning">
+            <i class="mdi mdi-refresh mr-1"></i>Retry {{ $retryableCount }} slide(s)
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+@endif
+
+@endpush
 
 {{-- ── Items ─────────────────────────────────────────────────────────────── --}}
 <div class="row">
@@ -645,15 +649,21 @@
 (function () {
     var loadBtn  = document.getElementById('next-pods-load');
     var select   = document.getElementById('next-pod-select');
-    var hint     = document.getElementById('next-pod-hint');
     if (!loadBtn || !select) return;
 
     var serverSelect = select.closest('form').querySelector('[name="server_id"]');
     var BASE = @json(route('admin.operations.audit.pods', $operation));
 
-    function reset(message) {
-        select.innerHTML = '<option value="">— whichever the server points at —</option>';
-        hint.textContent = message;
+    // Status is written INTO the placeholder option. Anything under the field
+    // would appear only after a load and shift everything below it.
+    function reset(status) {
+        select.innerHTML = '';
+        var first = document.createElement('option');
+        first.value = '';
+        first.textContent = status
+            ? '— ' + status + ' —'
+            : '— whichever the server points at —';
+        select.appendChild(first);
     }
 
     // A pod list belongs to one server; changing the server invalidates it.
@@ -669,9 +679,9 @@
 
     function load() {
         var serverId = serverSelect ? serverSelect.value : '';
-        if (!serverId) { hint.textContent = 'Choose a server first.'; return; }
+        if (!serverId) { reset('choose a server first'); return; }
 
-        hint.textContent = 'Loading pods…';
+        reset('loading…');
         loadBtn.disabled = true;
 
         fetch(BASE + '?server_id=' + encodeURIComponent(serverId), {
@@ -680,14 +690,14 @@
             .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
             .then(function (res) {
                 loadBtn.disabled = false;
-                if (!res.ok) { reset(res.d.error || 'Could not list pods.'); return; }
+                if (!res.ok) { reset('could not list pods'); return; }
 
                 var pods = (res.d.pods || []);
                 var running = pods.filter(function (p) { return p.running; });
 
                 reset(running.length
-                    ? running.length + ' running pod(s). Leave blank to use the server default.'
-                    : 'No running pod on this account — start one on RunPod first.');
+                    ? 'server default · ' + running.length + ' running'
+                    : 'no running pod — start one on RunPod');
 
                 running.forEach(function (p) {
                     var o = document.createElement('option');
@@ -706,7 +716,7 @@
                     select.appendChild(o);
                 });
             })
-            .catch(function () { loadBtn.disabled = false; reset('Could not reach RunPod.'); });
+            .catch(function () { loadBtn.disabled = false; reset('could not reach RunPod'); });
     }
 
     loadBtn.addEventListener('click', load);
