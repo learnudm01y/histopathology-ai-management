@@ -31,6 +31,10 @@ use Illuminate\Support\Facades\Log;
  */
 class OperationCanceller
 {
+    public function __construct(private readonly QueuedJobLookup $queue)
+    {
+    }
+
     /** Which job class carries the work for each operation kind. */
     private const JOB_CLASS = [
         'patch_extraction'   => PatchExtractionJob::class,
@@ -98,38 +102,9 @@ class OperationCanceller
             return 0;
         }
 
-        $removed = 0;
+        $rowIds = $this->queue->jobRowIds($jobClass, $sampleIds, onlyUnreserved: true);
 
-        DB::table('jobs')->whereNull('reserved_at')->orderBy('id')
-            ->select('id', 'payload')->chunk(200, function ($rows) use ($jobClass, $sampleIds, &$removed) {
-                $doomed = [];
-
-                foreach ($rows as $row) {
-                    $command = json_decode($row->payload, true)['data']['command'] ?? null;
-                    if (! is_string($command) || ! str_contains($command, $jobClass)) {
-                        continue;
-                    }
-
-                    // Unserialising is what makes this exact: a substring match on
-                    // the id would also hit an unrelated job whose numbers happen
-                    // to line up.
-                    try {
-                        $job = unserialize($command, ['allowed_classes' => true]);
-                    } catch (\Throwable) {
-                        continue;
-                    }
-
-                    if ($job instanceof $jobClass && in_array((int) $job->sampleId, $sampleIds, true)) {
-                        $doomed[] = $row->id;
-                    }
-                }
-
-                if ($doomed !== []) {
-                    $removed += DB::table('jobs')->whereIn('id', $doomed)->delete();
-                }
-            });
-
-        return $removed;
+        return $rowIds === [] ? 0 : DB::table('jobs')->whereIn('id', $rowIds)->delete();
     }
 
     /** Put the slides back to the state they were in before this run claimed them. */
