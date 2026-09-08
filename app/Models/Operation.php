@@ -247,6 +247,64 @@ class Operation extends Model
         return self::unresolvedFailureCounts([$this->id])[$this->id] ?? 0;
     }
 
+    /**
+     * Slides this run has to do (again) before its record is true.
+     *
+     * Two kinds, and both need the same treatment:
+     *   • the ones that failed or were cancelled — never finished;
+     *   • the ones recorded as completed whose output is GONE. A slide can lose
+     *     its patches after the fact, most obviously when another operation
+     *     covering the same slide is deleted with its files. The record still
+     *     says completed while nothing is on Drive, and the next stage silently
+     *     skips it — which is how a 50-slide run fed only 27 slides forward.
+     *
+     * @return \Illuminate\Support\Collection<int, int>  sample ids
+     */
+    public function sampleIdsNeedingWork(): Collection
+    {
+        $pathColumn = match ($this->type) {
+            'patch_extraction'   => 'tiles_gdrive_path',
+            'feature_extraction' => 'features_gdrive_path',
+            default              => null,
+        };
+
+        return $this->items()
+            ->join('samples as s', 's.id', '=', 'operation_items.sample_id')
+            ->where(function ($q) use ($pathColumn) {
+                $q->whereIn('operation_items.status', ['failed', 'cancelled']);
+
+                if ($pathColumn !== null) {
+                    $q->orWhere(fn ($inner) => $inner
+                        ->where('operation_items.status', 'completed')
+                        ->whereNull("s.{$pathColumn}"));
+                }
+            })
+            ->pluck('operation_items.sample_id')
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->values();
+    }
+
+    /** Items recorded as completed whose output is no longer on Drive. */
+    public function missingOutputCount(): int
+    {
+        $pathColumn = match ($this->type) {
+            'patch_extraction'   => 'tiles_gdrive_path',
+            'feature_extraction' => 'features_gdrive_path',
+            default              => null,
+        };
+
+        if ($pathColumn === null) {
+            return 0;
+        }
+
+        return $this->items()
+            ->join('samples as s', 's.id', '=', 'operation_items.sample_id')
+            ->where('operation_items.status', 'completed')
+            ->whereNull("s.{$pathColumn}")
+            ->count();
+    }
+
     /** A run that failed slides, every one of which a later run has since tiled. */
     public function getIsFullyResolvedAttribute(): bool
     {

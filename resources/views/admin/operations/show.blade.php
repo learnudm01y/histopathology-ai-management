@@ -163,16 +163,27 @@
 {{-- ── Retry ────────────────────────────────────────────────────────────────
      A retry opens a new operation under the same settings; this record keeps
      saying what happened here. --}}
-@if($operation->type === 'patch_extraction' && $retryableCount > 0 && ! $operation->is_fully_resolved)
+@if($operation->type === 'patch_extraction' && $retryableCount > 0 && (! $operation->is_fully_resolved || $missingOutput > 0))
 <div class="row grid-margin">
     <div class="col-12">
         <div class="card border-left-warning">
             <div class="card-body">
                 <h4 class="card-title mb-1">
-                    <i class="mdi mdi-refresh mr-1 text-warning"></i>Retry failed slides
+                    <i class="mdi mdi-refresh mr-1 text-warning"></i>Re-run {{ $missingOutput > 0 ? 'missing' : 'failed' }} slides
                 </h4>
+                @if($missingOutput > 0)
+                    {{-- Recorded as completed, but the patches are not there any more —
+                         most often because another operation covering the same slides was
+                         deleted with its files. The next stage skips these silently. --}}
+                    <div class="alert alert-warning py-2 px-3 mb-3" style="font-size:.85rem;">
+                        <i class="mdi mdi-alert-outline mr-1"></i>
+                        <strong>{{ $missingOutput }} slide(s) recorded as completed no longer have their patches.</strong>
+                        Their files were removed after this run finished, so Feature Extraction
+                        skips them. Re-running restores them to this operation.
+                    </div>
+                @endif
                 <p class="text-muted small mb-3">
-                    <strong>{{ $retryableCount }} slide(s)</strong> in this run did not finish.
+                    <strong>{{ $retryableCount }} slide(s)</strong> in this run need work.
                     They are re-queued <strong>inside this operation</strong> — it stays their group and
                     reports how they end up, keeping a count of the attempts it took.
                     @if($rescuedBy->isNotEmpty())
@@ -216,7 +227,13 @@
                 <p class="text-muted small mb-3">
                     Runs over the
                     <strong><span id="op-ready-count">{{ $readyIds->count() }}</span> slide(s)</strong>
-                    this operation has finished tiling.
+                    of this operation whose patches are on Drive right now.
+                    @if($missingOutput > 0)
+                        <span class="text-warning d-block mt-1">
+                            <i class="mdi mdi-alert-outline mr-1"></i>{{ $missingOutput }} other slide(s) are recorded as
+                            completed but their patches are gone, so they cannot go forward until they are re-run.
+                        </span>
+                    @endif
                     @if($operation->failed_items > 0)
                         The {{ $operation->failed_items }} failed slide(s) are left out — their patches were never produced.
                     @endif

@@ -206,15 +206,26 @@ class OperationsAuditController extends Controller
         // Failed and skipped slides are deliberately excluded: handing a stage
         // a slide whose patches never materialised only queues a job that must
         // fail, and writes a record claiming work that was never possible.
-        $nextStage    = self::NEXT_STAGE[$operation->type] ?? null;
-        $readyIds     = $operation->items()->where('status', 'completed')->pluck('sample_id')->filter()->values();
+        // What the next stage will ACTUALLY take: a completed item whose patches
+        // have since gone is skipped by the dispatcher, so counting it here
+        // would promise 50 slides and queue 27 with no explanation.
+        $nextStage = self::NEXT_STAGE[$operation->type] ?? null;
+        $readyIds  = $operation->items()
+            ->join('samples as s', 's.id', '=', 'operation_items.sample_id')
+            ->where('operation_items.status', 'completed')
+            ->when($operation->type === 'patch_extraction',
+                fn ($q) => $q->whereNotNull('s.tiles_gdrive_path'))
+            ->pluck('operation_items.sample_id')
+            ->filter()
+            ->values();
         $servers      = ServerName::where('is_active', true)->orderBy('name')->get(['id', 'name']);
         $aiModels     = AiModel::where('is_active', true)->orderByDesc('is_default')->orderBy('name')->get(['id', 'name', 'is_default']);
         $followUps    = $operation->children();
         $parent       = $operation->parent();
 
-        // Slides that did not finish, and so can be run again.
-        $retryableCount = $operation->items()->whereIn('status', ['failed', 'cancelled'])->count();
+        // Slides that did not finish, plus any whose output has gone missing.
+        $retryableCount = $operation->sampleIdsNeedingWork()->count();
+        $missingOutput  = $operation->missingOutputCount();
 
         // A slide this run failed may have been finished by a later run. This
         // record stays truthful about what IT did, but a reader looking at a
@@ -240,7 +251,7 @@ class OperationsAuditController extends Controller
         return view('admin.operations.show', compact(
             'operation', 'items', 'caseCount', 'breakdown', 'itemStatus',
             'nextStage', 'readyIds', 'servers', 'aiModels', 'followUps', 'parent',
-            'retryableCount', 'rescuedBy'
+            'retryableCount', 'rescuedBy', 'missingOutput'
         ));
     }
 
@@ -316,15 +327,13 @@ class OperationsAuditController extends Controller
                 'This operation did not record the settings it ran with, so it cannot be repeated automatically. Re-dispatch it from the Operations page.');
         }
 
-        $sampleIds = $operation->items()
-            ->whereIn('status', ['failed', 'cancelled'])
-            ->pluck('sample_id')
-            ->filter()
-            ->map(fn ($id) => (int) $id)
-            ->all();
+        // Covers both the slides that never finished and the ones whose patches
+        // have since gone missing — the record is only true again once both
+        // kinds are back.
+        $sampleIds = $operation->sampleIdsNeedingWork()->all();
 
         if ($sampleIds === []) {
-            return back()->with('error', 'Nothing in this operation failed, so there is nothing to retry.');
+            return back()->with('error', 'Every slide in this operation is finished and its patches are in place — there is nothing to re-run.');
         }
 
         $result = $this->dispatcher->retryWithin($operation, $sampleIds);

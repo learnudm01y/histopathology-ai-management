@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Operation;
+use App\Models\OperationItem;
 use App\Models\Sample;
 use App\Services\GoogleDriveService;
 use Illuminate\Bus\Queueable;
@@ -25,6 +26,13 @@ use Illuminate\Support\Facades\Log;
  * can be regenerated from them in an afternoon, the slides cannot be recovered
  * at all. Nothing here reads those columns, and the paths purged come only from
  * `tiles_gdrive_path` / `features_gdrive_path`.
+ *
+ * WHAT THIS MUST NOT DELETE EITHER: output another operation still accounts
+ * for. Two runs dispatched over overlapping selections tile the same slide to
+ * the same place, so the patches are one artefact with two owners. Purging on
+ * behalf of one owner destroyed the other's output while leaving its record
+ * saying "completed" — which is exactly what happened when operation #3 was
+ * deleted on 2026-09-07 and took 23 of operation #2's slides with it.
  *
  * Queued because purging dozens of Drive folders is minutes of rclone calls,
  * and on the `operations` queue so it lines up behind the work it cleans up
@@ -59,8 +67,26 @@ class DeleteOperationArtifactsJob implements ShouldQueue
         $purged = 0;
         $failed = 0;
         $cleared = 0;
+        $shared  = 0;
+
+        // Slides whose output another operation of this kind also records as
+        // completed. That run still needs them, so they are left alone.
+        $claimedElsewhere = OperationItem::query()
+            ->join('operations as o', 'o.id', '=', 'operation_items.operation_id')
+            ->where('o.type', $operation->type)
+            ->where('operation_items.operation_id', '!=', $operation->id)
+            ->where('operation_items.status', 'completed')
+            ->whereIn('operation_items.sample_id', $operation->items->pluck('sample_id')->filter())
+            ->pluck('operation_items.sample_id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
 
         foreach ($operation->items as $item) {
+            if (in_array((int) $item->sample_id, $claimedElsewhere, true)) {
+                $shared++;
+                continue;
+            }
+
             /** @var Sample|null $sample */
             $sample = $item->sample_id ? Sample::find($item->sample_id) : null;
 
@@ -114,8 +140,9 @@ class DeleteOperationArtifactsJob implements ShouldQueue
         }
 
         Log::info(sprintf(
-            '[DeleteOperationArtifacts] Operation #%d (%s): %d folder(s) purged, %d failed, %d slide(s) reset.',
-            $operation->id, $operation->type, $purged, $failed, $cleared
+            '[DeleteOperationArtifacts] Operation #%d (%s): %d folder(s) purged, %d failed, %d slide(s) reset, '
+            . '%d slide(s) kept because another operation still accounts for their output.',
+            $operation->id, $operation->type, $purged, $failed, $cleared, $shared
         ));
 
         if ($this->deleteRecord) {
