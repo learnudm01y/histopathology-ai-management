@@ -68,13 +68,22 @@ class FeatureExtractionJob implements ShouldQueue
      */
     public ?string $endpoint = null;
 
+    /**
+     * The operation this slide belongs to, when it was dispatched as part of
+     * one. Declared with a default rather than promoted so that a payload
+     * serialised before this property existed still unserialises cleanly.
+     */
+    public ?int $operationId = null;
+
     public function __construct(
         public readonly int $sampleId,
         public readonly int $serverId,
         public readonly int $aiModelId,
         ?string $endpoint = null,
+        ?int $operationId = null,
     ) {
-        $this->endpoint = $endpoint;
+        $this->endpoint    = $endpoint;
+        $this->operationId = $operationId;
         $this->onQueue('operations');
     }
 

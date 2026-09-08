@@ -127,7 +127,7 @@ class OperationDispatcher
                 'feature_extraction_error'  => null,
             ]);
 
-            FeatureExtractionJob::dispatch((int) $sample->id, (int) $server->id, $aiModel, $operation->id);
+            FeatureExtractionJob::dispatch((int) $sample->id, (int) $server->id, $aiModel, null, $operation->id);
         }
 
         Log::info(sprintf(
@@ -212,7 +212,7 @@ class OperationDispatcher
                 'feature_extraction_error'       => null,
             ]);
 
-            FeatureExtractionJob::dispatch((int) $sample->id, $server, $aiModel);
+            FeatureExtractionJob::dispatch((int) $sample->id, $server, $aiModel, null, $operation->id);
         }
 
         Log::info(sprintf(
@@ -394,15 +394,6 @@ class OperationDispatcher
             }
 
             $accepted->push($sample);
-
-            $sample->update([
-                'feature_extraction_status'      => 'processing',
-                'feature_extraction_ai_model_id' => $aiModelId,
-                'feature_extraction_server_id'   => $serverId,
-                'feature_extraction_error'       => null,
-            ]);
-
-            FeatureExtractionJob::dispatch((int) $sample->id, $serverId, $aiModelId);
         }
 
         if ($accepted->isEmpty()) {
@@ -427,6 +418,20 @@ class OperationDispatcher
                 'source_operation_id' => $parent?->id,
             ], fn ($v) => $v !== null),
         );
+
+        // Dispatched only once the operation exists, so each job can carry its
+        // id and record the worker's job id against the right item. Without
+        // that, resuming this run later has nothing to ask the worker about.
+        foreach ($accepted as $sample) {
+            $sample->update([
+                'feature_extraction_status'      => 'processing',
+                'feature_extraction_ai_model_id' => $aiModelId,
+                'feature_extraction_server_id'   => $serverId,
+                'feature_extraction_error'       => null,
+            ]);
+
+            FeatureExtractionJob::dispatch((int) $sample->id, $serverId, $aiModelId, null, $operation->id);
+        }
 
         return ['queued' => $accepted->count(), 'skipped' => $skipped, 'operation' => $operation];
     }
