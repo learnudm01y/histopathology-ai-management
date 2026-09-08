@@ -153,10 +153,19 @@ class OperationsAuditController extends Controller
 
         $operations = $query->paginate(20)->withQueryString();
 
+        // One query for the page, so "1 failed" can be told apart from
+        // "1 failed, since tiled by a retry".
+        Operation::loadResolution($operations->getCollection());
+
+        $withFailures = Operation::whereIn('status', ['failed', 'completed_with_failures'])->get();
+        Operation::loadResolution($withFailures);
+
         $stats = [
             'total'   => Operation::count(),
             'running' => Operation::whereNotIn('status', Operation::TERMINAL)->count(),
-            'failed'  => Operation::whereIn('status', ['failed', 'completed_with_failures'])->count(),
+            // Only runs with something still outstanding — a failure a later run
+            // has made good is not a problem anyone needs to look at.
+            'failed'  => $withFailures->filter(fn ($o) => $o->unresolved_failures > 0)->count(),
             'slides'  => (int) Operation::sum('total_items'),
         ];
 

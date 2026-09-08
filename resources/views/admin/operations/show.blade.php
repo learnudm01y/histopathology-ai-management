@@ -100,8 +100,22 @@
                         <h5 class="mb-0 text-success" id="op-completed-stat">{{ number_format($operation->completed_items) }}</h5>
                     </div>
                     <div class="col-md-3 col-6 mb-2">
-                        <p class="text-muted mb-0 small">Failed</p>
-                        <h5 class="mb-0 text-danger" id="op-failed-stat">{{ number_format($operation->failed_items) }}</h5>
+                        @if($operation->is_fully_resolved)
+                            {{-- Nothing outstanding: every slide this run failed was tiled later. --}}
+                            <p class="text-muted mb-0 small">Failed here, resolved later</p>
+                            <h5 class="mb-0 text-success">
+                                {{ number_format($operation->failed_items) }}
+                                <i class="mdi mdi-check-circle-outline"></i>
+                            </h5>
+                        @else
+                            <p class="text-muted mb-0 small">Failed{{ $operation->failed_items > $operation->unresolved_failures ? ' (still outstanding)' : '' }}</p>
+                            <h5 class="mb-0 text-danger" id="op-failed-stat">{{ number_format($operation->unresolved_failures) }}</h5>
+                            @if($operation->failed_items > $operation->unresolved_failures)
+                                <small class="text-success">
+                                    +{{ $operation->failed_items - $operation->unresolved_failures }} resolved later
+                                </small>
+                            @endif
+                        @endif
                     </div>
                 </div>
 
@@ -149,7 +163,7 @@
 {{-- ── Retry ────────────────────────────────────────────────────────────────
      A retry opens a new operation under the same settings; this record keeps
      saying what happened here. --}}
-@if($operation->type === 'patch_extraction' && $retryableCount > 0)
+@if($operation->type === 'patch_extraction' && $retryableCount > 0 && ! $operation->is_fully_resolved)
 <div class="row grid-margin">
     <div class="col-12">
         <div class="card border-left-warning">

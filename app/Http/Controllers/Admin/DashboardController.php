@@ -37,6 +37,9 @@ class DashboardController extends Controller
             ->limit(5)
             ->get();
 
+        // So the dashboard agrees with the audit about what still needs looking at.
+        \App\Models\Operation::loadResolution($recentOperations);
+
         $sampleStats = [
             'total'           => Sample::count(),
             'available'       => Sample::where('storage_status', 'available')->count(),

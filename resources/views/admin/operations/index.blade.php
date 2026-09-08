@@ -60,7 +60,7 @@
         <div class="card"><div class="card-body">
             <div class="d-flex justify-content-between">
                 <div>
-                    <p class="font-weight-medium mb-1 text-muted">With Failures</p>
+                    <p class="font-weight-medium mb-1 text-muted" title="Runs with a failure nothing has since made good">Needing Attention</p>
                     <h3 class="font-weight-bold mb-0 text-danger">{{ number_format($stats['failed']) }}</h3>
                 </div>
                 <i class="mdi mdi-alert-circle-outline icon-lg text-danger"></i>
@@ -175,8 +175,13 @@
                                     <small class="text-muted">
                                         {{ $operation->progress_percent }}% —
                                         {{ $operation->completed_items }} done
-                                        @if($operation->failed_items)
-                                            · <span class="text-danger">{{ $operation->failed_items }} failed</span>
+                                        @if($operation->is_fully_resolved)
+                                            · <span class="text-success">{{ $operation->failed_items }} resolved later</span>
+                                        @elseif($operation->failed_items)
+                                            · <span class="text-danger">{{ $operation->unresolved_failures }} failed</span>
+                                            @if($operation->failed_items > $operation->unresolved_failures)
+                                                · <span class="text-success">{{ $operation->failed_items - $operation->unresolved_failures }} resolved later</span>
+                                            @endif
                                         @endif
                                     </small>
                                 </td>

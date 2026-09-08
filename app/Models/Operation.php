@@ -47,6 +47,11 @@ class Operation extends Model
         'finished_at' => 'datetime',
     ];
 
+    /** Filled by loadResolution(); kept off $attributes so it is never saved. */
+    public bool $resolutionLoaded = false;
+
+    public int $unresolvedFailuresCount = 0;
+
     public function items(): HasMany
     {
         return $this->hasMany(OperationItem::class);
@@ -221,6 +226,75 @@ class Operation extends Model
         ])->save();
     }
 
+    /**
+     * Failures on this record that no later run has since made good.
+     *
+     * The stored status says what THIS run did and never changes — crediting it
+     * with another run's work would be a lie. But "1 failed" on its own reads as
+     * outstanding work, when the slide may have been tiled an hour later by a
+     * retry. This is the difference between the two, and it is what the badge
+     * and the list actually need to show.
+     *
+     * Set in bulk by {@see self::loadResolution()} when several operations are
+     * listed; falls back to its own query for a single one.
+     */
+    public function getUnresolvedFailuresAttribute(): int
+    {
+        if ($this->resolutionLoaded) {
+            return $this->unresolvedFailuresCount;
+        }
+
+        return self::unresolvedFailureCounts([$this->id])[$this->id] ?? 0;
+    }
+
+    /** A run that failed slides, every one of which a later run has since tiled. */
+    public function getIsFullyResolvedAttribute(): bool
+    {
+        return $this->failed_items > 0 && $this->unresolved_failures === 0;
+    }
+
+    /**
+     * Fill in the resolution state for a whole page of operations in one query,
+     * so a list of twenty does not become twenty-one.
+     *
+     * @param  \Illuminate\Support\Collection<int, self>  $operations
+     */
+    public static function loadResolution(Collection $operations): void
+    {
+        $counts = self::unresolvedFailureCounts($operations->pluck('id')->all());
+
+        foreach ($operations as $operation) {
+            $operation->resolutionLoaded        = true;
+            $operation->unresolvedFailuresCount = (int) ($counts[$operation->id] ?? 0);
+        }
+    }
+
+    /**
+     * Failed items, per operation, that no later operation completed.
+     *
+     * @param  array<int, int>  $operationIds
+     * @return \Illuminate\Support\Collection<int, int>
+     */
+    private static function unresolvedFailureCounts(array $operationIds): Collection
+    {
+        if ($operationIds === []) {
+            return collect();
+        }
+
+        return DB::table('operation_items as oi')
+            ->whereIn('oi.operation_id', $operationIds)
+            ->whereIn('oi.status', ['failed', 'cancelled'])
+            ->whereNotExists(fn ($q) => $q
+                ->select(DB::raw(1))
+                ->from('operation_items as later')
+                ->whereColumn('later.sample_id', 'oi.sample_id')
+                ->whereColumn('later.operation_id', '>', 'oi.operation_id')
+                ->where('later.status', 'completed'))
+            ->selectRaw('oi.operation_id, COUNT(*) as total')
+            ->groupBy('oi.operation_id')
+            ->pluck('total', 'operation_id');
+    }
+
     public function getIsRunningAttribute(): bool
     {
         return ! in_array($this->status, self::TERMINAL, true);
@@ -246,6 +320,13 @@ class Operation extends Model
     /** Bootstrap contextual colour, shared by the badge and the progress bar. */
     public function getStatusColourAttribute(): string
     {
+        // A run whose every failure has since been made good is not outstanding
+        // work, and colouring it like an open problem sends people to fix
+        // something that is already fixed.
+        if ($this->is_fully_resolved) {
+            return 'success';
+        }
+
         return match ($this->status) {
             'completed'               => 'success',
             'completed_with_failures' => 'warning',
@@ -255,8 +336,20 @@ class Operation extends Model
         };
     }
 
+    /**
+     * What to show on the badge.
+     *
+     * The stored status stays as it is — this run really did fail those slides.
+     * The label adds what happened next, because a reader needs to know whether
+     * anything is still outstanding, and "Completed with failures" alone does
+     * not say.
+     */
     public function getStatusLabelAttribute(): string
     {
+        if ($this->is_fully_resolved) {
+            return 'Resolved in a later run';
+        }
+
         return match ($this->status) {
             'completed_with_failures' => 'Completed with failures',
             default                   => ucfirst($this->status),
