@@ -94,7 +94,7 @@
                                 </span>
                             </div>
                             <input type="text" name="search" value="{{ $filters['search'] }}"
-                                   class="form-control border-left-0 pl-0" placeholder="Operation name…">
+                                   class="form-control border-left-0 pl-0" placeholder="Reference (OP-…) or name">
                         </div>
 
                         <select name="type" class="form-control" style="width:auto;min-width:180px;">
@@ -138,7 +138,7 @@
                     <table class="table table-hover align-middle">
                         <thead>
                             <tr>
-                                <th>#</th>
+                                <th style="min-width:150px;">Reference</th>
                                 <th>Operation</th>
                                 <th>Type</th>
                                 <th style="min-width:180px;">Progress</th>
@@ -152,7 +152,10 @@
                         <tbody>
                         @forelse($operations as $operation)
                             <tr>
-                                <td class="text-muted">{{ $operation->id }}</td>
+                                {{-- The handle to quote when referring to this run elsewhere. --}}
+                                <td>
+                                    <code class="op-reference" style="font-size:.82rem;">{{ $operation->reference }}</code>
+                                </td>
                                 <td>
                                     {{-- The name is the way in: everything about the run is behind it. --}}
                                     <a href="{{ route('admin.operations.audit.show', $operation) }}"

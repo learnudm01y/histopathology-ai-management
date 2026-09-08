@@ -22,7 +22,7 @@
         <ol class="breadcrumb">
             <li class="breadcrumb-item"><a href="{{ route('admin.dashboard') }}">Dashboard</a></li>
             <li class="breadcrumb-item"><a href="{{ route('admin.operations.audit.index') }}">Operations Audit</a></li>
-            <li class="breadcrumb-item active" aria-current="page">#{{ $operation->id }}</li>
+            <li class="breadcrumb-item active" aria-current="page">{{ $operation->reference }}</li>
         </ol>
     </nav>
 </div>
@@ -34,6 +34,10 @@
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-start flex-wrap" style="gap:1rem;">
                     <div>
+                        {{-- The reference leads: it is what gets quoted elsewhere. --}}
+                        <div class="mb-1">
+                            <code style="font-size:.95rem;">{{ $operation->reference }}</code>
+                        </div>
                         <h4 class="mb-1">{{ $operation->name }}</h4>
                         <span class="badge badge-light border mr-1">{{ $operation->type_label }}</span>
                         <span class="badge badge-{{ $operation->status_colour }}">{{ $operation->status_label }}</span>
@@ -155,6 +159,13 @@
                 </h4>
                 <p class="text-muted small mb-3">
                     <strong>{{ $retryableCount }} slide(s)</strong> in this run did not finish.
+                    @if($rescuedBy->isNotEmpty())
+                        <span class="text-success d-block mt-1">
+                            <i class="mdi mdi-check-circle-outline mr-1"></i>{{ $rescuedBy->count() }} of them
+                            {{ $rescuedBy->count() === 1 ? 'has' : 'have' }} since been tiled by a later run —
+                            retrying would only repeat work that is already done.
+                        </span>
+                    @endif
                     Retrying re-queues exactly those, with the same settings this run used
                     @if(filled($operation->params['patch_size'] ?? null))
                         ({{ $operation->params['patch_size'] }}@if(filled($operation->params['magnification'] ?? null)), {{ $operation->params['magnification'] }}@endif)
@@ -336,6 +347,25 @@
                                     <span class="badge badge-{{ $item->status_colour }} item-status-badge">{{ ucfirst($item->status) }}</span>
                                     @if($operation->type === 'patch_extraction' && $item->sample?->tile_count)
                                         <div class="small text-muted mt-1">{{ number_format($item->sample->tile_count) }} tiles</div>
+                                    @endif
+                                    {{-- This run did not finish the slide, but a later one did. Said
+                                         here so a failure on record is not mistaken for a slide that
+                                         is still missing. --}}
+                                    @if($rescuedBy->has($item->sample_id))
+                                        @php($rescue = $rescuedBy[$item->sample_id])
+                                        <div class="small mt-1">
+                                            <span class="text-success">
+                                                <i class="mdi mdi-check-circle-outline"></i> recovered later
+                                            </span>
+                                            <a href="{{ route('admin.operations.audit.show', $rescue) }}"
+                                               title="This slide was completed by a later run">
+                                                {{ $rescue->reference }}
+                                            </a>
+                                        </div>
+                                    @elseif(in_array($item->status, ['failed', 'cancelled'], true))
+                                        <div class="small text-danger mt-1">
+                                            <i class="mdi mdi-alert-outline"></i> still not tiled
+                                        </div>
                                     @endif
                                 </td>
                             </tr>

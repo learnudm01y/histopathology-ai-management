@@ -121,6 +121,21 @@ class Operation extends Model
         return implode(' · ', $parts);
     }
 
+    /**
+     * The handle people quote when they talk about a run: OP-20260907-0004.
+     *
+     * Derived, not stored, from two values that can never change — the date it
+     * opened and its id — so it is stable for ever without a column to keep in
+     * step. The date leads because runs are looked for by when they happened;
+     * the id makes it unique on a day when several were opened.
+     */
+    public function getReferenceAttribute(): string
+    {
+        $opened = $this->started_at ?? $this->created_at;
+
+        return sprintf('OP-%s-%04d', ($opened ?? now())->format('Ymd'), $this->id);
+    }
+
     /** The operation this one was launched from, when it continues a chain. */
     public function parent(): ?self
     {

@@ -134,7 +134,21 @@ class OperationsAuditController extends Controller
             $query->where('status', $filters['status']);
         }
         if ($filters['search']) {
-            $query->where('name', 'like', '%' . $filters['search'] . '%');
+            $search = trim($filters['search']);
+
+            // A reference is OP-<date>-<id>, and the id is the part that finds
+            // the row. Someone quoting a reference should land on it, whether
+            // they paste the whole thing or just the number.
+            $referenceId = preg_match('/^OP-\d{8}-(\d+)$/i', $search, $m)
+                ? (int) $m[1]
+                : (ctype_digit($search) ? (int) $search : null);
+
+            $query->where(function ($q) use ($search, $referenceId) {
+                $q->where('name', 'like', '%' . $search . '%');
+                if ($referenceId !== null) {
+                    $q->orWhere('id', $referenceId);
+                }
+            });
         }
 
         $operations = $query->paginate(20)->withQueryString();
@@ -193,9 +207,31 @@ class OperationsAuditController extends Controller
         // Slides that did not finish, and so can be run again.
         $retryableCount = $operation->items()->whereIn('status', ['failed', 'cancelled'])->count();
 
+        // A slide this run failed may have been finished by a later run. This
+        // record stays truthful about what IT did, but a reader looking at a
+        // failure needs to know whether the slide was ever recovered — without
+        // it, work that has since been done reads as work still missing.
+        $unfinished     = $items->getCollection()
+            ->whereIn('status', ['failed', 'cancelled'])
+            ->pluck('sample_id')->filter();
+
+        $rescuedBy = $unfinished->isEmpty()
+            ? collect()
+            : \App\Models\OperationItem::with('operation')
+                ->whereIn('sample_id', $unfinished)
+                ->where('operation_id', '>', $operation->id)
+                ->where('status', 'completed')
+                // Descending, so keyBy leaves the LOWEST id in place: the first
+                // run that recovered the slide, not the most recent one to touch it.
+                ->orderByDesc('operation_id')
+                ->get(['id', 'sample_id', 'operation_id'])
+                ->keyBy('sample_id')
+                ->map(fn ($item) => $item->operation);
+
         return view('admin.operations.show', compact(
             'operation', 'items', 'caseCount', 'breakdown', 'itemStatus',
-            'nextStage', 'readyIds', 'servers', 'aiModels', 'followUps', 'parent', 'retryableCount'
+            'nextStage', 'readyIds', 'servers', 'aiModels', 'followUps', 'parent',
+            'retryableCount', 'rescuedBy'
         ));
     }
 
