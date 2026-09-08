@@ -12,6 +12,7 @@ use App\Models\PatchSize;
 use App\Models\Sample;
 use App\Models\ServerName;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -26,6 +27,117 @@ use Illuminate\Support\Facades\Log;
  */
 class OperationDispatcher
 {
+    /**
+     * Re-dispatch the slides of a run that the GPU worker has forgotten.
+     *
+     * The worker holds its queue in memory. Restarting it — to change settings,
+     * or because the pod stopped — drops everything waiting there, while
+     * Laravel goes on showing those slides as in flight for ever.
+     *
+     * Resuming asks the worker about each unfinished slide before touching it:
+     *
+     *   • the worker still knows it (queued or running) → LEFT ALONE. This is
+     *     what makes the button safe to press twice, and safe to press while
+     *     the run is genuinely working.
+     *   • the worker has forgotten it, or reports it failed → re-dispatched
+     *     inside this same operation.
+     *   • the worker cannot be reached at all → nothing is dispatched, because
+     *     "no answer" is not evidence the work was lost, and guessing wrong
+     *     doubles every slide in the run.
+     *
+     * @return array{requeued: int, still_running: int, unreachable: bool}
+     */
+    public function resumeStalled(Operation $operation): array
+    {
+        $params  = $operation->params ?? [];
+        $server  = ServerName::find($params['server_id'] ?? 0);
+        $aiModel = (int) ($params['ai_model_id'] ?? 0);
+
+        if ($operation->type !== 'feature_extraction' || ! $server || ! $server->api_url || $aiModel === 0) {
+            return ['requeued' => 0, 'still_running' => 0, 'unreachable' => true];
+        }
+
+        // Anything not finished is a candidate; the worker decides which are real.
+        $candidates = $operation->items()
+            ->whereNotIn('status', ['completed', 'skipped'])
+            ->get(['id', 'sample_id', 'remote_job_id', 'attempts']);
+
+        if ($candidates->isEmpty()) {
+            return ['requeued' => 0, 'still_running' => 0, 'unreachable' => false];
+        }
+
+        $base = rtrim($server->api_url, '/');
+
+        try {
+            Http::withToken($server->api_key)->timeout(10)->get($base . '/health')->throw();
+        } catch (\Throwable $e) {
+            Log::warning("[OperationResume] Worker for operation #{$operation->id} is unreachable: {$e->getMessage()}");
+
+            return ['requeued' => 0, 'still_running' => 0, 'unreachable' => true];
+        }
+
+        $requeue = collect();
+        $alive   = 0;
+
+        foreach ($candidates as $item) {
+            if ($item->remote_job_id) {
+                try {
+                    $r = Http::withToken($server->api_key)->acceptJson()->timeout(10)
+                        ->get("{$base}/jobs/{$item->remote_job_id}");
+
+                    $state = $r->successful() ? ($r->json()['status'] ?? null) : null;
+
+                    // Known and not finished failing: the worker still owns it.
+                    if (in_array($state, ['queued', 'running'], true)) {
+                        $alive++;
+                        continue;
+                    }
+                } catch (\Throwable) {
+                    // Fall through: an unanswered question about ONE job is not
+                    // grounds to assume it survived.
+                }
+            }
+
+            $requeue->push($item);
+        }
+
+        if ($requeue->isEmpty()) {
+            return ['requeued' => 0, 'still_running' => $alive, 'unreachable' => false];
+        }
+
+        $samples = Sample::whereIn('id', $requeue->pluck('sample_id')->filter())->get(['id']);
+        $now     = now();
+
+        DB::transaction(function () use ($operation, $requeue, $now) {
+            OperationItem::whereIn('id', $requeue->pluck('id'))->update([
+                'status'          => 'pending',
+                'message'         => null,
+                'remote_job_id'   => null,
+                'attempts'        => DB::raw('attempts + 1'),
+                'last_attempt_at' => $now,
+                'updated_at'      => $now,
+            ]);
+
+            $operation->forceFill(['status' => 'running', 'finished_at' => null])->save();
+        });
+
+        foreach ($samples as $sample) {
+            $sample->update([
+                'feature_extraction_status' => 'processing',
+                'feature_extraction_error'  => null,
+            ]);
+
+            FeatureExtractionJob::dispatch((int) $sample->id, (int) $server->id, $aiModel, $operation->id);
+        }
+
+        Log::info(sprintf(
+            '[OperationResume] Operation #%d: re-queued %d slide(s); %d were still live on the worker.',
+            $operation->id, $samples->count(), $alive
+        ));
+
+        return ['requeued' => $samples->count(), 'still_running' => $alive, 'unreachable' => false];
+    }
+
     /**
      * Add slides to a feature-extraction run that is already open.
      *

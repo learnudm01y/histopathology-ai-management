@@ -235,6 +235,11 @@ class OperationsAuditController extends Controller
             ? $this->missingFromParent($operation, $parent)
             : collect();
 
+        // Slides that have not reported back, which resuming would ask about.
+        $stalledCount = $operation->type === 'feature_extraction'
+            ? $operation->items()->whereNotIn('status', ['completed', 'skipped'])->count()
+            : 0;
+
         $addableNow = $awaitingFromParent->isEmpty() ? 0 : \App\Models\Sample::whereIn('id', $awaitingFromParent)
             ->where('tiling_status', 'done')
             ->whereNotNull('tiles_gdrive_path')
@@ -264,7 +269,8 @@ class OperationsAuditController extends Controller
         return view('admin.operations.show', compact(
             'operation', 'items', 'caseCount', 'breakdown', 'itemStatus',
             'nextStage', 'readyIds', 'servers', 'aiModels', 'followUps', 'parent',
-            'retryableCount', 'rescuedBy', 'missingOutput', 'awaitingFromParent', 'addableNow'
+            'retryableCount', 'rescuedBy', 'missingOutput', 'awaitingFromParent', 'addableNow',
+            'stalledCount'
         ));
     }
 
@@ -365,6 +371,40 @@ class OperationsAuditController extends Controller
         return redirect()
             ->route('admin.operations.audit.show', $operation)
             ->with('success', $message);
+    }
+
+    /**
+     * Restart the slides of this run that the GPU worker has forgotten.
+     *
+     * Stays in this operation: the slides keep their place, their attempt count
+     * goes up, and no second record is opened. Slides the worker is still
+     * working on are left alone, so pressing this twice costs nothing.
+     */
+    public function resume(Operation $operation): RedirectResponse
+    {
+        if ($operation->type !== 'feature_extraction') {
+            return back()->with('error', 'Only a feature-extraction run can be resumed from here.');
+        }
+
+        $result = $this->dispatcher->resumeStalled($operation);
+
+        if ($result['unreachable']) {
+            return back()->with('error',
+                'The GPU worker did not answer, so nothing was re-queued — a silent worker is not proof the work was lost, and guessing wrong would run every slide twice. Check the pod is running and try again.');
+        }
+
+        if ($result['requeued'] === 0) {
+            return back()->with('success', $result['still_running'] > 0
+                ? "Nothing to resume: the worker still has all {$result['still_running']} unfinished slide(s) in its queue."
+                : 'Nothing to resume: every slide in this run has finished.');
+        }
+
+        $message = "Re-queued {$result['requeued']} slide(s) inside {$operation->reference}.";
+        if ($result['still_running'] > 0) {
+            $message .= " {$result['still_running']} were left alone because the worker is still on them.";
+        }
+
+        return back()->with('success', $message);
     }
 
     /**

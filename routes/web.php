@@ -95,6 +95,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::post('operations/audit/{operation}/cancel',        [OperationsAuditController::class, 'cancel'])->name('operations.audit.cancel');
         Route::post('operations/audit/{operation}/retry-failed',  [OperationsAuditController::class, 'retryFailed'])->name('operations.audit.retry-failed');
         Route::post('operations/audit/{operation}/add-missing',   [OperationsAuditController::class, 'addMissing'])->name('operations.audit.add-missing');
+        Route::post('operations/audit/{operation}/resume',        [OperationsAuditController::class, 'resume'])->name('operations.audit.resume');
         Route::get('operations/audit/{operation}/pods',           [OperationsAuditController::class, 'pods'])->name('operations.audit.pods');
         Route::post('operations/audit/{operation}/assign-pod',    [OperationsAuditController::class, 'assignPod'])->name('operations.audit.assign-pod');
         Route::delete('operations/audit/{operation}',             [OperationsAuditController::class, 'destroy'])->name('operations.audit.destroy');

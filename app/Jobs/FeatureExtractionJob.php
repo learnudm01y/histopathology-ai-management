@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\AiModel;
 use App\Models\Magnification;
+use App\Models\OperationItem;
 use App\Models\PatchSize;
 use App\Models\Sample;
 use App\Models\ServerName;
@@ -190,6 +191,15 @@ class FeatureExtractionJob implements ShouldQueue
                 'sample_id'    => $sample->id,
                 'remote_jobid' => $body['job_id'] ?? null,
             ]);
+
+            // The worker's queue lives in memory, so this id is the only way to
+            // ask later whether it still knows about this slide. Resuming reads
+            // it to tell a slide still in flight from one a restart dropped.
+            if ($this->operationId && ($body['job_id'] ?? null)) {
+                OperationItem::where('operation_id', $this->operationId)
+                    ->where('sample_id', $sample->id)
+                    ->update(['remote_job_id' => $body['job_id']]);
+            }
 
             // Persist target output path eagerly so admins can find it before
             // the RunPod side reports back.

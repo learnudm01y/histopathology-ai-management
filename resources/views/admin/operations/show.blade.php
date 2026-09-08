@@ -205,6 +205,36 @@
 </div>
 @endif
 
+{{-- ── Resume a run the worker forgot ───────────────────────────────────────
+     The GPU worker keeps its queue in memory, so a restart drops whatever was
+     waiting while this page goes on showing it as in flight. --}}
+@if($operation->type === 'feature_extraction' && $stalledCount > 0)
+<div class="row grid-margin">
+    <div class="col-12">
+        <div class="card border-left-info">
+            <div class="card-body">
+                <h4 class="card-title mb-1">
+                    <i class="mdi mdi-restart mr-1 text-info"></i>Resume unfinished slides
+                </h4>
+                <p class="text-muted small mb-3">
+                    <strong>{{ $stalledCount }} slide(s)</strong> in this run have not reported back.
+                    Resuming asks the worker about each one first: any it is still working on are
+                    left alone, and only the ones it has forgotten are queued again —
+                    <strong>inside this same operation</strong>, with their attempt count raised.
+                    Pressing it while the run is healthy does nothing.
+                </p>
+                <form method="POST" action="{{ route('admin.operations.audit.resume', $operation) }}">
+                    @csrf
+                    <button type="submit" class="btn btn-info">
+                        <i class="mdi mdi-restart mr-1"></i>Resume {{ $stalledCount }} slide(s)
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+@endif
+
 {{-- ── Slides still owed by the source run ──────────────────────────────────
      This run covers what was ready when it started. The rest belong to the
      same piece of work, so they join it here rather than starting a second run
