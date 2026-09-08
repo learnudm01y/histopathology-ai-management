@@ -66,7 +66,13 @@ class OperationDispatcher
             return ['requeued' => 0, 'still_running' => 0, 'unreachable' => false];
         }
 
-        $base = rtrim($server->api_url, '/');
+        // The run's own pod, when it has one. servers_names.api_url is a single
+        // field that every pod overwrites when it self-registers, so on a
+        // multi-pod account it names whichever booted last — asking IT about
+        // this run's jobs would get "unknown", and re-dispatching would move the
+        // run onto a different machine mid-flight.
+        $endpoint = $operation->params['pod_endpoint'] ?? $server->api_url;
+        $base     = rtrim((string) $endpoint, '/');
 
         try {
             Http::withToken($server->api_key)->timeout(10)->get($base . '/health')->throw();
@@ -127,7 +133,10 @@ class OperationDispatcher
                 'feature_extraction_error'  => null,
             ]);
 
-            FeatureExtractionJob::dispatch((int) $sample->id, (int) $server->id, $aiModel, null, $operation->id);
+            FeatureExtractionJob::dispatch(
+                (int) $sample->id, (int) $server->id, $aiModel,
+                $operation->params['pod_endpoint'] ?? null, $operation->id
+            );
         }
 
         Log::info(sprintf(
@@ -212,7 +221,11 @@ class OperationDispatcher
                 'feature_extraction_error'       => null,
             ]);
 
-            FeatureExtractionJob::dispatch((int) $sample->id, $server, $aiModel, null, $operation->id);
+            // Slides joining a run go to the pod the run is already on.
+            FeatureExtractionJob::dispatch(
+                (int) $sample->id, $server, $aiModel,
+                $operation->params['pod_endpoint'] ?? null, $operation->id
+            );
         }
 
         Log::info(sprintf(
