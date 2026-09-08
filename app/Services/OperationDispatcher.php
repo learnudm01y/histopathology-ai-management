@@ -3,8 +3,11 @@
 namespace App\Services;
 
 use App\Jobs\FeatureExtractionJob;
+use App\Jobs\PatchExtractionJob;
 use App\Models\AiModel;
+use App\Models\Magnification;
 use App\Models\Operation;
+use App\Models\PatchSize;
 use App\Models\Sample;
 use App\Models\ServerName;
 
@@ -20,6 +23,72 @@ use App\Models\ServerName;
  */
 class OperationDispatcher
 {
+    /**
+     * Queue patch extraction over the given slides.
+     *
+     * Used both by the Operations page and by "retry the failed slides" on a
+     * run's own review page, so a retry is dispatched under exactly the
+     * settings and rules of the original.
+     *
+     * @param  array<int, int>  $sampleIds
+     * @return array{queued: int, skipped: int, operation: Operation|null}
+     */
+    public function patchExtraction(
+        array $sampleIds,
+        int $serverId,
+        int $patchSizeId,
+        int $magnificationId,
+        ?Operation $parent = null,
+    ): array {
+        $samples = Sample::with('patientCase:id,submitter_id')->whereIn('id', $sampleIds)->get();
+
+        if ($samples->isEmpty()) {
+            return ['queued' => 0, 'skipped' => count($sampleIds), 'operation' => null];
+        }
+
+        $server        = ServerName::find($serverId);
+        $patchSize     = PatchSize::find($patchSizeId);
+        $magnification = Magnification::find($magnificationId);
+
+        // Opened before anything is queued: a dispatch that dies half way is
+        // still the case worth reviewing.
+        $operation = Operation::start(
+            'patch_extraction',
+            Operation::buildName('patch_extraction', [
+                $patchSize ? $patchSize->size_px . 'px' : null,
+                $magnification?->label,
+                $server?->name,
+            ], $samples->count()),
+            $samples,
+            array_filter([
+                'server_id'           => $serverId,
+                'server'              => $server?->name,
+                'patch_size_id'       => $patchSizeId,
+                'patch_size'          => $patchSize ? $patchSize->size_px . 'px' : null,
+                'magnification_id'    => $magnificationId,
+                'magnification'       => $magnification?->label,
+                'source_operation_id' => $parent?->id,
+            ], fn ($v) => $v !== null),
+        );
+
+        foreach ($samples as $sample) {
+            Sample::whereKey($sample->id)->update([
+                'tiling_status'    => 'processing',
+                'patch_server_id'  => $serverId,
+                'patch_size_id'    => $patchSizeId,
+                'magnification_id' => $magnificationId,
+            ]);
+
+            PatchExtractionJob::dispatch((int) $sample->id, $serverId, $patchSizeId, $magnificationId);
+        }
+
+        return [
+            'queued'    => $samples->count(),
+            'skipped'   => count($sampleIds) - $samples->count(),
+            'operation' => $operation,
+        ];
+    }
+
     /**
      * Queue feature extraction over the given slides.
      *

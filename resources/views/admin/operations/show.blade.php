@@ -142,6 +142,38 @@
     </div>
 </div>
 
+{{-- ── Retry ────────────────────────────────────────────────────────────────
+     A retry opens a new operation under the same settings; this record keeps
+     saying what happened here. --}}
+@if($operation->type === 'patch_extraction' && $retryableCount > 0)
+<div class="row grid-margin">
+    <div class="col-12">
+        <div class="card border-left-warning">
+            <div class="card-body">
+                <h4 class="card-title mb-1">
+                    <i class="mdi mdi-refresh mr-1 text-warning"></i>Retry failed slides
+                </h4>
+                <p class="text-muted small mb-3">
+                    <strong>{{ $retryableCount }} slide(s)</strong> in this run did not finish.
+                    Retrying re-queues exactly those, with the same settings this run used
+                    @if(filled($operation->params['patch_size'] ?? null))
+                        ({{ $operation->params['patch_size'] }}@if(filled($operation->params['magnification'] ?? null)), {{ $operation->params['magnification'] }}@endif)
+                    @endif
+                    — a new record is opened and this one is left as it stands.
+                </p>
+                <form method="POST" action="{{ route('admin.operations.audit.retry-failed', $operation) }}"
+                      onsubmit="return confirm('Re-queue {{ $retryableCount }} slide(s) from “{{ $operation->name }}”?');">
+                    @csrf
+                    <button type="submit" class="btn btn-warning">
+                        <i class="mdi mdi-refresh mr-1"></i>Retry {{ $retryableCount }} slide(s)
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+@endif
+
 {{-- ── Continue the pipeline ─────────────────────────────────────────────────
      Only the slides this run FINISHED are offered onward. Handing the next
      stage a failed slide would queue a job that can only fail again, and record

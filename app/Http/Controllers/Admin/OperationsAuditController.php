@@ -190,9 +190,12 @@ class OperationsAuditController extends Controller
         $followUps    = $operation->children();
         $parent       = $operation->parent();
 
+        // Slides that did not finish, and so can be run again.
+        $retryableCount = $operation->items()->whereIn('status', ['failed', 'cancelled'])->count();
+
         return view('admin.operations.show', compact(
             'operation', 'items', 'caseCount', 'breakdown', 'itemStatus',
-            'nextStage', 'readyIds', 'servers', 'aiModels', 'followUps', 'parent'
+            'nextStage', 'readyIds', 'servers', 'aiModels', 'followUps', 'parent', 'retryableCount'
         ));
     }
 
@@ -247,6 +250,57 @@ class OperationsAuditController extends Controller
         return redirect()
             ->route('admin.operations.audit.show', $result['operation'])
             ->with('success', $msg);
+    }
+
+    /**
+     * Re-run the slides this operation failed on.
+     *
+     * A retry opens a NEW operation rather than reviving this one: the old
+     * record is evidence of what happened then, and rewriting it would destroy
+     * the very history the audit exists to keep. The settings come from the
+     * original, so a retry repeats the run rather than quietly changing it.
+     */
+    public function retryFailed(Operation $operation): RedirectResponse
+    {
+        if ($operation->type !== 'patch_extraction') {
+            return back()->with('error', 'Only a tiling operation can be retried from here.');
+        }
+
+        $params = $operation->params ?? [];
+
+        foreach (['server_id', 'patch_size_id', 'magnification_id'] as $required) {
+            if (empty($params[$required])) {
+                return back()->with('error',
+                    'This operation did not record the settings it ran with, so it cannot be repeated automatically. Re-dispatch it from the Operations page.');
+            }
+        }
+
+        $sampleIds = $operation->items()
+            ->whereIn('status', ['failed', 'cancelled'])
+            ->pluck('sample_id')
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        if ($sampleIds === []) {
+            return back()->with('error', 'Nothing in this operation failed, so there is nothing to retry.');
+        }
+
+        $result = $this->dispatcher->patchExtraction(
+            $sampleIds,
+            (int) $params['server_id'],
+            (int) $params['patch_size_id'],
+            (int) $params['magnification_id'],
+            $operation,
+        );
+
+        if (! $result['operation']) {
+            return back()->with('error', 'None of those slides still exist, so there was nothing to retry.');
+        }
+
+        return redirect()
+            ->route('admin.operations.audit.show', $result['operation'])
+            ->with('success', "Retrying {$result['queued']} slide(s) as \"{$result['operation']->name}\".");
     }
 
     /**

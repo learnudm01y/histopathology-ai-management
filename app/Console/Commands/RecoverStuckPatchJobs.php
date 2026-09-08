@@ -19,9 +19,18 @@ use Symfony\Component\Process\Process;
  *
  * This command runs every 10 minutes via the scheduler and:
  *   1. Finds samples stuck in 'processing' for more than 30 minutes.
- *   2. Checks if patches actually exist on Google Drive.
- *   3. If yes → marks as 'done' with the known gdrive path.
- *   4. If no  → marks as 'failed' so the user can retry.
+ *   2. Skips any whose job is still in the queue — see below.
+ *   3. Checks if patches actually exist on Google Drive.
+ *   4. If yes → marks as 'done' with the known gdrive path.
+ *   5. If no  → marks as 'failed' so the user can retry.
+ *
+ * STEP 2 IS NOT OPTIONAL. Dispatch marks every slide of a batch 'processing'
+ * at once, while the worker takes them one at a time — so in a fifty-slide run
+ * the last slide waits well over an hour before anything touches it, with an
+ * `updated_at` from dispatch and no gdrive path, which is indistinguishable
+ * from a crash by age alone. On 2026-09-07 that mistake condemned 119 slides
+ * in a single sweep: none had failed, none had even started. A slide that
+ * still has a job in the queue has not crashed, whatever its timestamp says.
  *
  * Usage:
  *   php artisan patch:recover-stuck          # dry-run (no changes)
@@ -32,21 +41,30 @@ class RecoverStuckPatchJobs extends Command
     protected $signature   = 'patch:recover-stuck {--fix : Actually update the database (default is dry-run)}';
     protected $description = 'Recover samples whose tiling_status is stuck at "processing" after a worker crash.';
 
-    public function handle(GoogleDriveService $drive): int
+    public function handle(GoogleDriveService $drive, \App\Services\QueuedJobLookup $queue): int
     {
         $fix         = $this->option('fix');
         $staleAfter  = now()->subMinutes(30);
 
-        $stuck = Sample::where('tiling_status', 'processing')
+        $candidates = Sample::where('tiling_status', 'processing')
             ->where('updated_at', '<', $staleAfter)
             ->get();
+
+        // Slides whose job is still queued are waiting their turn, not stuck.
+        $stillQueued = $queue->sampleIds(\App\Jobs\PatchExtractionJob::class);
+        $stuck       = $candidates->reject(fn (Sample $s) => in_array($s->id, $stillQueued, true))->values();
+        $waiting     = $candidates->count() - $stuck->count();
+
+        if ($waiting > 0) {
+            $this->line("Skipping {$waiting} sample(s) that are still queued — waiting is not a crash.");
+        }
 
         if ($stuck->isEmpty()) {
             $this->info('No stuck samples found.');
             return self::SUCCESS;
         }
 
-        $this->info("Found {$stuck->count()} stuck sample(s) (processing > 30 min):");
+        $this->info("Found {$stuck->count()} stuck sample(s) (processing > 30 min, nothing left in the queue):");
 
         foreach ($stuck as $sample) {
             $this->line("  Sample #{$sample->id}: {$sample->file_name}");

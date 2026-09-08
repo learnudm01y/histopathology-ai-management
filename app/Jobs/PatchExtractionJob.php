@@ -76,7 +76,7 @@ class PatchExtractionJob implements ShouldQueue
             $localWsi    = $this->downloadWsi($sample, $drive, $wsiDir);
             Log::info("[PatchExtraction] Sample #{$this->sampleId}: WSI ready at {$localWsi}");
 
-            if ($this->wasCancelled()) {
+            if ($this->shouldAbort()) {
                 $this->removeDirectory($tempDir);
                 return;
             }
@@ -89,7 +89,7 @@ class PatchExtractionJob implements ShouldQueue
             // Checked again before the upload: uploading patches for a run the
             // operator stopped would leave files on Drive that no operation
             // accounts for, which is exactly what "stop" is supposed to prevent.
-            if ($this->wasCancelled()) {
+            if ($this->shouldAbort()) {
                 $this->removeDirectory($tempDir);
                 return;
             }
@@ -156,6 +156,56 @@ class PatchExtractionJob implements ShouldQueue
     // ── Private helpers ──────────────────────────────────────────────────────
 
     /**
+     * Should this job stop before writing anything?
+     *
+     * Only two states mean yes, and both are read from the slide itself:
+     *
+     *   pending — cancelling an operation resets its slides to `pending`, so
+     *             this is the operator's stop signal;
+     *   done    — another job already tiled this slide, so continuing would
+     *             upload a second copy over the first.
+     *
+     * `failed` deliberately does NOT stop us. A watchdog or an earlier attempt
+     * can mark a slide failed while this job is legitimately working on it,
+     * and treating that as a stop threw away work that was about to succeed —
+     * exactly what happened on 2026-09-07 when the stuck-job sweeper condemned
+     * a queue of waiting slides. If we finish, our success overwrites it.
+     */
+    private function shouldAbort(): bool
+    {
+        try {
+            $status = Sample::where('id', $this->sampleId)->value('tiling_status');
+        } catch (\Throwable) {
+            // Downloading a slide can take ten minutes, so the connection may
+            // have gone stale underneath us. Reconnect and ask once more.
+            try {
+                DB::reconnect();
+                $status = Sample::where('id', $this->sampleId)->value('tiling_status');
+            } catch (\Throwable $e) {
+                // A database hiccup is not a stop signal; carry on rather than
+                // throw away work that was about to succeed.
+                Log::warning("[PatchExtraction] Sample #{$this->sampleId}: abort check failed: {$e->getMessage()}");
+
+                return false;
+            }
+        }
+
+        if ($status === 'pending') {
+            Log::info("[PatchExtraction] Sample #{$this->sampleId}: operation was stopped — aborting before any files are written.");
+
+            return true;
+        }
+
+        if ($status === 'done') {
+            Log::info("[PatchExtraction] Sample #{$this->sampleId}: already tiled by another job — aborting to avoid a duplicate upload.");
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
      * Download the WSI file from Google Drive to a local directory.
      *
      * Priority:
@@ -164,36 +214,6 @@ class PatchExtractionJob implements ShouldQueue
      *                        NOT when it is the parent folder
      *   3. file_id         — Drive file-ID fallback
      */
-    /**
-     * Has this slide been pulled out from under us?
-     *
-     * Cancelling an operation resets its slides to `pending`. This job set the
-     * column to `processing` itself at the start, so finding anything else
-     * there means someone stopped the run while we were working — there is no
-     * separate kill signal, and none is needed.
-     */
-    private function wasCancelled(): bool
-    {
-        try {
-            DB::reconnect();
-            $status = Sample::where('id', $this->sampleId)->value('tiling_status');
-        } catch (\Throwable $e) {
-            // A DB hiccup is not a cancellation; carry on rather than throw the
-            // work away over a dropped connection.
-            Log::warning("[PatchExtraction] Sample #{$this->sampleId}: cancellation check failed: {$e->getMessage()}");
-
-            return false;
-        }
-
-        if ($status === 'processing') {
-            return false;
-        }
-
-        Log::info("[PatchExtraction] Sample #{$this->sampleId}: operation was stopped (status is now '{$status}') — aborting before any files are written.");
-
-        return true;
-    }
-
     private function downloadWsi(Sample $sample, GoogleDriveService $drive, string $destDir): string
     {
         $fileName = $sample->file_name ?? 'slide.svs';
