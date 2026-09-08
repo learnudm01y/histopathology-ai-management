@@ -94,6 +94,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::post('operations/audit/{operation}/dispatch-next', [OperationsAuditController::class, 'dispatchNext'])->name('operations.audit.dispatch-next');
         Route::post('operations/audit/{operation}/cancel',        [OperationsAuditController::class, 'cancel'])->name('operations.audit.cancel');
         Route::post('operations/audit/{operation}/retry-failed',  [OperationsAuditController::class, 'retryFailed'])->name('operations.audit.retry-failed');
+        Route::post('operations/audit/{operation}/add-missing',   [OperationsAuditController::class, 'addMissing'])->name('operations.audit.add-missing');
         Route::delete('operations/audit/{operation}',             [OperationsAuditController::class, 'destroy'])->name('operations.audit.destroy');
 
         // AI Diagnosis Test (formerly 'output')

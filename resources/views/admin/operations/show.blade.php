@@ -160,6 +160,47 @@
     </div>
 </div>
 
+{{-- ── Slides still owed by the source run ──────────────────────────────────
+     This run covers what was ready when it started. The rest belong to the
+     same piece of work, so they join it here rather than starting a second run
+     over the same intent. --}}
+@if($awaitingFromParent->isNotEmpty())
+<div class="row grid-margin">
+    <div class="col-12">
+        <div class="card border-left-warning">
+            <div class="card-body">
+                <h4 class="card-title mb-1">
+                    <i class="mdi mdi-plus-box-outline mr-1 text-warning"></i>Slides still to be added
+                </h4>
+                <p class="text-muted small mb-3">
+                    <strong>{{ $awaitingFromParent->count() }} slide(s)</strong> of
+                    <a href="{{ route('admin.operations.audit.show', $parent) }}">{{ $parent->reference }}</a>
+                    are not in this run — they had no patches when it started.
+                    @if($addableNow > 0)
+                        <span class="text-success d-block mt-1">
+                            <i class="mdi mdi-check-circle-outline mr-1"></i>{{ $addableNow }} of them are tiled now
+                            and can be added to this run.
+                        </span>
+                    @else
+                        <span class="text-warning d-block mt-1">
+                            <i class="mdi mdi-clock-outline mr-1"></i>None are tiled yet. Re-run them in
+                            {{ $parent->reference }} first; they can be added here once their patches exist.
+                        </span>
+                    @endif
+                </p>
+                <form method="POST" action="{{ route('admin.operations.audit.add-missing', $operation) }}"
+                      onsubmit="return confirm('Add {{ $addableNow }} slide(s) to {{ $operation->reference }}?');">
+                    @csrf
+                    <button type="submit" class="btn btn-warning" {{ $addableNow === 0 ? 'disabled' : '' }}>
+                        <i class="mdi mdi-plus mr-1"></i>Add {{ $addableNow }} slide(s) to this run
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+@endif
+
 {{-- ── Retry ────────────────────────────────────────────────────────────────
      A retry opens a new operation under the same settings; this record keeps
      saying what happened here. --}}

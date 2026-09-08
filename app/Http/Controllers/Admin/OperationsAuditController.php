@@ -227,6 +227,17 @@ class OperationsAuditController extends Controller
         $retryableCount = $operation->sampleIdsNeedingWork()->count();
         $missingOutput  = $operation->missingOutputCount();
 
+        // Slides of the source run this follow-up never took on, and how many
+        // of them could join right now.
+        $awaitingFromParent = $parent && $operation->type === 'feature_extraction'
+            ? $this->missingFromParent($operation, $parent)
+            : collect();
+
+        $addableNow = $awaitingFromParent->isEmpty() ? 0 : \App\Models\Sample::whereIn('id', $awaitingFromParent)
+            ->where('tiling_status', 'done')
+            ->whereNotNull('tiles_gdrive_path')
+            ->count();
+
         // A slide this run failed may have been finished by a later run. This
         // record stays truthful about what IT did, but a reader looking at a
         // failure needs to know whether the slide was ever recovered — without
@@ -251,7 +262,7 @@ class OperationsAuditController extends Controller
         return view('admin.operations.show', compact(
             'operation', 'items', 'caseCount', 'breakdown', 'itemStatus',
             'nextStage', 'readyIds', 'servers', 'aiModels', 'followUps', 'parent',
-            'retryableCount', 'rescuedBy', 'missingOutput'
+            'retryableCount', 'rescuedBy', 'missingOutput', 'awaitingFromParent', 'addableNow'
         ));
     }
 
@@ -352,6 +363,62 @@ class OperationsAuditController extends Controller
         return redirect()
             ->route('admin.operations.audit.show', $operation)
             ->with('success', $message);
+    }
+
+    /**
+     * Take on the slides of the source run that this one never covered.
+     *
+     * A feature run started from a tiling operation covers whatever was ready
+     * at that moment. The rest belong to the same piece of work, so once they
+     * are ready they join this run instead of starting a second one over the
+     * same intent.
+     */
+    public function addMissing(Operation $operation): RedirectResponse
+    {
+        $parent = $operation->parent();
+
+        if ($operation->type !== 'feature_extraction' || ! $parent) {
+            return back()->with('error', 'This operation was not started from another run, so there is nothing to add to it.');
+        }
+
+        $missing = $this->missingFromParent($operation, $parent);
+
+        if ($missing->isEmpty()) {
+            return back()->with('error', "Every slide of {$parent->reference} is already in this run.");
+        }
+
+        $result = $this->dispatcher->addToFeatureRun($operation, $missing->all());
+
+        if ($result['queued'] === 0) {
+            return back()->with('error',
+                "None of the {$missing->count()} remaining slide(s) have patches yet, so they cannot be added. Re-run them in {$parent->reference} first.");
+        }
+
+        $message = "Added {$result['queued']} slide(s) to {$operation->reference} — they are queued for feature extraction in this run.";
+
+        if ($result['skipped'] > 0) {
+            $message .= " {$result['skipped']} still have no patches and were left out.";
+        }
+
+        return back()->with('success', $message);
+    }
+
+    /**
+     * Slides the source run completed that this follow-up never took on.
+     *
+     * @return \Illuminate\Support\Collection<int, int>
+     */
+    private function missingFromParent(Operation $operation, Operation $parent): \Illuminate\Support\Collection
+    {
+        $mine = $operation->items()->pluck('sample_id')->filter();
+
+        return $parent->items()
+            ->where('status', 'completed')
+            ->pluck('sample_id')
+            ->filter()
+            ->diff($mine)
+            ->map(fn ($id) => (int) $id)
+            ->values();
     }
 
     /**

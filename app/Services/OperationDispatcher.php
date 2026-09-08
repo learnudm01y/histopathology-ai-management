@@ -7,6 +7,7 @@ use App\Jobs\PatchExtractionJob;
 use App\Models\AiModel;
 use App\Models\Magnification;
 use App\Models\Operation;
+use App\Models\OperationItem;
 use App\Models\PatchSize;
 use App\Models\Sample;
 use App\Models\ServerName;
@@ -25,6 +26,91 @@ use Illuminate\Support\Facades\Log;
  */
 class OperationDispatcher
 {
+    /**
+     * Add slides to a feature-extraction run that is already open.
+     *
+     * A run started from a tiling operation covers whatever was ready at the
+     * moment it was launched. Slides that were not ready then — patches still
+     * being made, or missing — belong to the same piece of work, so when they
+     * become available they join that run rather than starting a second one
+     * covering the same intent.
+     *
+     * Only slides with features to extract are admitted, on the same terms as
+     * the original dispatch, and one already in the run is never added twice.
+     *
+     * @param  array<int, int>  $sampleIds
+     * @return array{queued: int, skipped: int}
+     */
+    public function addToFeatureRun(Operation $operation, array $sampleIds): array
+    {
+        $params  = $operation->params ?? [];
+        $server  = (int) ($params['server_id'] ?? 0);
+        $aiModel = (int) ($params['ai_model_id'] ?? 0);
+
+        if ($operation->type !== 'feature_extraction' || $server === 0 || $aiModel === 0) {
+            return ['queued' => 0, 'skipped' => count($sampleIds)];
+        }
+
+        $already  = $operation->items()->pluck('sample_id')->filter()->map(fn ($id) => (int) $id)->all();
+        $accepted = collect();
+        $skipped  = 0;
+
+        foreach (array_diff($sampleIds, $already) as $sampleId) {
+            /** @var Sample|null $sample */
+            $sample = Sample::with('patientCase:id,submitter_id')->find($sampleId);
+
+            if (! $sample || $sample->tiling_status !== 'done' || ! $sample->tiles_gdrive_path) {
+                $skipped++;
+                continue;
+            }
+
+            $accepted->push($sample);
+        }
+
+        if ($accepted->isEmpty()) {
+            return ['queued' => 0, 'skipped' => $skipped + count(array_intersect($sampleIds, $already))];
+        }
+
+        $now = now();
+
+        DB::transaction(function () use ($operation, $accepted, $now) {
+            OperationItem::insert($accepted->map(fn (Sample $sample) => [
+                'operation_id'      => $operation->id,
+                'sample_id'         => $sample->id,
+                'case_id'           => $sample->case_id,
+                'sample_file_name'  => $sample->file_name,
+                'case_submitter_id' => $sample->patientCase?->submitter_id,
+                'status'            => 'pending',
+                'attempts'          => 1,
+                'last_attempt_at'   => $now,
+                'created_at'        => $now,
+                'updated_at'        => $now,
+            ])->all());
+
+            // A run that had already settled has more to do again.
+            $operation->forceFill(['status' => 'running', 'finished_at' => null])->save();
+            $operation->recount();
+        });
+
+        foreach ($accepted as $sample) {
+            $sample->update([
+                'feature_extraction_status'      => 'processing',
+                'feature_extraction_ai_model_id' => $aiModel,
+                'feature_extraction_server_id'   => $server,
+                'feature_extraction_error'       => null,
+            ]);
+
+            FeatureExtractionJob::dispatch((int) $sample->id, $server, $aiModel);
+        }
+
+        Log::info(sprintf(
+            '[OperationTopUp] Operation #%d took on %d more slide(s); %d were not eligible.',
+            $operation->id, $accepted->count(), $skipped
+        ));
+
+        return ['queued' => $accepted->count(), 'skipped' => $skipped];
+    }
+
     /**
      * Re-run slides INSIDE the operation that already owns them.
      *
