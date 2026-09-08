@@ -38,7 +38,10 @@ use Symfony\Component\Process\Process;
  */
 class RecoverStuckPatchJobs extends Command
 {
-    protected $signature   = 'patch:recover-stuck {--fix : Actually update the database (default is dry-run)}';
+    protected $signature   = 'patch:recover-stuck
+                              {--fix : Actually update the database (default is dry-run)}
+                              {--max=15 : Refuse the sweep if more slides than this look stuck at once}
+                              {--force : Sweep even past --max}';
     protected $description = 'Recover samples whose tiling_status is stuck at "processing" after a worker crash.';
 
     public function handle(GoogleDriveService $drive, \App\Services\QueuedJobLookup $queue): int
@@ -62,6 +65,28 @@ class RecoverStuckPatchJobs extends Command
         if ($stuck->isEmpty()) {
             $this->info('No stuck samples found.');
             return self::SUCCESS;
+        }
+
+        // Defence in depth. The queue check above fixes the cause we know about;
+        // this catches the ones we do not. Slides do not crash in their dozens
+        // simultaneously — a sweep that wants to condemn that many is far more
+        // likely to be misreading the system than to be right, and in 2026-09 a
+        // sweep exactly like that destroyed 119 records. Refusing and shouting
+        // is recoverable; marking them all failed is not.
+        $max = (int) $this->option('max');
+
+        if ($fix && ! $this->option('force') && $stuck->count() > $max) {
+            $message = sprintf(
+                '[RecoverStuck] REFUSED: %d slides look stuck at once (limit %d). That is far more likely to be a '
+                . 'misjudgement than %d simultaneous crashes, so nothing was changed. Investigate, then re-run with '
+                . '--force if the slides really did fail.',
+                $stuck->count(), $max, $stuck->count()
+            );
+
+            Log::error($message);
+            $this->error($message);
+
+            return self::FAILURE;
         }
 
         $this->info("Found {$stuck->count()} stuck sample(s) (processing > 30 min, nothing left in the queue):");
