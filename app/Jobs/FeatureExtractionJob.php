@@ -52,12 +52,35 @@ class FeatureExtractionJob implements ShouldQueue
         return [90, 180];
     }
 
+    /**
+     * The pod this job must talk to, when its operation is bound to one.
+     *
+     * `servers_names.api_url` is a single mutable field shared by every job, so
+     * two operations could never run on two pods: whichever was selected last
+     * would capture both. Carrying the endpoint on the job instead lets each
+     * operation hold its own pod, which is the whole point of running more than
+     * one — the work is submitted and processed remotely, so the pod, not the
+     * queue, is what limits throughput.
+     *
+     * Not promoted and given a default so a job serialised before this existed
+     * still unserialises cleanly and falls back to the server's own URL.
+     */
+    public ?string $endpoint = null;
+
     public function __construct(
         public readonly int $sampleId,
         public readonly int $serverId,
         public readonly int $aiModelId,
+        ?string $endpoint = null,
     ) {
+        $this->endpoint = $endpoint;
         $this->onQueue('operations');
+    }
+
+    /** Where this job should send its work: its own pod, else the server's URL. */
+    private function endpointFor(ServerName $server): ?string
+    {
+        return $this->endpoint ?: $server->api_url;
     }
 
     public function handle(): void
@@ -86,8 +109,11 @@ class FeatureExtractionJob implements ShouldQueue
             return;
         }
 
-        if ($server->type !== 'external' || !$server->api_url || !$server->api_key) {
-            $this->fail($sample, "Server '{$server->name}' is not configured as a reachable external server (api_url / api_key missing).");
+        // The operation's own pod when it has one, otherwise the server's URL.
+        $endpoint = $this->endpointFor($server);
+
+        if ($server->type !== 'external' || !$endpoint || !$server->api_key) {
+            $this->fail($sample, "Server '{$server->name}' is not reachable: no pod endpoint for this operation, and no api_url / api_key configured.");
             return;
         }
 
@@ -96,7 +122,7 @@ class FeatureExtractionJob implements ShouldQueue
         // /health is unauthenticated on all RunPod services.
         try {
             $health = Http::timeout(10)->connectTimeout(5)
-                ->get(rtrim($server->api_url, '/') . '/health');
+                ->get(rtrim($endpoint, '/') . '/health');
 
             if (!$health->successful()) {
                 // Server exists but unhealthy — release back to queue for retry.
@@ -124,7 +150,7 @@ class FeatureExtractionJob implements ShouldQueue
         Log::info('[FeatureExtractionJob] Dispatching', [
             'sample_id'   => $sample->id,
             'server'      => $server->name,
-            'api_url'     => $server->api_url,
+            'endpoint'    => $endpoint,
             'model'       => $model->name,
             'output_path' => $payload['gdrive_output_path'],
         ]);
@@ -138,7 +164,7 @@ class FeatureExtractionJob implements ShouldQueue
                 ->retry(3, 5_000, function ($exception) {
                     return $exception instanceof \Illuminate\Http\Client\ConnectionException;
                 }, throw: false)
-                ->post(rtrim($server->api_url, '/') . '/jobs/start', $payload);
+                ->post(rtrim($endpoint, '/') . '/jobs/start', $payload);
 
             if (!$response->successful()) {
                 $status = $response->status();

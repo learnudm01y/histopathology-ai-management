@@ -116,6 +116,75 @@ class RunPodService
 
     // ─── Private ──────────────────────────────────────────────────────────────
 
+    /**
+     * The GPU catalogue with what each card actually costs.
+     *
+     * `uninterruptablePrice` is the on-demand rate; `minimumBidPrice` is the
+     * interruptible (spot) rate. They are reported separately and never
+     * averaged or "adjusted": when RunPod returns the same figure for both —
+     * which it currently does on this account — the honest thing to show is
+     * that there is no spot saving, not a discount that does not exist.
+     *
+     * @return array<int, array{
+     *     id: string, name: string, memory_gb: int|null,
+     *     on_demand: float|null, spot: float|null,
+     *     secure: bool, community: bool
+     * }>
+     */
+    public function listGpuTypes(): array
+    {
+        $query = <<<'GQL'
+        query {
+            gpuTypes {
+                id
+                displayName
+                memoryInGb
+                secureCloud
+                communityCloud
+                lowestPrice(input: { gpuCount: 1 }) {
+                    minimumBidPrice
+                    uninterruptablePrice
+                }
+            }
+        }
+        GQL;
+
+        $types = $this->query($query)['gpuTypes'] ?? [];
+
+        return collect($types)
+            ->map(fn (array $t) => [
+                'id'        => $t['id'] ?? '',
+                'name'      => $t['displayName'] ?? ($t['id'] ?? 'Unknown GPU'),
+                'memory_gb' => $t['memoryInGb'] ?? null,
+                'on_demand' => $t['lowestPrice']['uninterruptablePrice'] ?? null,
+                'spot'      => $t['lowestPrice']['minimumBidPrice'] ?? null,
+                'secure'    => (bool) ($t['secureCloud'] ?? false),
+                'community' => (bool) ($t['communityCloud'] ?? false),
+            ])
+            // A card with no price is one RunPod cannot currently place, so it
+            // is not a choice worth offering.
+            ->filter(fn (array $t) => $t['on_demand'] !== null || $t['spot'] !== null)
+            ->sortBy(fn (array $t) => $t['on_demand'] ?? $t['spot'])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * The URL a pod answers on, or null if it is not answering yet.
+     *
+     * RunPod exposes a pod through a proxy host built from its id and the port
+     * the service listens on. A pod that is not RUNNING has no endpoint, and
+     * saying so is better than handing out a URL that will refuse every request.
+     */
+    public function proxyUrlFor(array $pod, int $port): ?string
+    {
+        if (($pod['desiredStatus'] ?? null) !== 'RUNNING' || empty($pod['id'])) {
+            return null;
+        }
+
+        return 'https://' . $pod['id'] . '-' . $port . '.proxy.runpod.net';
+    }
+
     private function query(string $graphql): array
     {
         $response = Http::timeout(15)

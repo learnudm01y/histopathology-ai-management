@@ -160,6 +160,51 @@
     </div>
 </div>
 
+{{-- ── GPU pod ──────────────────────────────────────────────────────────────
+     Feature extraction is submitted and then processed remotely, so the pod is
+     what limits throughput, not the queue. Giving each operation its own pod is
+     the only thing that makes two of them run at once. --}}
+@if($operation->type === 'feature_extraction')
+<div class="row grid-margin">
+    <div class="col-12">
+        <div class="card border-left-info">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center flex-wrap mb-2" style="gap:.5rem;">
+                    <h4 class="card-title mb-0">
+                        <i class="mdi mdi-expansion-card-variant mr-1 text-info"></i>GPU pod for this operation
+                    </h4>
+                    <button type="button" class="btn btn-sm btn-outline-info" id="pods-refresh">
+                        <i class="mdi mdi-refresh mr-1"></i>Load pods &amp; live prices
+                    </button>
+                </div>
+
+                @if($operation->params['pod_id'] ?? null)
+                    <p class="small mb-3">
+                        Currently running on
+                        <strong>{{ $operation->params['pod_name'] ?? $operation->params['pod_id'] }}</strong>
+                        @if($operation->params['pod_gpu'] ?? null)
+                            · {{ $operation->params['pod_gpu'] }}
+                        @endif
+                        @if($operation->params['pod_cost_per_hr'] ?? null)
+                            · <span class="text-info">${{ number_format($operation->params['pod_cost_per_hr'], 3) }}/hr</span>
+                        @endif
+                    </p>
+                @else
+                    <p class="text-muted small mb-3">
+                        This operation uses whichever pod the server points at. Choose one below to give it
+                        a pod of its own — then a second operation can run on a different pod at the same time.
+                    </p>
+                @endif
+
+                <div id="pods-panel" class="text-muted small">
+                    Press <em>Load pods &amp; live prices</em> to fetch what is available and what it costs.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+@endif
+
 {{-- ── Slides still owed by the source run ──────────────────────────────────
      This run covers what was ready when it started. The rest belong to the
      same piece of work, so they join it here rather than starting a second run
@@ -541,3 +586,120 @@
 }());
 </script>
 @endpush
+
+@if($operation->type === 'feature_extraction')
+@push('scripts')
+<script>
+// ── Pod picker ───────────────────────────────────────────────────────────────
+// Loaded on demand rather than on page load: it calls RunPod, and a review page
+// should not hit a paid third-party API every time someone opens it.
+(function () {
+    var button = document.getElementById('pods-refresh');
+    var panel  = document.getElementById('pods-panel');
+    if (!button || !panel) return;
+
+    var PODS_URL   = @json(route('admin.operations.audit.pods', $operation));
+    var ASSIGN_URL = @json(route('admin.operations.audit.assign-pod', $operation));
+    var CSRF       = @json(csrf_token());
+
+    function money(v)  { return v === null || v === undefined ? '—' : '$' + Number(v).toFixed(3) + '/hr'; }
+    function hours(h)  {
+        if (h === null || h === undefined) return null;
+        return h < 1 ? Math.round(h * 60) + ' min' : h.toFixed(1) + ' hr';
+    }
+
+    function podRow(p) {
+        var est = p.estimate || {};
+        // Only shown when it was actually measured — an invented figure on a
+        // page about money is worse than no figure.
+        var forecast = (est.cost !== null && est.cost !== undefined)
+            ? '<div class="small text-muted">' + est.slides + ' slide(s) left · about ' +
+              hours(est.hours) + ' · <strong>~$' + est.cost.toFixed(2) + '</strong> at this rate</div>'
+            : '<div class="small text-muted">' + (est.slides || 0) + ' slide(s) left · no timing history yet, so no estimate</div>';
+
+        return '' +
+        '<tr>' +
+          '<td>' +
+            '<strong>' + (p.name || p.id) + '</strong>' +
+            (p.bound ? ' <span class="badge badge-info ml-1">in use here</span>' : '') +
+            '<div class="small text-muted">' + (p.gpu || 'GPU') + '</div>' +
+          '</td>' +
+          '<td><span class="badge badge-' + (p.running ? 'success' : 'secondary') + '">' + p.status + '</span></td>' +
+          '<td class="text-nowrap">' + money(p.cost) + '</td>' +
+          '<td>' + forecast + '</td>' +
+          '<td class="text-right">' +
+            '<button class="btn btn-sm btn-' + (p.running ? 'info' : 'outline-secondary') + ' pod-pick" data-pod="' + p.id + '">' +
+              (p.running ? 'Run here' : 'Start pod') +
+            '</button>' +
+          '</td>' +
+        '</tr>';
+    }
+
+    function gpuRow(g) {
+        return '<tr>' +
+            '<td>' + g.name + '</td>' +
+            '<td class="text-muted">' + (g.memory_gb ? g.memory_gb + ' GB' : '—') + '</td>' +
+            '<td>' + money(g.on_demand) + '</td>' +
+            '<td>' + (g.spot_saves
+                ? '<span class="text-success">' + money(g.spot) + '</span>'
+                : '<span class="text-muted">' + money(g.spot) + '</span>') + '</td>' +
+            '<td class="small text-muted">' + (g.spot_saves ? 'cheaper on spot' : 'no spot saving') + '</td>' +
+        '</tr>';
+    }
+
+    function render(d) {
+        var noSaving = (d.gpu_types || []).every(function (g) { return !g.spot_saves; });
+
+        panel.innerHTML =
+            '<div class="table-responsive mb-3"><table class="table table-sm mb-0">' +
+              '<thead><tr><th>Pod</th><th>Status</th><th>Rate</th><th>This operation</th><th></th></tr></thead>' +
+              '<tbody>' + (d.pods.length ? d.pods.map(podRow).join('') :
+                '<tr><td colspan="5" class="text-muted">No pods on this RunPod account.</td></tr>') + '</tbody>' +
+            '</table></div>' +
+            '<details><summary class="text-muted small mb-2" style="cursor:pointer;">' +
+              'GPU catalogue — what a new pod would cost' +
+            '</summary>' +
+            (noSaving ? '<p class="small text-muted mt-2 mb-2">' +
+                'RunPod is quoting the same rate for spot as for on-demand on this account, ' +
+                'so there is no spot discount to take right now.</p>' : '') +
+            '<div class="table-responsive"><table class="table table-sm">' +
+              '<thead><tr><th>GPU</th><th>VRAM</th><th>On-demand</th><th>Spot</th><th></th></tr></thead>' +
+              '<tbody>' + (d.gpu_types || []).map(gpuRow).join('') + '</tbody>' +
+            '</table></div></details>';
+    }
+
+    button.addEventListener('click', function () {
+        button.disabled = true;
+        panel.textContent = 'Asking RunPod…';
+
+        fetch(PODS_URL, { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
+            .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+            .then(function (res) {
+                if (!res.ok) { panel.innerHTML = '<span class="text-danger">' + (res.d.error || 'Could not load pods.') + '</span>'; return; }
+                render(res.d);
+            })
+            .catch(function () { panel.innerHTML = '<span class="text-danger">Could not reach the server.</span>'; })
+            .finally(function () { button.disabled = false; });
+    });
+
+    // Choosing a pod spends money, so it always asks first and says the rate.
+    panel.addEventListener('click', function (e) {
+        var pick = e.target.closest('.pod-pick');
+        if (!pick) return;
+
+        var row  = pick.closest('tr');
+        var rate = row.children[2].textContent.trim();
+        if (!confirm('Run ' + @json($operation->reference) + ' on this pod?\n\nRate: ' + rate)) return;
+
+        var form = document.createElement('form');
+        form.method = 'POST';
+        form.action = ASSIGN_URL;
+        form.innerHTML = '<input type="hidden" name="_token" value="' + CSRF + '">' +
+                         '<input type="hidden" name="pod_id" value="' + pick.dataset.pod + '">';
+        document.body.appendChild(form);
+        form.submit();
+    });
+}());
+</script>
+@endpush
+@endif

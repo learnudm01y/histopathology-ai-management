@@ -10,6 +10,7 @@ use App\Models\ServerName;
 use App\Services\OperationCanceller;
 use App\Services\OperationDispatcher;
 use App\Services\OperationProgress;
+use App\Services\RunPodService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -34,6 +35,7 @@ class OperationsAuditController extends Controller
         private readonly OperationProgress $progress,
         private readonly OperationDispatcher $dispatcher,
         private readonly OperationCanceller $canceller,
+        private readonly \App\Services\PodAllocator $allocator,
     ) {
     }
 
@@ -419,6 +421,118 @@ class OperationsAuditController extends Controller
             ->diff($mine)
             ->map(fn ($id) => (int) $id)
             ->values();
+    }
+
+    /**
+     * The pods this operation could run on, with what each actually costs.
+     *
+     * Prices come from RunPod, unmodified. Where the spot rate equals the
+     * on-demand rate — which is what this account currently returns — that is
+     * reported as "no spot saving" rather than dressed up as a discount.
+     */
+    public function pods(Operation $operation): JsonResponse
+    {
+        $server = $this->podServerFor($operation);
+
+        if (! $server) {
+            return response()->json(['error' => 'This operation has no RunPod server configured.'], 422);
+        }
+
+        $runpod = new RunPodService($server->runpod_api_key);
+
+        try {
+            $pods     = $runpod->listPods();
+            $gpuTypes = $runpod->listGpuTypes();
+        } catch (\Throwable $e) {
+            return response()->json(['error' => 'Could not reach RunPod: ' . $e->getMessage()], 502);
+        }
+
+        $port      = $server->runpod_port ?: 8000;
+        $boundPod  = $operation->params['pod_id'] ?? null;
+        $allocator = $this->allocator;
+
+        return response()->json([
+            'server'    => ['id' => $server->id, 'name' => $server->name, 'port' => $port],
+            'bound_pod' => $boundPod,
+            'pods'      => collect($pods)->map(fn (array $p) => [
+                'id'       => $p['id'] ?? null,
+                'name'     => $p['name'] ?? $p['id'] ?? '?',
+                'gpu'      => $p['machine']['gpuDisplayName'] ?? null,
+                'status'   => $p['desiredStatus'] ?? 'UNKNOWN',
+                'running'  => ($p['desiredStatus'] ?? null) === 'RUNNING',
+                'cost'     => isset($p['costPerHr']) ? (float) $p['costPerHr'] : null,
+                'endpoint' => $runpod->proxyUrlFor($p, $port),
+                'bound'    => ($p['id'] ?? null) === $boundPod,
+                'estimate' => $allocator->estimate($operation, isset($p['costPerHr']) ? (float) $p['costPerHr'] : null, $server->id),
+            ])->values(),
+            // The catalogue is advisory: it says what a card would cost if one
+            // were created, so a choice is made on price rather than on habit.
+            'gpu_types' => collect($gpuTypes)->take(20)->map(fn (array $t) => $t + [
+                'spot_saves' => ($t['spot'] !== null && $t['on_demand'] !== null && $t['spot'] < $t['on_demand']),
+            ])->values(),
+        ]);
+    }
+
+    /**
+     * Run this operation on the chosen pod.
+     *
+     * Each operation holds its own pod, which is what lets two of them run at
+     * once — the work is processed remotely, so one pod per operation is the
+     * only thing that actually adds throughput.
+     */
+    public function assignPod(Request $request, Operation $operation): RedirectResponse
+    {
+        $validated = $request->validate(['pod_id' => ['required', 'string']]);
+
+        $server = $this->podServerFor($operation);
+
+        if (! $server) {
+            return back()->with('error', 'This operation has no RunPod server configured.');
+        }
+
+        $runpod = new RunPodService($server->runpod_api_key);
+
+        try {
+            $pod = $runpod->getPod($validated['pod_id']);
+
+            if (! $pod) {
+                return back()->with('error', 'That pod no longer exists on RunPod.');
+            }
+
+            // Starting costs money from the moment it runs, so it is only done
+            // because the operator picked this pod for this operation.
+            if (($pod['desiredStatus'] ?? null) !== 'RUNNING') {
+                $runpod->startPod($pod['id']);
+
+                return back()->with('success', sprintf(
+                    'Starting pod "%s" (%s, $%s/hr). It takes a minute to boot — select it again once it is running to send this operation to it.',
+                    $pod['name'] ?? $pod['id'], $pod['machine']['gpuDisplayName'] ?? 'GPU', $pod['costPerHr'] ?? '?'
+                ));
+            }
+
+            $result = $this->allocator->assign($operation, $server, $pod, $runpod);
+        } catch (\Throwable $e) {
+            return back()->with('error', 'RunPod: ' . $e->getMessage());
+        }
+
+        return back()->with('success', sprintf(
+            '%s is now running on pod "%s" (%s, $%s/hr). %d slide(s) sent to it; work already accepted by another pod was left with it.',
+            $operation->reference,
+            $pod['name'] ?? $pod['id'],
+            $pod['machine']['gpuDisplayName'] ?? 'GPU',
+            $pod['costPerHr'] ?? '?',
+            $result['queued']
+        ));
+    }
+
+    /** The server whose RunPod credentials this operation runs under. */
+    private function podServerFor(Operation $operation): ?ServerName
+    {
+        $serverId = $operation->params['server_id'] ?? null;
+
+        $server = $serverId ? ServerName::find($serverId) : null;
+
+        return $server && $server->runpod_api_key ? $server : null;
     }
 
     /**
