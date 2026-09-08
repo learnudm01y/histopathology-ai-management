@@ -390,14 +390,12 @@
                             <label class="small text-muted mb-1">
                                 GPU pod
                                 <button type="button" class="btn btn-link btn-sm p-0 ml-1" id="next-pods-load"
-                                        style="font-size:.75rem; vertical-align:baseline;">load</button>
+                                        style="font-size:.75rem; vertical-align:baseline;">refresh</button>
                             </label>
                             <select name="pod_id" class="form-control" id="next-pod-select">
                                 <option value="">— whichever the server points at —</option>
                             </select>
-                            <small class="text-muted d-block mt-1" id="next-pod-hint" style="font-size:.72rem;">
-                                Pick a server, then press <em>load</em>.
-                            </small>
+                            <small class="text-muted d-block mt-1" id="next-pod-hint" style="font-size:.72rem;"></small>
                         </div>
                         <div class="form-group mb-0">
                             <button type="submit" class="btn btn-info" id="op-next-btn"
@@ -634,6 +632,89 @@
 </script>
 @endpush
 
+{{-- Pod picker for the Continue form. Gated on the NEXT stage, not on
+     this operation type: the form lives on the run that FEEDS feature
+     extraction, which is a patch-extraction run. --}}
+@if($nextStage === 'feature_extraction')
+@push('scripts')
+<script>
+// ── Pod picker for the NEXT run ──────────────────────────────────────────────
+// The pod list belongs to the server chosen in this form, not to the server the
+// operation being viewed ran on, so it is fetched per selected server. Loaded on
+// demand because it calls RunPod, and a review page should not wait on that.
+(function () {
+    var loadBtn  = document.getElementById('next-pods-load');
+    var select   = document.getElementById('next-pod-select');
+    var hint     = document.getElementById('next-pod-hint');
+    if (!loadBtn || !select) return;
+
+    var serverSelect = select.closest('form').querySelector('[name="server_id"]');
+    var BASE = @json(route('admin.operations.audit.pods', $operation));
+
+    function reset(message) {
+        select.innerHTML = '<option value="">— whichever the server points at —</option>';
+        hint.textContent = message;
+    }
+
+    // A pod list belongs to one server; changing the server invalidates it.
+    if (serverSelect) {
+        serverSelect.addEventListener('change', function () {
+            reset('');
+            load();
+        });
+
+        // A server may already be chosen when the page opens.
+        if (serverSelect.value) { load(); }
+    }
+
+    function load() {
+        var serverId = serverSelect ? serverSelect.value : '';
+        if (!serverId) { hint.textContent = 'Choose a server first.'; return; }
+
+        hint.textContent = 'Loading pods…';
+        loadBtn.disabled = true;
+
+        fetch(BASE + '?server_id=' + encodeURIComponent(serverId), {
+            headers: { 'Accept': 'application/json' }, credentials: 'same-origin'
+        })
+            .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+            .then(function (res) {
+                loadBtn.disabled = false;
+                if (!res.ok) { reset(res.d.error || 'Could not list pods.'); return; }
+
+                var pods = (res.d.pods || []);
+                var running = pods.filter(function (p) { return p.running; });
+
+                reset(running.length
+                    ? running.length + ' running pod(s). Leave blank to use the server default.'
+                    : 'No running pod on this account — start one on RunPod first.');
+
+                running.forEach(function (p) {
+                    var o = document.createElement('option');
+                    o.value = p.id;
+                    o.textContent = p.name + (p.gpu ? ' · ' + p.gpu : '')
+                                  + (p.cost ? ' · $' + p.cost.toFixed(3) + '/hr' : '');
+                    select.appendChild(o);
+                });
+
+                // A stopped pod cannot take work; shown, but not selectable, so
+                // it is clear the pod exists and simply needs starting.
+                pods.filter(function (p) { return !p.running; }).forEach(function (p) {
+                    var o = document.createElement('option');
+                    o.value = ''; o.disabled = true;
+                    o.textContent = p.name + (p.gpu ? ' · ' + p.gpu : '') + ' — stopped';
+                    select.appendChild(o);
+                });
+            })
+            .catch(function () { loadBtn.disabled = false; reset('Could not reach RunPod.'); });
+    }
+
+    loadBtn.addEventListener('click', load);
+}());
+</script>
+@endpush
+@endif
+
 @if($operation->type === 'feature_extraction')
 @push('scripts')
 <script>
@@ -748,73 +829,6 @@
     });
 }());
 </script>
-// ── Pod picker for the NEXT run ──────────────────────────────────────────────
-// The pod list belongs to the server chosen in this form, not to the server the
-// operation being viewed ran on, so it is fetched per selected server. Loaded on
-// demand because it calls RunPod, and a review page should not wait on that.
-(function () {
-    var loadBtn  = document.getElementById('next-pods-load');
-    var select   = document.getElementById('next-pod-select');
-    var hint     = document.getElementById('next-pod-hint');
-    if (!loadBtn || !select) return;
-
-    var serverSelect = select.closest('form').querySelector('[name="server_id"]');
-    var BASE = @json(route('admin.operations.audit.pods', $operation));
-
-    function reset(message) {
-        select.innerHTML = '<option value="">— whichever the server points at —</option>';
-        hint.textContent = message;
-    }
-
-    // A pod list belongs to one server; changing the server invalidates it.
-    if (serverSelect) {
-        serverSelect.addEventListener('change', function () {
-            reset('Server changed — press load to list its pods.');
-        });
-    }
-
-    loadBtn.addEventListener('click', function () {
-        var serverId = serverSelect ? serverSelect.value : '';
-        if (!serverId) { hint.textContent = 'Choose a server first.'; return; }
-
-        hint.textContent = 'Loading pods…';
-        loadBtn.disabled = true;
-
-        fetch(BASE + '?server_id=' + encodeURIComponent(serverId), {
-            headers: { 'Accept': 'application/json' }, credentials: 'same-origin'
-        })
-            .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
-            .then(function (res) {
-                loadBtn.disabled = false;
-                if (!res.ok) { reset(res.d.error || 'Could not list pods.'); return; }
-
-                var pods = (res.d.pods || []);
-                var running = pods.filter(function (p) { return p.running; });
-
-                reset(running.length
-                    ? running.length + ' running pod(s). Leave blank to use the server default.'
-                    : 'No running pod on this account — start one on RunPod first.');
-
-                running.forEach(function (p) {
-                    var o = document.createElement('option');
-                    o.value = p.id;
-                    o.textContent = p.name + (p.gpu ? ' · ' + p.gpu : '')
-                                  + (p.cost ? ' · $' + p.cost.toFixed(3) + '/hr' : '');
-                    select.appendChild(o);
-                });
-
-                // A stopped pod cannot take work; shown, but not selectable, so
-                // it is clear the pod exists and simply needs starting.
-                pods.filter(function (p) { return !p.running; }).forEach(function (p) {
-                    var o = document.createElement('option');
-                    o.value = ''; o.disabled = true;
-                    o.textContent = p.name + (p.gpu ? ' · ' + p.gpu : '') + ' — stopped';
-                    select.appendChild(o);
-                });
-            })
-            .catch(function () { loadBtn.disabled = false; reset('Could not reach RunPod.'); });
-    });
-}());
 
 @endpush
 @endif
