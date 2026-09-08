@@ -292,7 +292,22 @@ class OperationsAuditController extends Controller
         $validated = $request->validate([
             'server_id'   => ['required', 'integer', 'exists:servers_names,id'],
             'ai_model_id' => ['required', 'integer', 'exists:ai_models,id'],
+            'pod_id'      => ['nullable', 'string', 'max:64'],
         ]);
+
+        // Choosing the pod HERE, rather than after the run exists, is what lets
+        // two runs work at the same time on different cards: the run is bound
+        // before its first job leaves, so no slide is ever sent to whichever pod
+        // the shared server field happened to point at.
+        $pod = null;
+
+        if (! empty($validated['pod_id'])) {
+            try {
+                $pod = $this->resolvePod((int) $validated['server_id'], $validated['pod_id']);
+            } catch (\Throwable $e) {
+                return back()->with('error', $e->getMessage());
+            }
+        }
 
         $sampleIds = $operation->items()
             ->where('status', 'completed')
@@ -310,6 +325,7 @@ class OperationsAuditController extends Controller
             (int) $validated['server_id'],
             (int) $validated['ai_model_id'],
             $operation,
+            $pod,
         );
 
         if (! $result['operation']) {
@@ -318,6 +334,9 @@ class OperationsAuditController extends Controller
         }
 
         $msg = "{$result['queued']} slide(s) queued for feature extraction as \"{$result['operation']->name}\".";
+        if ($pod) {
+            $msg .= " Running on pod {$pod['name']}" . ($pod['gpu'] ? " ({$pod['gpu']})" : "") . ".";
+        }
         if ($result['skipped'] > 0) {
             $msg .= " {$result['skipped']} skipped (patches not available).";
         }
@@ -470,9 +489,17 @@ class OperationsAuditController extends Controller
      * on-demand rate — which is what this account currently returns — that is
      * reported as "no spot saving" rather than dressed up as a discount.
      */
-    public function pods(Operation $operation): JsonResponse
+    public function pods(Operation $operation, Request $request): JsonResponse
     {
-        $server = $this->podServerFor($operation);
+        // The continue-to-next-stage form picks the server for the run it is about
+        // to start, which is usually NOT the server this operation itself ran on.
+        // When it names one, list that server's pods rather than this one's.
+        $requested = $request->integer("server_id");
+        $server    = $requested ? ServerName::find($requested) : $this->podServerFor($operation);
+
+        if ($server && ! $server->runpod_api_key) {
+            $server = null;
+        }
 
         if (! $server) {
             return response()->json(['error' => 'This operation has no RunPod server configured.'], 422);
@@ -566,6 +593,46 @@ class OperationsAuditController extends Controller
     }
 
     /** The server whose RunPod credentials this operation runs under. */
+
+    /**
+     * Turn a pod id into the binding a run needs: its name, card and endpoint.
+     *
+     * Resolved BEFORE the run is created, so a pod that is stopped, deleted or
+     * on another account is refused up front — rather than after fifty jobs have
+     * been queued against an endpoint that can never answer.
+     *
+     * @return array{id:string,name:string,gpu:?string,cost:?float,endpoint:string}
+     */
+    private function resolvePod(int $serverId, string $podId): array
+    {
+        $server = ServerName::find($serverId);
+
+        if (! $server || ! $server->runpod_api_key) {
+            throw new \RuntimeException('That server has no RunPod API key, so a pod cannot be chosen for it.');
+        }
+
+        $runpod = new RunPodService($server->runpod_api_key);
+        $pod    = collect($runpod->listPods())->firstWhere('id', $podId);
+
+        if (! $pod) {
+            throw new \RuntimeException('That pod no longer exists on RunPod.');
+        }
+
+        $endpoint = $runpod->proxyUrlFor($pod, $server->runpod_port ?: 8000);
+
+        if ($endpoint === null) {
+            throw new \RuntimeException('Pod "' . ($pod['name'] ?? $podId) . '" is not running, so it has no endpoint yet. Start it first.');
+        }
+
+        return [
+            'id'       => $podId,
+            'name'     => $pod['name'] ?? $podId,
+            'gpu'      => $pod['machine']['gpuDisplayName'] ?? null,
+            'cost'     => isset($pod['costPerHr']) ? (float) $pod['costPerHr'] : null,
+            'endpoint' => $endpoint,
+        ];
+    }
+
     private function podServerFor(Operation $operation): ?ServerName
     {
         $serverId = $operation->params['server_id'] ?? null;

@@ -380,6 +380,7 @@ class OperationDispatcher
         int $serverId,
         int $aiModelId,
         ?Operation $parent = null,
+        ?array $pod = null,
     ): array {
         $accepted = collect();
         $skipped  = 0;
@@ -416,6 +417,11 @@ class OperationDispatcher
                 'ai_model_id'         => $aiModelId,
                 'ai_model'            => $aiModel?->name,
                 'source_operation_id' => $parent?->id,
+                'pod_id'              => $pod['id'] ?? null,
+                'pod_name'            => $pod['name'] ?? null,
+                'pod_gpu'             => $pod['gpu'] ?? null,
+                'pod_cost_per_hr'     => $pod['cost'] ?? null,
+                'pod_endpoint'        => $pod['endpoint'] ?? null,
             ], fn ($v) => $v !== null),
         );
 
@@ -430,7 +436,12 @@ class OperationDispatcher
                 'feature_extraction_error'       => null,
             ]);
 
-            FeatureExtractionJob::dispatch((int) $sample->id, $serverId, $aiModelId, null, $operation->id);
+            // Bound to the chosen pod from the very first job. Assigning a pod
+            // after dispatch would send the opening slides to whichever pod the
+            // server happens to point at, splitting one run across two machines.
+            FeatureExtractionJob::dispatch(
+                (int) $sample->id, $serverId, $aiModelId, $pod['endpoint'] ?? null, $operation->id
+            );
         }
 
         return ['queued' => $accepted->count(), 'skipped' => $skipped, 'operation' => $operation];
