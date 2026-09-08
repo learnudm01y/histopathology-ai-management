@@ -173,6 +173,8 @@
                 </h4>
                 <p class="text-muted small mb-3">
                     <strong>{{ $retryableCount }} slide(s)</strong> in this run did not finish.
+                    They are re-queued <strong>inside this operation</strong> — it stays their group and
+                    reports how they end up, keeping a count of the attempts it took.
                     @if($rescuedBy->isNotEmpty())
                         <span class="text-success d-block mt-1">
                             <i class="mdi mdi-check-circle-outline mr-1"></i>{{ $rescuedBy->count() }} of them
@@ -361,6 +363,15 @@
                                     <span class="badge badge-{{ $item->status_colour }} item-status-badge">{{ ucfirst($item->status) }}</span>
                                     @if($operation->type === 'patch_extraction' && $item->sample?->tile_count)
                                         <div class="small text-muted mt-1">{{ number_format($item->sample->tile_count) }} tiles</div>
+                                    @endif
+                                    {{-- A slide the group had to try more than once. Kept visible
+                                         after it succeeds: "done on the second attempt" is the part
+                                         of the failure worth remembering. --}}
+                                    @if($item->attempts > 1)
+                                        <div class="small text-muted mt-1" title="Re-queued inside this operation after failing">
+                                            <i class="mdi mdi-refresh"></i>
+                                            attempt {{ $item->attempts }}@if($item->status === 'completed'), succeeded @endif
+                                        </div>
                                     @endif
                                     {{-- This run did not finish the slide, but a later one did. Said
                                          here so a failure on record is not mistaken for a slide that

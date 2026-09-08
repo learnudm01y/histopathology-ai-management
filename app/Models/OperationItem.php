@@ -17,6 +17,11 @@ class OperationItem extends Model
     protected $fillable = [
         'operation_id', 'sample_id', 'case_id',
         'sample_file_name', 'case_submitter_id', 'status', 'message',
+        'attempts', 'last_attempt_at',
+    ];
+
+    protected $casts = [
+        'last_attempt_at' => 'datetime',
     ];
 
     public function operation(): BelongsTo

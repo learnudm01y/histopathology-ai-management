@@ -10,6 +10,8 @@ use App\Models\Operation;
 use App\Models\PatchSize;
 use App\Models\Sample;
 use App\Models\ServerName;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Queues pipeline work and opens the operation record that accounts for it.
@@ -23,6 +25,81 @@ use App\Models\ServerName;
  */
 class OperationDispatcher
 {
+    /**
+     * Re-run slides INSIDE the operation that already owns them.
+     *
+     * A batch dispatched together is one group, and it keeps its slides until
+     * they are done. Opening a separate record for a retry split that group in
+     * two and filed the eventual success under a run nobody asked for, so the
+     * group is reopened instead and the outcome lands where the slide has
+     * always belonged.
+     *
+     * The failed attempt is not erased by this. Each item counts its attempts
+     * and stamps when it last ran, so "finished on the second try" survives the
+     * status moving on — which is the part of the failure worth keeping.
+     *
+     * @param  array<int, int>  $sampleIds
+     * @return array{queued: int, skipped: int}
+     */
+    public function retryWithin(Operation $operation, array $sampleIds): array
+    {
+        $params = $operation->params ?? [];
+
+        foreach (['server_id', 'patch_size_id', 'magnification_id'] as $required) {
+            if (empty($params[$required])) {
+                return ['queued' => 0, 'skipped' => count($sampleIds)];
+            }
+        }
+
+        $serverId        = (int) $params['server_id'];
+        $patchSizeId     = (int) $params['patch_size_id'];
+        $magnificationId = (int) $params['magnification_id'];
+
+        $samples = Sample::whereIn('id', $sampleIds)->get(['id']);
+
+        if ($samples->isEmpty()) {
+            return ['queued' => 0, 'skipped' => count($sampleIds)];
+        }
+
+        DB::transaction(function () use ($operation, $samples, $serverId, $patchSizeId, $magnificationId) {
+            $operation->items()
+                ->whereIn('sample_id', $samples->pluck('id'))
+                ->update([
+                    'status'          => 'pending',
+                    'message'         => null,
+                    'attempts'        => DB::raw('attempts + 1'),
+                    'last_attempt_at' => now(),
+                    'updated_at'      => now(),
+                ]);
+
+            // Reopening is what lets the group record the outcome: a finished
+            // operation is never re-derived, so it would otherwise keep
+            // reporting the failure no matter how the retry went.
+            $operation->forceFill([
+                'status'      => 'running',
+                'finished_at' => null,
+            ])->save();
+        });
+
+        foreach ($samples as $sample) {
+            Sample::whereKey($sample->id)->update([
+                'tiling_status'    => 'processing',
+                'patch_server_id'  => $serverId,
+                'patch_size_id'    => $patchSizeId,
+                'magnification_id' => $magnificationId,
+            ]);
+
+            PatchExtractionJob::dispatch((int) $sample->id, $serverId, $patchSizeId, $magnificationId);
+        }
+
+        Log::info(sprintf(
+            '[OperationRetry] Operation #%d reopened; %d slide(s) re-queued inside it.',
+            $operation->id, $samples->count()
+        ));
+
+        return ['queued' => $samples->count(), 'skipped' => count($sampleIds) - $samples->count()];
+    }
+
     /**
      * Queue patch extraction over the given slides.
      *

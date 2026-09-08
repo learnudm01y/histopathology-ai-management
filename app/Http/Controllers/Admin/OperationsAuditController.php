@@ -298,12 +298,11 @@ class OperationsAuditController extends Controller
     }
 
     /**
-     * Re-run the slides this operation failed on.
+     * Re-run the slides this operation failed on, inside this operation.
      *
-     * A retry opens a NEW operation rather than reviving this one: the old
-     * record is evidence of what happened then, and rewriting it would destroy
-     * the very history the audit exists to keep. The settings come from the
-     * original, so a retry repeats the run rather than quietly changing it.
+     * The slides stay in the group they were dispatched with, and that group
+     * records how they finally turned out. Each item counts its attempts, so
+     * the failed try is still on record after the retry succeeds.
      */
     public function retryFailed(Operation $operation): RedirectResponse
     {
@@ -311,13 +310,10 @@ class OperationsAuditController extends Controller
             return back()->with('error', 'Only a tiling operation can be retried from here.');
         }
 
-        $params = $operation->params ?? [];
-
-        foreach (['server_id', 'patch_size_id', 'magnification_id'] as $required) {
-            if (empty($params[$required])) {
-                return back()->with('error',
-                    'This operation did not record the settings it ran with, so it cannot be repeated automatically. Re-dispatch it from the Operations page.');
-            }
+        if (empty($operation->params['server_id']) || empty($operation->params['patch_size_id'])
+            || empty($operation->params['magnification_id'])) {
+            return back()->with('error',
+                'This operation did not record the settings it ran with, so it cannot be repeated automatically. Re-dispatch it from the Operations page.');
         }
 
         $sampleIds = $operation->items()
@@ -331,21 +327,22 @@ class OperationsAuditController extends Controller
             return back()->with('error', 'Nothing in this operation failed, so there is nothing to retry.');
         }
 
-        $result = $this->dispatcher->patchExtraction(
-            $sampleIds,
-            (int) $params['server_id'],
-            (int) $params['patch_size_id'],
-            (int) $params['magnification_id'],
-            $operation,
-        );
+        $result = $this->dispatcher->retryWithin($operation, $sampleIds);
 
-        if (! $result['operation']) {
+        if ($result['queued'] === 0) {
             return back()->with('error', 'None of those slides still exist, so there was nothing to retry.');
         }
 
+        $message = "Re-queued {$result['queued']} slide(s) inside {$operation->reference}. "
+                 . 'They stay in this operation, and it will report how they finish.';
+
+        if ($result['skipped'] > 0) {
+            $message .= " {$result['skipped']} slide(s) no longer exist and were left out.";
+        }
+
         return redirect()
-            ->route('admin.operations.audit.show', $result['operation'])
-            ->with('success', "Retrying {$result['queued']} slide(s) as \"{$result['operation']->name}\".");
+            ->route('admin.operations.audit.show', $operation)
+            ->with('success', $message);
     }
 
     /**
