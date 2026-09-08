@@ -24,6 +24,12 @@ use Illuminate\Support\Facades\Log;
  * are on Drive. An item whose slide is still unfinished is left alone and
  * reported, because that one may be a real failure.
  *
+ * ATTRIBUTION. "The slide is tiled now" is not on its own proof that THIS run
+ * tiled it. If a later operation covers the same slide and completed it, that
+ * later run did the work — crediting the earlier one would have the audit
+ * report a success it never achieved, which is the same dishonesty as the false
+ * failure, only in the opposite direction. Those items keep their failure.
+ *
  * Every corrected row keeps a message saying it was corrected and why, so the
  * audit shows a correction rather than a silent rewrite.
  *
@@ -55,6 +61,15 @@ class RepairFalseOperationFailures extends Command
             ->where('s.tiling_status', 'done')
             ->whereNotNull('s.tiles_gdrive_path')
             ->when($this->option('operation'), fn ($q, $id) => $q->where('o.id', $id))
+            // A later run that completed the same slide is the one that did the
+            // work, so this failure stands.
+            ->whereNotExists(function ($q) {
+                $q->select(DB::raw(1))
+                    ->from('operation_items as later')
+                    ->whereColumn('later.sample_id', 'operation_items.sample_id')
+                    ->whereColumn('later.operation_id', '>', 'operation_items.operation_id')
+                    ->where('later.status', 'completed');
+            })
             ->select('operation_items.id', 'operation_items.operation_id', 'operation_items.status', 's.file_name')
             ->get();
 
