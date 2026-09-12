@@ -33,6 +33,7 @@ class ImportTcgaCases extends Command
     protected $signature = 'tcga:import-cases
         {--orphans : Take the patients of every sample that has no case}
         {--case=* : Explicit patient barcodes, e.g. TCGA-AC-A23E}
+        {--prefix=TCGA- : Only sweep orphans whose barcode starts with this}
         {--chunk=90 : Patients per API request}
         {--dry-run : List the patients that would be fetched, and stop}';
 
@@ -125,8 +126,14 @@ class ImportTcgaCases extends Command
         );
 
         if ($this->option('orphans')) {
+            // Orphans come from every source this database holds, and GDC only
+            // knows about one of them. Asking it about a BRACS barcode wastes
+            // the request and quietly counts as "not found".
+            $prefix = (string) $this->option('prefix');
+
             Sample::whereNull('case_id')
                 ->whereNotNull('entity_submitter_id')
+                ->when($prefix !== '', fn ($q) => $q->where('entity_submitter_id', 'like', $prefix . '%'))
                 ->pluck('entity_submitter_id')
                 ->each(function (string $entity) use (&$patients) {
                     // "TCGA-AC-A23E-01Z-00-DX1" → "TCGA-AC-A23E"
