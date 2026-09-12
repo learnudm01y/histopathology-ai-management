@@ -8,6 +8,7 @@ use App\Models\DataSource;
 use App\Models\PatientCase;
 use App\Models\Sample;
 use App\Services\CaseLinker;
+use App\Services\GdcCaseImporter;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
@@ -324,148 +325,14 @@ class ImportsController extends Controller
         $summary['clinical']['files']++;
         $items = json_decode($content, true);
         if (!is_array($items)) return;
-        if (Arr::isAssoc($items)) $items = [$items];
 
-        DB::transaction(function () use ($items, &$summary) {
-            foreach ($items as $row) {
-                $summary['clinical']['rows']++;
+        // The mapping itself lives in GdcCaseImporter so the same records can
+        // arrive either as an uploaded file or straight from the GDC API.
+        $tally = app(GdcCaseImporter::class)->importCases($items);
 
-                $caseUuid     = $row['case_id'] ?? null;
-                $submitterId  = $row['submitter_id'] ?? null;
-                if (!$caseUuid) continue;
-
-                // 1) Upsert minimal case record
-                $caseAttrs = array_filter([
-                    'case_id'      => $caseUuid,
-                    'submitter_id' => $submitterId,
-                    'project_id'   => $row['project']['project_id'] ?? null,
-                    'primary_site' => $row['primary_site'] ?? null,
-                    'disease_type' => $row['disease_type'] ?? null,
-                ], fn ($v) => $v !== null && $v !== '');
-
-                $caseExisting = PatientCase::where('case_id', $caseUuid)->first();
-                if ($caseExisting) {
-                    $caseExisting->fill($caseAttrs)->save();
-                    $summary['clinical']['cases_updated']++;
-                    $caseRow = $caseExisting;
-                } else {
-                    $caseRow = PatientCase::create($caseAttrs);
-                    $summary['clinical']['cases_created']++;
-                }
-
-                // Reverse-link orphan samples to this freshly upserted case
-                $linked = app(CaseLinker::class)->linkCaseToOrphanSamples($caseRow);
-                if ($linked > 0) {
-                    $summary['clinical']['samples_linked'] += $linked;
-                }
-
-                // 2) Build the rich clinical_slide_case_information record
-                $demographic    = $row['demographic'] ?? [];
-                $diagnoses      = $row['diagnoses']   ?? [];
-                $primaryDx      = $diagnoses[0] ?? [];
-                $treatments     = $primaryDx['treatments'] ?? [];
-                $pathDetail     = $primaryDx['pathology_details'][0] ?? [];
-                $followUps      = $row['follow_ups'] ?? [];
-
-                // Flatten molecular_tests + other_clinical_attributes from follow_ups
-                $molecularTests        = [];
-                $otherClinicalAttrs    = [];
-                foreach ($followUps as $fu) {
-                    foreach ($fu['molecular_tests'] ?? [] as $mt) {
-                        $molecularTests[] = $mt;
-                    }
-                    foreach ($fu['other_clinical_attributes'] ?? [] as $oc) {
-                        $otherClinicalAttrs[] = $oc;
-                    }
-                }
-
-                $clinicalAttrs = [
-                    'case_id'                          => $caseUuid,
-                    'submitter_id'                     => $submitterId,
-                    'project_id'                       => $row['project']['project_id'] ?? null,
-                    'disease_type'                     => $row['disease_type'] ?? null,
-                    'primary_site'                     => $row['primary_site'] ?? null,
-                    'index_date'                       => $row['index_date'] ?? null,
-                    'consent_type'                     => $row['consent_type'] ?? null,
-                    'days_to_consent'                  => $row['days_to_consent'] ?? null,
-                    'lost_to_followup'                 => $row['lost_to_followup'] ?? null,
-                    'state'                            => $row['state'] ?? null,
-                    'updated_datetime'                 => $row['updated_datetime'] ?? null,
-
-                    // Demographic
-                    'demographic_id'                       => $demographic['demographic_id'] ?? null,
-                    'gender'                               => $demographic['gender'] ?? null,
-                    'sex_at_birth'                         => $demographic['sex_at_birth'] ?? null,
-                    'race'                                 => $demographic['race'] ?? null,
-                    'ethnicity'                            => $demographic['ethnicity'] ?? null,
-                    'age_at_index'                         => $demographic['age_at_index'] ?? null,
-                    'days_to_birth'                        => $demographic['days_to_birth'] ?? null,
-                    'vital_status'                         => $demographic['vital_status'] ?? null,
-                    'age_is_obfuscated'                    => $demographic['age_is_obfuscated'] ?? null,
-                    'country_of_residence_at_enrollment'   => $demographic['country_of_residence_at_enrollment'] ?? null,
-                    'demographic_state'                    => $demographic['state'] ?? null,
-                    'demographic_updated_datetime'         => $demographic['updated_datetime'] ?? null,
-
-                    // Primary Diagnosis
-                    'diagnosis_id'                  => $primaryDx['diagnosis_id'] ?? null,
-                    'diagnosis_submitter_id'        => $primaryDx['submitter_id'] ?? null,
-                    'primary_diagnosis'             => $primaryDx['primary_diagnosis'] ?? null,
-                    'tissue_or_organ_of_origin'     => $primaryDx['tissue_or_organ_of_origin'] ?? null,
-                    'site_of_resection_or_biopsy'   => $primaryDx['site_of_resection_or_biopsy'] ?? null,
-                    'icd_10_code'                   => $primaryDx['icd_10_code'] ?? null,
-                    'morphology'                    => $primaryDx['morphology'] ?? null,
-                    'classification_of_tumor'       => $primaryDx['classification_of_tumor'] ?? null,
-                    'diagnosis_is_primary_disease'  => $primaryDx['diagnosis_is_primary_disease'] ?? null,
-                    'method_of_diagnosis'           => $primaryDx['method_of_diagnosis'] ?? null,
-                    'synchronous_malignancy'        => $primaryDx['synchronous_malignancy'] ?? null,
-                    'laterality'                    => $primaryDx['laterality'] ?? null,
-                    'prior_malignancy'              => $primaryDx['prior_malignancy'] ?? null,
-                    'prior_treatment'               => $primaryDx['prior_treatment'] ?? null,
-                    'metastasis_at_diagnosis'       => $primaryDx['metastasis_at_diagnosis'] ?? null,
-                    'year_of_diagnosis'             => $primaryDx['year_of_diagnosis'] ?? null,
-                    'days_to_diagnosis'             => $primaryDx['days_to_diagnosis'] ?? null,
-                    'days_to_last_follow_up'        => $primaryDx['days_to_last_follow_up'] ?? null,
-                    'age_at_diagnosis'              => $primaryDx['age_at_diagnosis'] ?? null,
-                    'diagnosis_state'               => $primaryDx['state'] ?? null,
-                    'diagnosis_updated_datetime'    => $primaryDx['updated_datetime'] ?? null,
-
-                    // AJCC Staging
-                    'ajcc_pathologic_stage'         => $primaryDx['ajcc_pathologic_stage'] ?? null,
-                    'ajcc_pathologic_t'             => $primaryDx['ajcc_pathologic_t'] ?? null,
-                    'ajcc_pathologic_n'             => $primaryDx['ajcc_pathologic_n'] ?? null,
-                    'ajcc_pathologic_m'             => $primaryDx['ajcc_pathologic_m'] ?? null,
-                    'ajcc_staging_system_edition'   => $primaryDx['ajcc_staging_system_edition'] ?? null,
-
-                    // Pathology details
-                    'pathology_detail_id'                 => $pathDetail['pathology_detail_id'] ?? null,
-                    'pathology_detail_submitter_id'       => $pathDetail['submitter_id'] ?? null,
-                    'consistent_pathology_review'         => $pathDetail['consistent_pathology_review'] ?? null,
-                    'lymph_nodes_positive'                => $pathDetail['lymph_nodes_positive'] ?? null,
-                    'lymph_nodes_tested'                  => $pathDetail['lymph_nodes_tested'] ?? null,
-                    'pathology_detail_state'              => $pathDetail['state'] ?? null,
-                    'pathology_detail_created_datetime'   => $pathDetail['created_datetime'] ?? null,
-                    'pathology_detail_updated_datetime'   => $pathDetail['updated_datetime'] ?? null,
-
-                    // JSON columns (full nested arrays preserved)
-                    'sites_of_involvement'      => $primaryDx['sites_of_involvement'] ?? null,
-                    'diagnoses'                 => $diagnoses,
-                    'treatments'                => $treatments,
-                    'follow_ups'                => $followUps,
-                    'molecular_tests'           => $molecularTests,
-                    'other_clinical_attributes' => $otherClinicalAttrs,
-                    'raw_json'                  => $row,
-                ];
-
-                $clinical = ClinicalCaseInformation::where('case_id', $caseUuid)->first();
-                if ($clinical) {
-                    $clinical->fill($clinicalAttrs)->save();
-                    $summary['clinical']['clinical_updated']++;
-                } else {
-                    ClinicalCaseInformation::create($clinicalAttrs);
-                    $summary['clinical']['clinical_created']++;
-                }
-            }
-        });
+        foreach ($tally as $key => $n) {
+            $summary['clinical'][$key] = ($summary['clinical'][$key] ?? 0) + $n;
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────
