@@ -60,6 +60,13 @@
             </div>
         </li>
 
+        <li class="nav-item {{ $routeName === 'admin.ai-workflow' ? 'active' : '' }}">
+            <a class="nav-link" href="{{ route('admin.ai-workflow') }}">
+                <i class="menu-icon mdi mdi-microscope"></i>
+                <span class="menu-title">AI - Diagnosis Workflow</span>
+            </a>
+        </li>
+
         <li class="nav-item {{ $routeName === 'admin.ai-diagnosis-test' ? 'active' : '' }}">
             <a class="nav-link" href="{{ route('admin.ai-diagnosis-test') }}">
                 <i class="menu-icon mdi mdi-flask-outline"></i>
