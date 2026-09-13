@@ -5,7 +5,6 @@
 @section('content')
 @php
     $stage = $state['stage'] ?? null;
-    $ready = $stage === 'ready';
     $perf  = $model['performance'] ?? [];
 @endphp
 
@@ -72,7 +71,7 @@
           <input type="hidden" name="model" value="{{ $modelKey }}">
           <div style="display:flex;gap:.6rem;flex-wrap:wrap">
             <select name="sample_id" class="form-control" style="flex:1;min-width:20rem" required>
-              <option value="">— ready to score ({{ $ready_count ?? $ready->count() }}) —</option>
+              <option value="">— ready to score ({{ $ready->count() }}) —</option>
               @foreach($ready as $s)
                 <option value="{{ $s->id }}" @selected($sample && $sample->id === $s->id)>
                   #{{ $s->id }} · {{ $s->entity_submitter_id ?: $s->file_name }}
