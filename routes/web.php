@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Admin\AiWorkflowController;
 use App\Http\Controllers\Admin\AuthController;
 use App\Http\Controllers\Admin\BulkDeleteController;
 use App\Http\Controllers\Admin\CasesController;
@@ -105,6 +106,16 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::post('ai-diagnosis-test/dispatch', [InferenceController::class, 'dispatch'])->name('ai-diagnosis-test.dispatch');
         Route::get('ai-diagnosis-test/samples-for-run/{trainingRun}', [InferenceController::class, 'samplesForRun'])->name('ai-diagnosis-test.samples-for-run');
         Route::get('ai-diagnosis-test/{inferenceRun}/status', [InferenceController::class, 'status'])->name('ai-diagnosis-test.status');
+
+        // AI Diagnosis Workflow — take a slide from wherever it is to an answer.
+        // Separate from the page above: that one dispatches a CLAM checkpoint to a
+        // GPU pod, this one reads a slide's actual pipeline stage, offers only the
+        // step that unblocks it, and runs models from the registry in config.
+        Route::get('ai-workflow',            [AiWorkflowController::class, 'index'])->name('ai-workflow');
+        Route::post('ai-workflow/intake',    [AiWorkflowController::class, 'intake'])->name('ai-workflow.intake');
+        Route::post('ai-workflow/advance',   [AiWorkflowController::class, 'advance'])->name('ai-workflow.advance');
+        Route::post('ai-workflow/predict',   [AiWorkflowController::class, 'predict'])->name('ai-workflow.predict');
+        Route::get('ai-workflow/{sample}/state', [AiWorkflowController::class, 'state'])->name('ai-workflow.state');
 
         // Cases (patients) — clinical case browser
         Route::get('cases',          [CasesController::class, 'index'])->name('cases.index');
