@@ -37,6 +37,9 @@
   .wf-kv b{font-variant-numeric:tabular-nums}
   .wf-limits li{font-size:.84rem;color:#57516a;margin-bottom:.3rem}
   .wf-mono{font-family:ui-monospace,Consolas,monospace;font-size:.85rem}
+  .wf-done{display:flex;justify-content:space-between;align-items:center;gap:.9rem;flex-wrap:wrap;
+           background:#f3f1fb;border:1px solid #ddd6f2;border-radius:8px;
+           padding:.6rem .85rem;margin-bottom:.9rem;font-size:.88rem;color:#41394f}
   table.wf-nn{width:100%;border-collapse:collapse;font-size:.87rem}
   table.wf-nn td,table.wf-nn th{padding:.35rem .5rem;border-bottom:1px solid #f0eef4;text-align:left}
 </style>
@@ -189,6 +192,21 @@
         @if($sample->patientCase) · patient {{ $sample->patientCase->submitter_id }} @endif
       </p>
 
+      {{-- A score already on the books. Shown as a pointer rather than reprinted
+           here: the row is the record, the report is where it is read, and two
+           places claiming to be the answer is how they drift apart. --}}
+      @if(!empty($scored))
+      <div class="wf-done">
+        <div>
+          <strong>Already scored</strong> on {{ $scored->created_at->format('j M Y, H:i') }} —
+          delivered <strong>{{ $scored->decision }}</strong>@if($scored->truth), recorded diagnosis
+          {{ $scored->truth }}@endif.
+        </div>
+        <a class="btn btn-sm btn-primary" href="{{ route('admin.ai-results.show', $scored) }}">
+          Open the report</a>
+      </div>
+      @endif
+
       @foreach($state['steps'] as $step)
         @php
           $cls = !empty($step['done']) ? 'done' : (!empty($step['running']) ? 'run'
@@ -272,7 +290,14 @@
       $cls = $blocked ? 'stop' : ($refer ? 'refer' : 'ok');
     @endphp
     <div class="wf-card">
-      <h3>3 · Result — {{ $prediction['model_label'] ?? '' }}</h3>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:.8rem;flex-wrap:wrap">
+        <h3 style="margin-bottom:.85rem">3 · Result — {{ $prediction['model_label'] ?? '' }}</h3>
+        @if(!empty($prediction['prediction_id']))
+          <a class="btn btn-sm btn-primary"
+             href="{{ route('admin.ai-results.show', $prediction['prediction_id']) }}">
+            Open the full report</a>
+        @endif
+      </div>
 
       <div class="wf-verdict {{ $cls }}">
         @if($blocked)

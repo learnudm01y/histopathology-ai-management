@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\SlidePrediction;
+use App\Services\DiagnosisWorkflow;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -49,6 +50,136 @@ class AiResultsController extends Controller
             'models'  => SlidePrediction::distinct()->pluck('model_key')->filter()->values(),
             'sites'   => SlidePrediction::distinct()->orderBy('site')->pluck('site')->filter()->values(),
         ]);
+    }
+
+    /**
+     * One score, read back in full.
+     *
+     * This exists because the workflow page could not do it. That page shows a
+     * result it has just produced — a session flash, or a seven-day cache entry
+     * — so a link to a run from last month arrived at an intake form with no
+     * answer anywhere on it. The stored row is the thing that is meant to still
+     * be answerable months later, so this report is built from the row and
+     * nothing else: open it today or next year and it reads the same.
+     *
+     * What the page has to settle in one look is not the probability. It is
+     * which of the three gates the slide failed, if it failed one — inputs,
+     * familiarity, confidence — because that is the difference between a result
+     * you can use, one to hand to a pathologist, and one to throw away.
+     */
+    public function show(SlidePrediction $prediction, DiagnosisWorkflow $workflow)
+    {
+        $prediction->load(['sample.patientCase:id,submitter_id', 'sample.diseaseSubtype:id,name']);
+
+        $sample  = $prediction->sample;
+        $payload = $prediction->payload ?: [];
+        $model   = config("diagnosis_models.models.{$prediction->model_key}");
+
+        // Evidence is built on request and kept on disk, so it may or may not
+        // exist for any given slide. Absent is a normal state, not an error.
+        $evidence = null;
+        if ($sample) {
+            $file = $workflow->evidenceDir($sample) . '/evidence.json';
+            $evidence = is_file($file)
+                ? json_decode((string) file_get_contents($file), true)
+                : null;
+        }
+
+        // Every other time this slide has been scored. A slide re-run after a
+        // pipeline fix has two rows that disagree, and dropping the older one
+        // would make the disagreement invisible rather than resolved.
+        $history = SlidePrediction::where('sample_id', $prediction->sample_id)
+            ->where('id', '!=', $prediction->id)
+            ->orderByDesc('id')->limit(8)->get();
+
+        return view('admin.ai-report', [
+            'p'        => $prediction,
+            'payload'  => $payload,
+            'sample'   => $sample,
+            'model'    => $model,
+            'evidence' => $evidence,
+            'history'  => $history,
+            'gates'    => $this->gates($prediction, $payload, $model),
+        ]);
+    }
+
+    /**
+     * The three gates a slide passes, each with the number it was judged on and
+     * the line it was judged against.
+     *
+     * Carrying the threshold next to the value is the whole point. A bare
+     * "familiarity 40.3" means nothing; "40.3, against a refusal line at 38.7"
+     * can be argued with, and being able to argue with it is exactly what the
+     * reader of a refused result needs.
+     */
+    private function gates(SlidePrediction $p, array $payload, ?array $model): array
+    {
+        $problems = $payload['input_problems'] ?? [];
+
+        $refuseAt = $payload['ood_refuse_at'] ?? ($model['familiarity']['refuse'] ?? null);
+        $low      = $model['referral']['low']  ?? null;
+        $high     = $model['referral']['high'] ?? null;
+        $typical  = $model['familiarity']['typical'] ?? null;
+        $answers  = $model['performance']['accuracy_when_answering'] ?? 95;
+        $withheld = $p->wasWithheld();
+
+        return [
+            [
+                'key'   => 'inputs',
+                'label' => 'The slide is what the model was built for',
+                'short' => 'the slide is not what this model reads',
+                'state' => $problems ? 'fail' : 'pass',
+                'value' => $problems
+                    ? implode('; ', $problems)
+                    : ($model['requires']['feature_model'] ?? 'TITAN') . ' features, '
+                      . ($model['requires']['patch_px'] ?? 224) . 'px at '
+                      . ($model['requires']['magnification'] ?? '20x') . ', '
+                      . number_format((int) $p->patches) . ' patches',
+                'note'  => $problems
+                    ? 'Features from another encoder, patch size or magnification are not comparable, '
+                      . 'and scoring them anyway returns a number that looks exactly like a valid one.'
+                    : 'Encoder, patch size, magnification and patch count all match what it was trained on.',
+            ],
+            [
+                'key'   => 'familiarity',
+                'label' => 'The model has seen slides like this before',
+                'short' => 'this slide is too unfamiliar for the model to score',
+                'state' => $p->ood_status === 'refuse' ? 'fail' : ($p->ood_status === 'warn' ? 'warn' : 'pass'),
+                'value' => $p->familiarity !== null
+                    ? number_format($p->familiarity, 1) . ($refuseAt ? ' · refuses above ' . $refuseAt : '')
+                    : 'not measured',
+                'note'  => match ($p->ood_status) {
+                    'refuse' => 'Further from the training set than any slide this model has been shown to '
+                              . 'handle. It can only choose between IDC and ILC and has no way to answer '
+                              . 'neither, so on a slide this unfamiliar it would be forced to pick one.',
+                    'warn'   => 'This slide only loosely resembles the training set. The probability is '
+                              . 'still worth reading, but with less weight than its calibration suggests.',
+                    default  => 'Comfortably inside the range the model was calibrated on'
+                              . ($typical ? ' — known slides sit around ' . $typical . '.' : '.'),
+                },
+            ],
+            [
+                'key'   => 'confidence',
+                'label' => 'It is sure enough to commit',
+                'short' => 'it will not commit at this probability',
+                'state' => $p->referred ? 'warn' : 'pass',
+                'value' => $p->p_ilc !== null
+                    ? 'p(ILC) = ' . number_format($p->p_ilc, 2)
+                      . ($low !== null ? ' · will not commit between ' . $low . ' and ' . $high : '')
+                    : 'no probability recorded',
+                // The accuracy figure belongs to answers that were delivered, so
+                // it is not quoted beside one that was withheld for another
+                // reason — a true number in the wrong place still misleads.
+                'note'  => $p->referred
+                    ? 'Inside the band this model was tuned to stay out of. The band was set so the '
+                      . "answers it does give are right about {$answers}% of the time; the slides in "
+                      . 'here are what buying that costs.'
+                    : ($withheld
+                        ? 'Outside the referral band — though that counts for nothing while a gate '
+                          . 'above is failing.'
+                        : "Outside the referral band, where this model is right about {$answers}% of the time."),
+            ],
+        ];
     }
 
     /**

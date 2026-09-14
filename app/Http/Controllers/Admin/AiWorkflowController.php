@@ -58,6 +58,7 @@ class AiWorkflowController extends Controller
         $chain = null;
         $watching = false;
         $evidence = null;
+        $scored = null;
         $prediction = session('prediction');
 
         if ($id = $request->integer('sample_id')) {
@@ -76,6 +77,14 @@ class AiWorkflowController extends Controller
                 $evidence = is_file("{$dir}/evidence.json")
                     ? json_decode((string) file_get_contents("{$dir}/evidence.json"), true)
                     : null;
+
+                // Whether this slide already has a kept score under this model.
+                // The cache above expires; this does not, and a page that shows
+                // nothing for a slide that was scored in March is the reason
+                // the report had to become a page of its own.
+                $scored = SlidePrediction::where('sample_id', $sample->id)
+                    ->where('model_key', $modelKey)
+                    ->latest('id')->first();
 
                 // Whether the page should keep reloading. A queued chain counts
                 // even though every column still reads pending: the wait for a
@@ -110,7 +119,8 @@ class AiWorkflowController extends Controller
                    'feature_extraction_status']);
 
         return view('admin.ai-workflow', compact(
-            'models', 'modelKey', 'model', 'sample', 'state', 'prediction', 'ready', 'pending', 'chain', 'watching', 'evidence'
+            'models', 'modelKey', 'model', 'sample', 'state', 'prediction', 'ready',
+            'pending', 'chain', 'watching', 'evidence', 'scored'
         ));
     }
 
@@ -187,7 +197,11 @@ class AiWorkflowController extends Controller
 
         $result['model_key'] = $validated['model'];
         $result['model_label'] = $model['label'];
-        SlidePrediction::record($sample, $result, $validated['model']);
+        // The row is the record; the flash below is only what this page shows
+        // next. Carrying the row's id in it is what lets the page hand over to
+        // the permanent report instead of pretending the cache is one.
+        $row = SlidePrediction::record($sample, $result, $validated['model']);
+        $result['prediction_id'] = $row->id;
 
         return $back->with('prediction', $result);
     }
@@ -391,12 +405,21 @@ class AiWorkflowController extends Controller
             ? json_decode((string) file_get_contents("{$evDir}/evidence.json"), true)
             : null;
 
+        // The cache holds a run for a week; the row holds it for good. Reading
+        // both means the refusal warning over the heat layer still appears on a
+        // slide scored in March, and the way back out of the viewer lands on
+        // the report rather than on an intake form.
+        $scored = SlidePrediction::where('sample_id', $sample->id)
+            ->where('model_key', $modelKey)->latest('id')->first();
+
         return view('admin.ai-viewer', [
             'sample' => $sample,
             'model' => $model,
             'modelKey' => $modelKey,
             'evidence' => $evidence,
-            'prediction' => Cache::get(AdvanceWorkflow::resultKey($sample->id)),
+            'scored' => $scored,
+            'prediction' => Cache::get(AdvanceWorkflow::resultKey($sample->id))
+                            ?: ($scored?->payload ?: null),
         ]);
     }
 
@@ -406,13 +429,19 @@ class AiWorkflowController extends Controller
         $validated = $request->validate([
             'sample_id' => ['required', 'integer', 'exists:samples,id'],
             'model'     => ['required', 'string'],
+            // Built from a stored report as often as from this page now, and a
+            // wait of minutes that ends somewhere other than where it started
+            // reads as a failure.
+            'return_to' => ['nullable', 'integer', 'exists:slide_predictions,id'],
         ]);
 
         $model = config("diagnosis_models.models.{$validated['model']}");
         $sample = Sample::findOrFail($validated['sample_id']);
-        $back = redirect()->route('admin.ai-workflow', [
-            'sample_id' => $sample->id, 'model' => $validated['model'],
-        ]);
+        $back = ! empty($validated['return_to'])
+            ? redirect()->route('admin.ai-results.show', $validated['return_to'])
+            : redirect()->route('admin.ai-workflow', [
+                'sample_id' => $sample->id, 'model' => $validated['model'],
+            ]);
 
         if (! $model) {
             return $back->withErrors(['model' => 'No such model is registered.']);

@@ -110,7 +110,7 @@
         @endif
       </td>
       <td style="white-space:nowrap">
-        <a href="{{ route('admin.ai-workflow', ['sample_id' => $r->sample_id, 'model' => $r->model_key]) }}">report</a>
+        <a href="{{ route('admin.ai-results.show', $r) }}">report</a>
         ·
         <a href="{{ route('admin.ai-workflow.viewer', ['sample' => $r->sample_id, 'model' => $r->model_key]) }}">slide</a>
       </td>

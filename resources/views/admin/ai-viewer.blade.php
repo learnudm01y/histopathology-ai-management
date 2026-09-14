@@ -18,8 +18,13 @@
 
 <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:.6rem">
   <h2 style="margin:0">{{ $sample->entity_submitter_id ?: $sample->file_name }}</h2>
-  <a href="{{ route('admin.ai-workflow', ['sample_id' => $sample->id, 'model' => $modelKey]) }}"
-     class="btn btn-sm btn-outline-secondary">← back to the report</a>
+  @if(!empty($scored))
+    <a href="{{ route('admin.ai-results.show', $scored) }}"
+       class="btn btn-sm btn-outline-secondary">← back to the report</a>
+  @else
+    <a href="{{ route('admin.ai-workflow', ['sample_id' => $sample->id, 'model' => $modelKey]) }}"
+       class="btn btn-sm btn-outline-secondary">← back to the workflow</a>
+  @endif
 </div>
 
 @if(!empty($prediction) && ($prediction['ood_status'] ?? '') === 'refuse')

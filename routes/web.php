@@ -133,6 +133,10 @@ Route::prefix('admin')->name('admin.')->group(function () {
         // watch go by — it is something you come back to.
         Route::get('ai-results',        [AiResultsController::class, 'index'])->name('ai-results');
         Route::get('ai-results/export', [AiResultsController::class, 'export'])->name('ai-results.export');
+        // One stored score, read back in full. Registered after /export so the
+        // literal route is not swallowed by the binding.
+        Route::get('ai-results/{prediction}', [AiResultsController::class, 'show'])
+            ->whereNumber('prediction')->name('ai-results.show');
 
         // Cases (patients) — clinical case browser
         Route::get('cases',          [CasesController::class, 'index'])->name('cases.index');

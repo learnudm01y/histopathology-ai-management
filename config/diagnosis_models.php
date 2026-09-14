@@ -54,6 +54,15 @@ return [
 
             'classes' => ['IDC', 'ILC'],
 
+            // The lines the artefact actually judges by, mirrored from the model
+            // summary so a report can draw them rather than describe them. The
+            // answer carries its own familiarity thresholds (10_predict.py), and
+            // those win where present; these are the fallback for rows scored
+            // before it did, and the only source there has ever been for the
+            // referral band.
+            'referral' => ['low' => 0.10, 'high' => 0.90],
+            'familiarity' => ['warn' => 34.3, 'refuse' => 38.7, 'typical' => 28.9],
+
             // Shown on the page so the reader sees the model's limits next to
             // its answer, rather than having to go and find them.
             'performance' => [

@@ -131,7 +131,8 @@ class AdvanceWorkflow implements ShouldQueue
             // The cache entry is for the page to pick up quickly; the row is
             // the record. An unattended run nobody watched must still be
             // answerable for months later.
-            SlidePrediction::record($sample, $result, $this->modelKey);
+            $row = SlidePrediction::record($sample, $result, $this->modelKey);
+            $result['prediction_id'] = $row->id;
             Cache::put(self::resultKey($this->sampleId), $result, now()->addDays(7));
             $this->note('done', 'Finished.');
             $this->releaseTheGpu();
