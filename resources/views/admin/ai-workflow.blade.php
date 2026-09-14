@@ -329,6 +329,44 @@
       <div class="wf-kv"><span>Familiarity (lower is more familiar)</span><b>{{ $prediction['familiarity'] ?? '—' }}</b></div>
       <div class="wf-kv"><span>Model AUC on unseen laboratories</span><b>{{ $prediction['model']['loso_auc'] ?? '—' }}</b></div>
 
+      {{-- Why it said what it said ─────────────────────────────────────── --}}
+      <h3 style="margin-top:1.2rem">Where the evidence is</h3>
+      @if(empty($evidence))
+        <p style="color:#6b6480;font-size:.88rem;margin:.2rem 0 .6rem">
+          The model max-pools over patches, so every dimension of its decision comes from
+          exactly one patch — which means this is real attribution, not a saliency guess.
+          Building it re-reads the features and cuts the winning tiles out of the archive:
+          a couple of minutes.
+        </p>
+        <form method="POST" action="{{ route('admin.ai-workflow.evidence') }}">
+          @csrf
+          <input type="hidden" name="sample_id" value="{{ $sample->id }}">
+          <input type="hidden" name="model" value="{{ $prediction['model_key'] ?? $modelKey }}">
+          <button class="btn btn-primary">Show me what it looked at</button>
+        </form>
+      @else
+        <div class="wf-kv"><span>Patches carrying the decision</span>
+          <b>top 20 hold {{ round(($evidence['share_top20'] ?? 0) * 100) }}% of it</b></div>
+        <p style="color:#6b6480;font-size:.86rem;margin:.5rem 0 .7rem">
+          @if(($evidence['share_top20'] ?? 0) < 0.35)
+            The decision is spread thin — no small group of patches is driving it, so there is
+            no single region to point a pathologist at. Read that as the model responding to
+            the slide's overall texture rather than to a lesion it found.
+          @else
+            A handful of patches carry most of the decision. Those are the ones to judge; if
+            they are blood, fat or edge artefact, the answer is worth nothing whatever the
+            probability said.
+          @endif
+        </p>
+        <img src="{{ route('admin.ai-workflow.evidence-image', [$sample->id, 'evidence_map.png']) }}"
+             alt="map of per-patch evidence" style="max-width:100%;border:1px solid #e6e2ef;border-radius:6px">
+        @if(!empty($evidence['top_patches']))
+          <img src="{{ route('admin.ai-workflow.evidence-image', [$sample->id, 'top_patches.png']) }}"
+               alt="the patches that carried the decision"
+               style="max-width:100%;margin-top:.8rem;border:1px solid #e6e2ef;border-radius:6px">
+        @endif
+      @endif
+
       @if(!empty($prediction['nearest_cases']))
         <h3 style="margin-top:1.1rem">Nearest known cases</h3>
         <p style="color:#6b6480;font-size:.85rem;margin-bottom:.5rem">

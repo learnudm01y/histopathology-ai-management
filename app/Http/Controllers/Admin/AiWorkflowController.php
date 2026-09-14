@@ -56,6 +56,7 @@ class AiWorkflowController extends Controller
         $state = null;
         $chain = null;
         $watching = false;
+        $evidence = null;
         $prediction = session('prediction');
 
         if ($id = $request->integer('sample_id')) {
@@ -66,6 +67,14 @@ class AiWorkflowController extends Controller
                 // A prediction the queue produced outlives the one-shot session
                 // flash, so an unattended run is still here when you come back.
                 $prediction = $prediction ?: Cache::get(AdvanceWorkflow::resultKey($sample->id));
+
+                // Evidence, if it has ever been built for this slide. It is
+                // kept on disk rather than rebuilt per view because producing
+                // it takes minutes.
+                $dir = $this->workflow->evidenceDir($sample);
+                $evidence = is_file("{$dir}/evidence.json")
+                    ? json_decode((string) file_get_contents("{$dir}/evidence.json"), true)
+                    : null;
 
                 // Whether the page should keep reloading. A queued chain counts
                 // even though every column still reads pending: the wait for a
@@ -100,7 +109,7 @@ class AiWorkflowController extends Controller
                    'feature_extraction_status']);
 
         return view('admin.ai-workflow', compact(
-            'models', 'modelKey', 'model', 'sample', 'state', 'prediction', 'ready', 'pending', 'chain', 'watching'
+            'models', 'modelKey', 'model', 'sample', 'state', 'prediction', 'ready', 'pending', 'chain', 'watching', 'evidence'
         ));
     }
 
@@ -320,6 +329,52 @@ class AiWorkflowController extends Controller
         return redirect()->route('admin.ai-workflow', [
             'sample_id' => $validated['sample_id'], 'model' => $validated['model'],
         ])->with('success', 'The queue has it. Every remaining step runs without you.');
+    }
+
+    /** Build the evidence view for a slide that has already been scored. */
+    public function evidence(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'sample_id' => ['required', 'integer', 'exists:samples,id'],
+            'model'     => ['required', 'string'],
+        ]);
+
+        $model = config("diagnosis_models.models.{$validated['model']}");
+        $sample = Sample::findOrFail($validated['sample_id']);
+        $back = redirect()->route('admin.ai-workflow', [
+            'sample_id' => $sample->id, 'model' => $validated['model'],
+        ]);
+
+        if (! $model) {
+            return $back->withErrors(['model' => 'No such model is registered.']);
+        }
+
+        $result = $this->workflow->evidence($sample, $model);
+        if (isset($result['error'])) {
+            return $back->withErrors(['model' => $result['error']]);
+        }
+
+        return $back->with('success', 'Evidence built — the map and the patches are below.');
+    }
+
+    /**
+     * Serve one evidence image.
+     *
+     * Through a route rather than a public symlink: these are pictures of
+     * patient tissue, and the admin middleware that guards every other page
+     * here should guard them too. The filename is whitelisted rather than
+     * sanitised, because a whitelist cannot be walked out of.
+     */
+    public function evidenceImage(Sample $sample, string $file)
+    {
+        if (! in_array($file, ['evidence_map.png', 'top_patches.png'], true)) {
+            abort(404);
+        }
+
+        $path = $this->workflow->evidenceDir($sample) . '/' . $file;
+        abort_unless(is_file($path), 404);
+
+        return response()->file($path, ['Content-Type' => 'image/png']);
     }
 
     /**

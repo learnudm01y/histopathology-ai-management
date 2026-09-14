@@ -185,4 +185,64 @@ class DiagnosisWorkflow
         $decoded['slide'] = $sample->entity_submitter_id ?: $sample->file_name;
         return $decoded;
     }
+
+    /** Where this slide's evidence images live, generated or not. */
+    public function evidenceDir(Sample $sample): string
+    {
+        return storage_path("app/evidence/{$sample->id}");
+    }
+
+    /**
+     * Work out why the model said what it said, for one slide.
+     *
+     * Kept separate from predict() and run on request rather than with every
+     * score: it re-reads the whole feature file and streams the patch archive
+     * to cut out the winning tiles, which is minutes of work nobody wants
+     * spent on a slide they were only checking the stage of.
+     *
+     * @return array the evidence record, or ['error' => ...]
+     */
+    public function evidence(Sample $sample, array $model): array
+    {
+        $script = $model['evidence'] ?? null;
+        if (! $script || ! is_file($script)) {
+            return ['error' => 'This model does not ship an evidence view.'];
+        }
+        if (! $sample->features_gdrive_path) {
+            return ['error' => 'No features for this slide yet.'];
+        }
+
+        $mount = rtrim((string) config('services.gdrive_mount', '/mnt/gdrive'), '/');
+        $out = $this->evidenceDir($sample);
+
+        // The patch archive sits beside the features, under the tiles tree
+        // rather than the features tree. Derived rather than stored, so the
+        // two paths cannot drift apart.
+        $tiles = $mount . '/' . str_replace(
+            'samples/features/TITAN/', 'samples/sliced_slides/',
+            ltrim((string) $sample->features_gdrive_path, '/')
+        ) . '/patches.tar.gz';
+
+        $proc = new Process([
+            $model['python'], $script,
+            '--model', $model['artefact'],
+            '--features', $mount . '/' . ltrim((string) $sample->features_gdrive_path, '/'),
+            '--tiles', $tiles,
+            '--label', (string) ($sample->entity_submitter_id ?: $sample->file_name),
+            '--out', $out,
+        ], timeout: 900);
+
+        $proc->run();
+
+        if (! $proc->isSuccessful()) {
+            $err = trim($proc->getErrorOutput() ?: $proc->getOutput());
+            Log::error("[DiagnosisWorkflow] evidence for #{$sample->id}: {$err}");
+            return ['error' => 'Could not build the evidence view: ' . mb_substr($err, 0, 300)];
+        }
+
+        $json = $out . '/evidence.json';
+        $decoded = is_file($json) ? json_decode((string) file_get_contents($json), true) : null;
+
+        return is_array($decoded) ? $decoded : ['error' => 'The evidence run produced nothing readable.'];
+    }
 }

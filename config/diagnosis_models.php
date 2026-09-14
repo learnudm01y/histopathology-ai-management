@@ -39,6 +39,11 @@ return [
             'script'   => env('HISTO_AI_HOME', '/opt/histo-idc-ilc') . '/10_predict.py',
             'artefact' => env('HISTO_AI_HOME', '/opt/histo-idc-ilc') . '/model/idc_ilc_model.pkl',
 
+            // Why it said what it said: per-patch attribution, exact because
+            // the model max-pools. Optional — a model without it simply
+            // offers no evidence view.
+            'evidence' => env('HISTO_AI_HOME', '/opt/histo-idc-ilc') . '/12_evidence_for_slide.py',
+
             // Checked against the slide before it is scored.
             'requires' => [
                 'feature_model' => 'TITAN',

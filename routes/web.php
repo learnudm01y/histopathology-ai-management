@@ -116,6 +116,8 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::post('ai-workflow/advance',   [AiWorkflowController::class, 'advance'])->name('ai-workflow.advance');
         Route::post('ai-workflow/predict',   [AiWorkflowController::class, 'predict'])->name('ai-workflow.predict');
         Route::post('ai-workflow/autorun',   [AiWorkflowController::class, 'autorun'])->name('ai-workflow.autorun');
+        Route::post('ai-workflow/evidence',  [AiWorkflowController::class, 'evidence'])->name('ai-workflow.evidence');
+        Route::get('ai-workflow/{sample}/evidence/{file}', [AiWorkflowController::class, 'evidenceImage'])->name('ai-workflow.evidence-image');
         Route::get('ai-workflow/{sample}/state', [AiWorkflowController::class, 'state'])->name('ai-workflow.state');
 
         // Cases (patients) — clinical case browser
