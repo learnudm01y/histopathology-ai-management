@@ -276,13 +276,34 @@
 
       <div class="wf-verdict {{ $cls }}">
         @if($blocked)
-          <div style="font-weight:700">Do not use this result</div>
-          <div style="margin-top:.35rem;font-size:.9rem">
+          <div style="font-weight:700">The model is refusing to answer for this slide</div>
+          <div style="margin-top:.4rem;font-size:.9rem">
             @foreach(($prediction['input_problems'] ?? []) as $ip)<div>· {{ $ip }}</div>@endforeach
             @if(($prediction['ood_status'] ?? '') === 'refuse')
-              <div>· This slide is unlike anything the model was trained on. It has two
-                   answers and no way to say “neither”, so the answer is not meaningful.</div>
+              <div>· This slide sits further from the training set than any slide the model
+                   has been shown to handle — familiarity
+                   <strong>{{ $prediction['familiarity'] ?? '?' }}</strong>, against a
+                   refusal line at <strong>{{ $prediction['ood_refuse_at'] ?? '38.7' }}</strong>.</div>
+              <div style="margin-top:.35rem">The model can only choose between IDC and ILC.
+                   It has no way to answer “neither” or “I don't know”, so on a slide this
+                   unfamiliar it would be forced to pick one — and that pick would carry
+                   no more weight than a guess.</div>
             @endif
+          </div>
+
+          {{-- What it would have said, kept visible and clearly disowned.
+               Hiding it entirely makes the model impossible to evaluate: you
+               cannot tell a refusal that saved you from a wrong answer apart
+               from one that threw away a right one. --}}
+          <div style="margin-top:.8rem;padding-top:.7rem;border-top:1px solid rgba(0,0,0,.12)">
+            <div style="font-size:.82rem;text-transform:uppercase;letter-spacing:.04em;opacity:.75">
+              Withheld — for auditing this model, not for this patient
+            </div>
+            <div style="font-size:.95rem;margin-top:.3rem">
+              It leaned <strong>{{ $prediction['call'] ?? '—' }}</strong>,
+              p(ILC) = {{ number_format($p, 2) }}. Record it if you are testing the model.
+              Do not act on it.
+            </div>
           </div>
         @else
           <div style="font-size:.85rem;color:#57516a">Suggests</div>
@@ -311,8 +332,14 @@
       @if(!empty($prediction['nearest_cases']))
         <h3 style="margin-top:1.1rem">Nearest known cases</h3>
         <p style="color:#6b6480;font-size:.85rem;margin-bottom:.5rem">
-          Archived slides closest to this one. Opening them and comparing is worth more
-          than the probability above.
+          @if($blocked)
+            The archived slides this one resembles most — though "most" is still far, which
+            is why the model refused. Open them and compare: on a slide like this, your own
+            eyes are the only thing here worth trusting.
+          @else
+            Archived slides closest to this one. Opening them and comparing is worth more
+            than the probability above.
+          @endif
         </p>
         <table class="wf-nn">
           <tr><th>Patient</th><th>Site</th><th>Diagnosis</th><th>Distance</th></tr>
