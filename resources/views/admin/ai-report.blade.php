@@ -141,6 +141,21 @@
 
   .rp-thumb{display:block;width:100%;border-radius:6px;border:1px solid #e6e2ef;background:#faf9fc}
   .rp-mini{font-size:.79rem;color:#6b6480;line-height:1.45;margin:.5rem 0 0}
+  .rp-share{display:flex;align-items:baseline;gap:.45rem}
+  .rp-share b{font-size:1.55rem;font-variant-numeric:tabular-nums;color:#2f2a3d;line-height:1}
+  .rp-share span{font-size:.79rem;color:#6b6480;line-height:1.3}
+
+  /* The two pictures, side by side and large enough to be read rather than
+     recognised — a thumbnail of a patch montage tells you a montage exists and
+     nothing else, and the whole claim here is that these tiles are judgeable. */
+  .rp-ev{display:grid;gap:1rem;margin-top:1rem}
+  @media(min-width:900px){.rp-ev{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}}
+  .rp-fig{margin:0;background:#fff;border:1px solid #e6e2ef;border-radius:10px;padding:.9rem 1rem 1rem}
+  .rp-fig h4{margin:0 0 .15rem;font-size:.95rem;font-weight:600;color:#2f2a3d}
+  .rp-fig .cap{font-size:.81rem;color:#6b6480;line-height:1.5;margin:0 0 .7rem}
+  .rp-fig img{display:block;width:100%;height:auto;border-radius:6px;background:#fff}
+  .rp-fig a.full{font-size:.78rem;color:#6b6480;text-decoration:none;display:inline-block;margin-top:.5rem}
+  .rp-fig a.full:hover{color:#4b3a94}
 
   .rp-kv{display:flex;justify-content:space-between;gap:.6rem;font-size:.84rem;padding:.3rem 0;
          border-bottom:1px solid #f4f2f8}
@@ -157,6 +172,8 @@
   .rp-mono{font-family:ui-monospace,Consolas,monospace;font-size:.8rem}
   .rp-limits{margin:0;padding-left:1.05rem}
   .rp-limits li{font-size:.82rem;color:#57516a;margin-bottom:.28rem;line-height:1.45}
+  .rp-sec{font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+          color:#8b849e;margin:1.5rem 0 .4rem}
   .rp-foot{font-size:.8rem;color:#8b849e;margin:1.1rem 0 0;line-height:1.5}
   details.rp-raw{margin-top:.8rem}
   details.rp-raw pre{background:#faf9fc;border:1px solid #ece9f4;border-radius:6px;padding:.7rem;
@@ -165,7 +182,7 @@
   @media print{
     .sidebar,.navbar,.rp-acts,footer,.page-footer{display:none!important}
     .main-panel,.content-wrapper{margin:0!important;padding:0!important;width:100%!important}
-    .rp-card,.rp-verdict{break-inside:avoid}
+    .rp-card,.rp-verdict,.rp-fig{break-inside:avoid}
   }
 </style>
 
@@ -341,18 +358,24 @@
     <div class="rp-card">
       <h3>What it looked at</h3>
       @if(!empty($evidence) && $sample)
-        <a href="{{ route('admin.ai-workflow.viewer', ['sample' => $p->sample_id, 'model' => $p->model_key]) }}">
-          <img class="rp-thumb"
-               src="{{ route('admin.ai-workflow.evidence-image', [$p->sample_id, 'evidence_map.png']) }}"
-               alt="map of per-patch evidence">
-        </a>
-        <p class="rp-mini">
-          Top 20 patches hold <strong>{{ round(($evidence['share_top20'] ?? 0) * 100) }}%</strong> of the
-          decision.
+        {{-- The summary here, the pictures at full size below. Showing the map
+             twice on one page would cost the space the patches need to be
+             judged at all, and judging them is the point of having them. --}}
+        <div class="rp-share">
+          <b>{{ round(($evidence['share_top20'] ?? 0) * 100) }}%</b>
+          <span>of the decision sits in the top 20 patches</span>
+        </div>
+        <p class="rp-mini" style="margin-top:.45rem">
           @if(($evidence['share_top20'] ?? 0) < 0.35)
             Spread thin — no region to point at; the model is reading overall texture.
           @else
             A handful of patches carry it. If they are blood, fat or edge, the answer is worth nothing.
+          @endif
+        </p>
+        <p class="rp-mini">
+          <a href="#evidence">The map and those patches ↓</a>
+          @if($sample)
+            · <a href="{{ route('admin.ai-workflow.viewer', ['sample' => $p->sample_id, 'model' => $p->model_key]) }}">on the slide itself</a>
           @endif
         </p>
       @elseif($sample)
@@ -447,6 +470,54 @@
     @endif
   </div>
 </div>
+
+{{-- the pictures, at a size you can actually judge ──────────────────────────── --}}
+@if(!empty($evidence) && $sample)
+<h3 class="rp-sec" id="evidence">Where the evidence is</h3>
+<p class="rp-mini" style="margin:0 0 .2rem;max-width:62rem">
+  The model max-pools over its patches, so every dimension of the decision comes from exactly one
+  patch. That makes this real attribution rather than a saliency guess — these are the tiles the
+  answer was actually built from. <strong>What it is not is a tumour map:</strong> the model was
+  never trained to find tumour or mark its border, only to tell two carcinoma types apart on a
+  slide that already contains one. Red means "this pushed towards ILC", never "the disease is here".
+</p>
+<div class="rp-ev">
+  <figure class="rp-fig">
+    <h4>Every patch, and which way it pushed</h4>
+    <p class="cap">
+      Blue pushed towards IDC, red towards ILC, grey supplied nothing either way — and most of a
+      slide supplies nothing, which is why most of it is grey. Circled: the 20 patches carrying
+      most of the decision.
+    </p>
+    <a href="{{ route('admin.ai-workflow.evidence-image', [$p->sample_id, 'evidence_map.png']) }}"
+       target="_blank" rel="noopener">
+      <img src="{{ route('admin.ai-workflow.evidence-image', [$p->sample_id, 'evidence_map.png']) }}"
+           alt="every patch on the slide, coloured by which class it pushed the answer towards">
+    </a>
+    <a class="full" href="{{ route('admin.ai-workflow.evidence-image', [$p->sample_id, 'evidence_map.png']) }}"
+       target="_blank" rel="noopener">Open full size ↗</a>
+  </figure>
+
+  @if(!empty($evidence['top_patches']))
+  <figure class="rp-fig">
+    <h4>The patches the decision rested on</h4>
+    <p class="cap">
+      The circled ones, cut out of the archive and ordered by how much they carried, each labelled
+      with the class it voted for and by how much. <strong>This is the part to read as a
+      pathologist</strong> — if they are blood, fat, or the edge of the section, the probability
+      above is worth nothing whatever it says.
+    </p>
+    <a href="{{ route('admin.ai-workflow.evidence-image', [$p->sample_id, 'top_patches.png']) }}"
+       target="_blank" rel="noopener">
+      <img src="{{ route('admin.ai-workflow.evidence-image', [$p->sample_id, 'top_patches.png']) }}"
+           alt="the twenty patches that carried the decision, strongest first">
+    </a>
+    <a class="full" href="{{ route('admin.ai-workflow.evidence-image', [$p->sample_id, 'top_patches.png']) }}"
+       target="_blank" rel="noopener">Open full size ↗</a>
+  </figure>
+  @endif
+</div>
+@endif
 
 <p class="rp-foot">
   Built from the stored record of run #{{ $p->id }}, not from a cache — this page reads the same
