@@ -56,6 +56,24 @@ class AdvanceWorkflow implements ShouldQueue
         return "wf:prediction:{$sampleId}";
     }
 
+    /**
+     * Record that a chain is on its way, before any worker has picked it up.
+     *
+     * Without this the page has no way to tell "queued and about to start" from
+     * "nothing is happening", and those two look identical on a slide whose
+     * every column still reads pending — which is precisely the moment someone
+     * is watching hardest.
+     */
+    public static function markQueued(int $sampleId): void
+    {
+        Cache::put(self::stateKey($sampleId), [
+            'status'  => 'running',
+            'message' => 'Queued — waiting for a worker.',
+            'tick'    => -1,
+            'at'      => now()->toDateTimeString(),
+        ], now()->addDays(7));
+    }
+
     public function handle(DiagnosisWorkflow $workflow, OperationDispatcher $dispatcher): void
     {
         $sample = Sample::find($this->sampleId);

@@ -389,10 +389,13 @@
     });
   });
 
-@if($sample && empty($prediction) && (($chain['status'] ?? null) === 'running' || in_array($sample->storage_status, ['downloading']) || $sample->tiling_status === 'processing' || $sample->feature_extraction_status === 'processing'))
-  // Work is in flight. Reload on a timer rather than making the person press
-  // F5 to discover whether a twenty-minute step has finished. The reload stops
-  // as soon as there is an answer, because this block is then not rendered.
+@if($sample && empty($prediction) && $watching)
+  // Work is queued or running. Reload on a timer rather than making the person
+  // press F5 to discover whether a twenty-minute step has finished. Note this
+  // must cover queued-but-not-started too: the gap between accepting a slide
+  // and a worker picking it up is exactly when the page looks most idle and is
+  // least so. The reload stops once there is an answer or the chain gives up,
+  // because this block is then not rendered at all.
   (function () {
     var left = 15;
     var el = document.createElement('div');

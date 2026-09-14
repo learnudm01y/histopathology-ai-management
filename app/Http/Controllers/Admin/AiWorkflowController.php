@@ -55,6 +55,7 @@ class AiWorkflowController extends Controller
         $sample = null;
         $state = null;
         $chain = null;
+        $watching = false;
         $prediction = session('prediction');
 
         if ($id = $request->integer('sample_id')) {
@@ -65,6 +66,15 @@ class AiWorkflowController extends Controller
                 // A prediction the queue produced outlives the one-shot session
                 // flash, so an unattended run is still here when you come back.
                 $prediction = $prediction ?: Cache::get(AdvanceWorkflow::resultKey($sample->id));
+
+                // Whether the page should keep reloading. A queued chain counts
+                // even though every column still reads pending: the wait for a
+                // worker is part of the run, and a page that goes quiet there
+                // looks broken at the exact moment it is working.
+                $watching = ($chain['status'] ?? null) === 'running'
+                    || $sample->storage_status === 'downloading'
+                    || $sample->tiling_status === 'processing'
+                    || $sample->feature_extraction_status === 'processing';
             }
         }
 
@@ -90,7 +100,7 @@ class AiWorkflowController extends Controller
                    'feature_extraction_status']);
 
         return view('admin.ai-workflow', compact(
-            'models', 'modelKey', 'model', 'sample', 'state', 'prediction', 'ready', 'pending', 'chain'
+            'models', 'modelKey', 'model', 'sample', 'state', 'prediction', 'ready', 'pending', 'chain', 'watching'
         ));
     }
 
@@ -282,6 +292,7 @@ class AiWorkflowController extends Controller
         $modelKey = $validated['model'] ?: config('diagnosis_models.default');
         $auto = (bool) ($validated['auto'] ?? false);
         if ($auto) {
+            AdvanceWorkflow::markQueued($sample->id);
             AdvanceWorkflow::dispatch($sample->id, $modelKey)->delay(now()->addSeconds(10));
         }
 
@@ -303,7 +314,8 @@ class AiWorkflowController extends Controller
         ]);
 
         Cache::forget(AdvanceWorkflow::resultKey($validated['sample_id']));
-        AdvanceWorkflow::dispatch($validated['sample_id'], $validated['model']);
+        AdvanceWorkflow::markQueued($validated["sample_id"]);
+        AdvanceWorkflow::dispatch($validated["sample_id"], $validated["model"]);
 
         return redirect()->route('admin.ai-workflow', [
             'sample_id' => $validated['sample_id'], 'model' => $validated['model'],
