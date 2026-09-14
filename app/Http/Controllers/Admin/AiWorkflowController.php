@@ -331,6 +331,60 @@ class AiWorkflowController extends Controller
         ])->with('success', 'The queue has it. Every remaining step runs without you.');
     }
 
+    /**
+     * The gate nginx asks before serving a slide tile.
+     *
+     * The tile service knows nothing about sessions — it only knows how to cut
+     * JPEGs out of an SVS — so this is the only thing standing between patient
+     * tissue and anyone who guesses a sample id. 204 means the caller is logged
+     * in here; anything else and nginx refuses the tile.
+     */
+    public function tileAuth(Request $request)
+    {
+        return $request->user() ? response()->noContent() : abort(401);
+    }
+
+    /**
+     * Register a slide with the tile service and open the viewer.
+     *
+     * The service will only serve slides named in this registry, so a request
+     * for a sample nobody opened resolves to nothing rather than to a file
+     * path assembled from a URL.
+     */
+    public function viewer(Request $request, Sample $sample)
+    {
+        $modelKey = $request->get('model', config('diagnosis_models.default'));
+        $model = config("diagnosis_models.models.{$modelKey}");
+
+        $mount = rtrim((string) config('services.gdrive_mount', '/mnt/gdrive'), '/');
+        $wsi = $mount . '/' . ltrim((string) $sample->wsi_remote_path, '/');
+
+        if (! $sample->wsi_remote_path || ! is_file($wsi)) {
+            return redirect()->route('admin.ai-workflow', ['sample_id' => $sample->id])
+                ->withErrors(['viewer' => 'The slide image is not readable on this server.']);
+        }
+
+        $dir = '/var/www/HISTO_AI/viewer';
+        if (is_dir($dir) && is_writable($dir)) {
+            file_put_contents("{$dir}/{$sample->id}.json", json_encode([
+                'wsi' => $wsi, 'registered_at' => now()->toDateTimeString(),
+            ]));
+        }
+
+        $evDir = $this->workflow->evidenceDir($sample);
+        $evidence = is_file("{$evDir}/evidence.json")
+            ? json_decode((string) file_get_contents("{$evDir}/evidence.json"), true)
+            : null;
+
+        return view('admin.ai-viewer', [
+            'sample' => $sample,
+            'model' => $model,
+            'modelKey' => $modelKey,
+            'evidence' => $evidence,
+            'prediction' => Cache::get(AdvanceWorkflow::resultKey($sample->id)),
+        ]);
+    }
+
     /** Build the evidence view for a slide that has already been scored. */
     public function evidence(Request $request): RedirectResponse
     {
@@ -367,7 +421,7 @@ class AiWorkflowController extends Controller
      */
     public function evidenceImage(Sample $sample, string $file)
     {
-        if (! in_array($file, ['evidence_map.png', 'top_patches.png'], true)) {
+        if (! in_array($file, ['evidence_map.png', 'top_patches.png', 'heatmap.png'], true)) {
             abort(404);
         }
 

@@ -331,6 +331,18 @@
 
       {{-- Why it said what it said ─────────────────────────────────────── --}}
       <h3 style="margin-top:1.2rem">Where the evidence is</h3>
+
+      @if(!empty($evidence['heatmap']))
+        <p style="margin:.2rem 0 .7rem">
+          <a class="btn btn-primary"
+             href="{{ route('admin.ai-workflow.viewer', ['sample' => $sample->id, 'model' => $modelKey]) }}">
+            Open the slide with the heat layer
+          </a>
+          <span style="color:#6b6480;font-size:.86rem;margin-left:.6rem">
+            pan and zoom the real slide, heat layer on a switch
+          </span>
+        </p>
+      @endif
       @if(empty($evidence))
         <p style="color:#6b6480;font-size:.88rem;margin:.2rem 0 .6rem">
           The model max-pools over patches, so every dimension of its decision comes from
