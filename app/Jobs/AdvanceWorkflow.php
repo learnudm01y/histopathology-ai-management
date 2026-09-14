@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Sample;
 use App\Models\ServerName;
+use App\Models\SlidePrediction;
 use App\Services\DiagnosisWorkflow;
 use App\Services\OperationDispatcher;
 use App\Services\PodLifecycle;
@@ -127,6 +128,10 @@ class AdvanceWorkflow implements ShouldQueue
             }
             $result['model_key']   = $this->modelKey;
             $result['model_label'] = $model['label'] ?? $this->modelKey;
+            // The cache entry is for the page to pick up quickly; the row is
+            // the record. An unattended run nobody watched must still be
+            // answerable for months later.
+            SlidePrediction::record($sample, $result, $this->modelKey);
             Cache::put(self::resultKey($this->sampleId), $result, now()->addDays(7));
             $this->note('done', 'Finished.');
             $this->releaseTheGpu();

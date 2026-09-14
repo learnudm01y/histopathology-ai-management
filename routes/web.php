@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Admin\AiResultsController;
 use App\Http\Controllers\Admin\AiWorkflowController;
 use App\Http\Controllers\Admin\AuthController;
 use App\Http\Controllers\Admin\BulkDeleteController;
@@ -127,6 +128,11 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::get('ai-workflow/{sample}/viewer', [AiWorkflowController::class, 'viewer'])->name('ai-workflow.viewer');
         Route::get('ai-workflow/{sample}/evidence/{file}', [AiWorkflowController::class, 'evidenceImage'])->name('ai-workflow.evidence-image');
         Route::get('ai-workflow/{sample}/state', [AiWorkflowController::class, 'state'])->name('ai-workflow.state');
+
+        // Every score ever produced. A validation run is not something you
+        // watch go by — it is something you come back to.
+        Route::get('ai-results',        [AiResultsController::class, 'index'])->name('ai-results');
+        Route::get('ai-results/export', [AiResultsController::class, 'export'])->name('ai-results.export');
 
         // Cases (patients) — clinical case browser
         Route::get('cases',          [CasesController::class, 'index'])->name('cases.index');

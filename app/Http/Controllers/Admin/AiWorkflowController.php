@@ -10,6 +10,7 @@ use App\Models\Category;
 use App\Models\DataSource;
 use App\Models\Organ;
 use App\Models\Sample;
+use App\Models\SlidePrediction;
 use App\Services\DiagnosisWorkflow;
 use App\Services\GoogleDriveService;
 use App\Services\OperationDispatcher;
@@ -186,6 +187,8 @@ class AiWorkflowController extends Controller
 
         $result['model_key'] = $validated['model'];
         $result['model_label'] = $model['label'];
+        SlidePrediction::record($sample, $result, $validated['model']);
+
         return $back->with('prediction', $result);
     }
 
@@ -364,11 +367,23 @@ class AiWorkflowController extends Controller
                 ->withErrors(['viewer' => 'The slide image is not readable on this server.']);
         }
 
+        // Registration can fail on permissions — a file left behind by a
+        // console run belongs to root, and php-fpm cannot overwrite it. That
+        // is worth a clear message and a log line, never a 500 on a page whose
+        // job is to show a slide.
         $dir = '/var/www/HISTO_AI/viewer';
-        if (is_dir($dir) && is_writable($dir)) {
-            file_put_contents("{$dir}/{$sample->id}.json", json_encode([
+        $registered = false;
+        if (is_dir($dir)) {
+            $registered = @file_put_contents("{$dir}/{$sample->id}.json", json_encode([
                 'wsi' => $wsi, 'registered_at' => now()->toDateTimeString(),
-            ]));
+            ])) !== false;
+        }
+        if (! $registered) {
+            Log::error("[AiWorkflow] could not register slide #{$sample->id} with the tile service");
+            return redirect()->route('admin.ai-workflow', ['sample_id' => $sample->id])
+                ->withErrors(['viewer' =>
+                    'The tile service could not be told about this slide — '
+                    . "check that {$dir} is writable by the web user."]);
         }
 
         $evDir = $this->workflow->evidenceDir($sample);
