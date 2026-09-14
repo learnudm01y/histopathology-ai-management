@@ -33,14 +33,32 @@
 <div class="vw-wrap">
   <div class="vw-bar">
     <label><input type="checkbox" id="heatOn" checked> Heat layer</label>
-    <label style="gap:.6rem">Strength
-      <input type="range" id="heatOpacity" min="0" max="100" value="85" style="width:9rem">
-      <span id="heatPct" style="width:2.6rem;font-variant-numeric:tabular-nums">85%</span>
+
+    @if(!empty($evidence['heatmap_dense']))
+    <label style="gap:.45rem">Show
+      <select id="heatWhich" class="form-control" style="height:2.1rem;width:15rem;padding:.1rem .4rem">
+        <option value="dense" selected>Lobular-ness — every patch</option>
+        <option value="evidence">Evidence — the patches that voted</option>
+      </select>
     </label>
-    <label><input type="checkbox" id="heatCrisp" checked> Crisp blocks</label>
+    @endif
+
+    <label style="gap:.6rem">Strength
+      <input type="range" id="heatOpacity" min="0" max="100" value="70" style="width:9rem">
+      <span id="heatPct" style="width:2.6rem;font-variant-numeric:tabular-nums">70%</span>
+    </label>
+    <label><input type="checkbox" id="heatCrisp"> Crisp blocks</label>
+
+    <span class="vw-key" id="keyDense">
+      <span class="vw-chip" style="background:linear-gradient(90deg,#3b4cc0,#22d0d0,#a3f24a,#f9a825,#c0392b);width:60px"></span>
+      ductal-looking → lobular-looking
+    </span>
+    <span class="vw-key" id="keyEvidence" style="display:none">
+      <span class="vw-chip" style="background:rgb(235,20,45)"></span> voted ILC
+      <span class="vw-chip" style="background:rgb(25,20,235);margin-left:.5rem"></span> voted IDC
+    </span>
+
     @if(!empty($evidence))
-      <span class="vw-key"><span class="vw-chip" style="background:rgb(220,40,60)"></span> towards ILC</span>
-      <span class="vw-key"><span class="vw-chip" style="background:rgb(40,40,220)"></span> towards IDC</span>
       <span class="vw-key" style="margin-left:auto">
         {{ number_format((int)($evidence['patches'] ?? 0)) }} patches ·
         top 20 hold {{ round(($evidence['share_top20'] ?? 0) * 100) }}% of the decision
@@ -51,9 +69,10 @@
 </div>
 
 <p class="vw-note">
-  <strong>What this layer is.</strong> Colour is the model's own evidence for its IDC-versus-ILC
-  call, computed per patch: because the model max-pools, every dimension of the decision came
-  from exactly one patch, so this is attribution rather than an estimate.
+  <strong>Two layers, two questions.</strong> <em>Lobular-ness</em> asks the model where every single
+  patch falls between the two classes, so the colour is continuous and covers all the tissue.
+  <em>Evidence</em> shows only the few hundred patches that actually supplied the slide-level
+  answer — sparse because most patches supply nothing, and blank where that is the truth.
   <strong>What it is not:</strong> it is not a tumour map. The model was never trained to find
   tumour or to mark its border — it was trained to tell two carcinoma types apart on slides that
   already contain carcinoma. A red region means "this pushed the answer towards ILC", never
@@ -75,46 +94,69 @@
   });
 
   @if(!empty($evidence['heatmap']))
-  // The heat image is one pixel per patch, so it is stretched back over the
-  // slide's own extent. Its width in OpenSeadragon's coordinates is 1 by
-  // definition — the slide is the unit — which registers the two exactly.
-  var heat = null;
-  viewer.addHandler('open', function () {
+  // Both layers cover the slide's whole extent, so a width of 1 in
+  // OpenSeadragon's coordinates — where the slide is the unit — registers them
+  // against the tissue exactly. They are loaded together and swapped by
+  // opacity, which keeps switching instant.
+  var layers = {};
+
+  function addLayer(key, url, opacity) {
     viewer.addTiledImage({
-      tileSource: {
-        type: 'image',
-        url: '{{ route('admin.ai-workflow.evidence-image', [$sample->id, 'heatmap.png']) }}',
-        buildPyramid: false,
-      },
+      tileSource: { type: 'image', url: url, buildPyramid: false },
       x: 0, y: 0, width: 1,
-      opacity: 0.85,
-      success: function (ev) { heat = ev.item; applyHeat(); },
+      opacity: opacity,
+      success: function (ev) { layers[key] = ev.item; applyHeat(); },
     });
+  }
+
+  viewer.addHandler('open', function () {
+    @if(!empty($evidence['heatmap_dense']))
+    addLayer('dense', '{{ route('admin.ai-workflow.evidence-image', [$sample->id, 'heatmap_dense.png']) }}', 0.7);
+    @endif
+    addLayer('evidence', '{{ route('admin.ai-workflow.evidence-image', [$sample->id, 'heatmap.png']) }}', 0);
   });
 
+  function currentKey() {
+    var sel = document.getElementById('heatWhich');
+    return sel ? sel.value : 'evidence';
+  }
+
   function applyHeat() {
-    if (!heat) return;
     var on = document.getElementById('heatOn').checked;
     var pct = parseInt(document.getElementById('heatOpacity').value, 10);
-    heat.setOpacity(on ? pct / 100 : 0);
+    var want = currentKey();
     document.getElementById('heatPct').textContent = pct + '%';
 
-    // Interpolation is what drains the colour: each patch is one cell blown up
-    // over hundreds of slide pixels, so smoothing averages a strong vote into
-    // its empty neighbours. Off by default; on for anyone who prefers the
-    // softer look over seeing the individual patches.
-    var crisp = document.getElementById('heatCrisp').checked;
-    if (typeof heat.setImageSmoothingEnabled === 'function') {
-      heat.setImageSmoothingEnabled(!crisp);
-    } else if (viewer.drawer && typeof viewer.drawer.setImageSmoothingEnabled === 'function') {
-      viewer.drawer.setImageSmoothingEnabled(!crisp);
+    Object.keys(layers).forEach(function (k) {
+      layers[k].setOpacity(on && k === want ? pct / 100 : 0);
+    });
+
+    var kd = document.getElementById('keyDense'), ke = document.getElementById('keyEvidence');
+    if (kd && ke) {
+      kd.style.display = want === 'dense' ? '' : 'none';
+      ke.style.display = want === 'dense' ? 'none' : '';
     }
+
+    // Smoothing drains the evidence layer, where each patch is one cell blown
+    // up over hundreds of slide pixels and a lone vote gets averaged into its
+    // empty neighbours. The continuous layer is meant to be smooth, so the
+    // control only makes sense on the sparse one.
+    var crispBox = document.getElementById('heatCrisp');
+    crispBox.disabled = (want === 'dense');
+    var crisp = crispBox.checked && want !== 'dense';
+    Object.keys(layers).forEach(function (k) {
+      if (typeof layers[k].setImageSmoothingEnabled === 'function') {
+        layers[k].setImageSmoothingEnabled(!crisp);
+      }
+    });
     viewer.forceRedraw();
   }
 
   document.getElementById('heatOn').addEventListener('change', applyHeat);
   document.getElementById('heatCrisp').addEventListener('change', applyHeat);
   document.getElementById('heatOpacity').addEventListener('input', applyHeat);
+  var whichSel = document.getElementById('heatWhich');
+  if (whichSel) whichSel.addEventListener('change', applyHeat);
   @else
   document.getElementById('heatOn').disabled = true;
   document.getElementById('heatOpacity').disabled = true;

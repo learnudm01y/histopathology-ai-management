@@ -436,7 +436,7 @@ class AiWorkflowController extends Controller
      */
     public function evidenceImage(Sample $sample, string $file)
     {
-        if (! in_array($file, ['evidence_map.png', 'top_patches.png', 'heatmap.png'], true)) {
+        if (! in_array($file, ['evidence_map.png', 'top_patches.png', 'heatmap.png', 'heatmap_dense.png'], true)) {
             abort(404);
         }
 
