@@ -34,9 +34,10 @@
   <div class="vw-bar">
     <label><input type="checkbox" id="heatOn" checked> Heat layer</label>
     <label style="gap:.6rem">Strength
-      <input type="range" id="heatOpacity" min="0" max="100" value="55" style="width:9rem">
-      <span id="heatPct" style="width:2.6rem;font-variant-numeric:tabular-nums">55%</span>
+      <input type="range" id="heatOpacity" min="0" max="100" value="85" style="width:9rem">
+      <span id="heatPct" style="width:2.6rem;font-variant-numeric:tabular-nums">85%</span>
     </label>
+    <label><input type="checkbox" id="heatCrisp" checked> Crisp blocks</label>
     @if(!empty($evidence))
       <span class="vw-key"><span class="vw-chip" style="background:rgb(220,40,60)"></span> towards ILC</span>
       <span class="vw-key"><span class="vw-chip" style="background:rgb(40,40,220)"></span> towards IDC</span>
@@ -86,7 +87,7 @@
         buildPyramid: false,
       },
       x: 0, y: 0, width: 1,
-      opacity: 0.55,
+      opacity: 0.85,
       success: function (ev) { heat = ev.item; applyHeat(); },
     });
   });
@@ -97,9 +98,22 @@
     var pct = parseInt(document.getElementById('heatOpacity').value, 10);
     heat.setOpacity(on ? pct / 100 : 0);
     document.getElementById('heatPct').textContent = pct + '%';
+
+    // Interpolation is what drains the colour: each patch is one cell blown up
+    // over hundreds of slide pixels, so smoothing averages a strong vote into
+    // its empty neighbours. Off by default; on for anyone who prefers the
+    // softer look over seeing the individual patches.
+    var crisp = document.getElementById('heatCrisp').checked;
+    if (typeof heat.setImageSmoothingEnabled === 'function') {
+      heat.setImageSmoothingEnabled(!crisp);
+    } else if (viewer.drawer && typeof viewer.drawer.setImageSmoothingEnabled === 'function') {
+      viewer.drawer.setImageSmoothingEnabled(!crisp);
+    }
+    viewer.forceRedraw();
   }
 
   document.getElementById('heatOn').addEventListener('change', applyHeat);
+  document.getElementById('heatCrisp').addEventListener('change', applyHeat);
   document.getElementById('heatOpacity').addEventListener('input', applyHeat);
   @else
   document.getElementById('heatOn').disabled = true;
