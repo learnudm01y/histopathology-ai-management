@@ -42,6 +42,13 @@ Route::prefix('admin')->name('admin.')->group(function () {
     });
 
     // Authenticated
+    // Asked by nginx before it serves a slide tile, so it must answer with a
+    // status rather than a redirect: auth_request treats anything outside
+    // 2xx/401/403 as a failure, and the auth middleware's 302 to the login page
+    // reads as exactly that. The session check still happens — inside the
+    // controller, where it can return 401 instead of sending you to a form.
+    Route::get('wsi-auth', [AiWorkflowController::class, 'tileAuth'])->name('wsi-auth');
+
     Route::middleware('auth')->group(function () {
         Route::post('logout', [AuthController::class, 'logout'])->name('logout');
 
@@ -120,7 +127,6 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::get('ai-workflow/{sample}/viewer', [AiWorkflowController::class, 'viewer'])->name('ai-workflow.viewer');
         Route::get('ai-workflow/{sample}/evidence/{file}', [AiWorkflowController::class, 'evidenceImage'])->name('ai-workflow.evidence-image');
         Route::get('ai-workflow/{sample}/state', [AiWorkflowController::class, 'state'])->name('ai-workflow.state');
-        Route::get('wsi-auth',               [AiWorkflowController::class, 'tileAuth'])->name('wsi-auth');
 
         // Cases (patients) — clinical case browser
         Route::get('cases',          [CasesController::class, 'index'])->name('cases.index');
