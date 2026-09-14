@@ -3,8 +3,10 @@
 namespace App\Jobs;
 
 use App\Models\Sample;
+use App\Models\ServerName;
 use App\Services\DiagnosisWorkflow;
 use App\Services\OperationDispatcher;
+use App\Services\PodLifecycle;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -34,6 +36,9 @@ class AdvanceWorkflow implements ShouldQueue
 
     /** How long to wait between looks. Patch extraction takes minutes. */
     private const TICK_SECONDS = 20;
+
+    /** servers_names.id of the RunPod TITAN box that produces the features. */
+    private const TITAN_SERVER_ID = 3;
 
     /** Give up after this many ticks (~2h) so a stuck slide cannot loop forever. */
     private const MAX_TICKS = 360;
@@ -124,6 +129,7 @@ class AdvanceWorkflow implements ShouldQueue
             $result['model_label'] = $model['label'] ?? $this->modelKey;
             Cache::put(self::resultKey($this->sampleId), $result, now()->addDays(7));
             $this->note('done', 'Finished.');
+            $this->releaseTheGpu();
             return;
         }
 
@@ -132,15 +138,37 @@ class AdvanceWorkflow implements ShouldQueue
                 || $sample->tiling_status === 'processing'
                 || $sample->feature_extraction_status === 'processing';
 
+        $message = $state['blocking'] ?? 'Working.';
+
         if (! $running) {
-            match ($state['next_action']) {
-                'patches'  => $dispatcher->patchExtraction([$sample->id], 1, 1, 2),
-                'features' => $dispatcher->featureExtraction([$sample->id], 3, 1),
-                default    => null,
-            };
+            if ($state['next_action'] === 'features') {
+                // Feature extraction needs a GPU that bills by the hour, so the
+                // pod is only on when there is something to run on it. Waking it
+                // takes a couple of minutes, and dispatching into that window
+                // would spend all three of the job's attempts on a 404 — so wait
+                // here instead, where waiting is free.
+                $server = ServerName::find(self::TITAN_SERVER_ID);
+                $pod = $server
+                    ? app(PodLifecycle::class)->ensureAwake($server)
+                    : ['state' => 'failed', 'message' => 'The TITAN server is not configured.'];
+
+                if ($pod['state'] === 'failed') {
+                    $this->stop($pod['message']);
+                    return;
+                }
+                if ($pod['state'] !== 'healthy') {
+                    $this->note('running', $pod['message'] . ' Waiting for it before extracting features.');
+                    self::dispatch($this->sampleId, $this->modelKey, $this->tick + 1)
+                        ->delay(now()->addSeconds(self::TICK_SECONDS));
+                    return;
+                }
+                $dispatcher->featureExtraction([$sample->id], self::TITAN_SERVER_ID, 1);
+            } elseif ($state['next_action'] === 'patches') {
+                $dispatcher->patchExtraction([$sample->id], 1, 1, 2);
+            }
         }
 
-        $this->note('running', $state['blocking'] ?? 'Working.');
+        $this->note('running', $message);
 
         self::dispatch($this->sampleId, $this->modelKey, $this->tick + 1)
             ->delay(now()->addSeconds(self::TICK_SECONDS));
@@ -160,5 +188,21 @@ class AdvanceWorkflow implements ShouldQueue
     {
         Log::warning("[AdvanceWorkflow] sample #{$this->sampleId} stopped: {$why}");
         $this->note('stopped', $why);
+        $this->releaseTheGpu();
+    }
+
+    /**
+     * Ask, after a grace period, whether the pod is still needed.
+     *
+     * Queued on both endings — finished and abandoned — because a run that gave
+     * up leaves a pod running just as expensively as one that succeeded. The
+     * job only stops the pod if the queue is empty when it comes around, so
+     * several slides finishing near each other cost one stop, not several
+     * stop-start pairs.
+     */
+    private function releaseTheGpu(): void
+    {
+        StopIdlePod::dispatch(self::TITAN_SERVER_ID)
+            ->delay(now()->addSeconds(StopIdlePod::GRACE_SECONDS));
     }
 }
