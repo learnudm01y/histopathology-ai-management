@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Sample;
 use App\Models\ServerName;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -27,24 +28,40 @@ class PodLifecycle
     public const BOOT_SECONDS = 180;
 
     /**
-     * The pod id hiding in the server's proxy URL.
+     * Which pod on the account this server's URL belongs to.
      *
-     * RunPod's proxy host is "{podId}-{port}.proxy.runpod.net", and podId itself
-     * contains a dash, so the port is stripped from the right rather than the
-     * host split on dashes. Reading it from api_url keeps the id in one place
-     * instead of adding a column that could disagree with the URL beside it.
+     * The proxy host is not one fixed shape. A pod that exposes a port directly
+     * gets "{podId}-{port}.proxy.runpod.net", but a service that registers its
+     * own URL can report "{podId}-{something}-{port}...", and cutting the last
+     * dash off that yields an id RunPod has never heard of — which is exactly
+     * how this first went wrong. So the host is matched against the real pod
+     * list by prefix rather than taken apart by guesswork.
+     *
+     * The answer is cached briefly: it changes only when a pod is rebuilt, and
+     * the supervisor asks once per tick.
      */
     public function podIdFor(ServerName $server): ?string
     {
         $host = parse_url((string) $server->api_url, PHP_URL_HOST);
-        if (! $host || ! str_ends_with($host, '.proxy.runpod.net')) {
+        if (! $host || ! str_ends_with($host, '.proxy.runpod.net') || ! $server->runpod_api_key) {
             return null;
         }
 
         $name = substr($host, 0, -strlen('.proxy.runpod.net'));
-        $cut  = strrpos($name, '-');
 
-        return $cut === false ? null : substr($name, 0, $cut);
+        return Cache::remember("pod:id:{$server->id}:{$name}", now()->addMinutes(30), function () use ($name, $server) {
+            try {
+                foreach ((new RunPodService($server->runpod_api_key))->listPods() as $pod) {
+                    $id = (string) ($pod['id'] ?? '');
+                    if ($id !== '' && str_starts_with($name, $id . '-')) {
+                        return $id;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::error("[PodLifecycle] could not list pods for '{$server->name}': {$e->getMessage()}");
+            }
+            return null;
+        });
     }
 
     /** Is the service behind this server answering right now? */
