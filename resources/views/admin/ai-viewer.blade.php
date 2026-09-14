@@ -1,4 +1,6 @@
-@extends('layouts.admin')
+@extends('admin.layouts.app')
+
+@section('title', 'Slide viewer')
 
 @section('content')
 <style>
