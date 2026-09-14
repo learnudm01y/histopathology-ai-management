@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\AdvanceWorkflow;
+use App\Jobs\FetchSlideFromGdc;
 use App\Jobs\ProcessSampleUpload;
 use App\Models\Category;
 use App\Models\DataSource;
@@ -14,6 +16,7 @@ use App\Services\OperationDispatcher;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -30,6 +33,14 @@ use Illuminate\Support\Facades\Log;
  */
 class AiWorkflowController extends Controller
 {
+    /**
+     * Directories the server-path intake may read from.
+     *
+     * The field names a file for a background worker to open, so leaving it
+     * unconfined would let anyone with this form read anything the worker can.
+     */
+    private const PATH_ROOTS = ['/var/www/HISTO_AI/'];
+
     public function __construct(
         private readonly DiagnosisWorkflow $workflow,
         private readonly OperationDispatcher $dispatcher,
@@ -43,12 +54,17 @@ class AiWorkflowController extends Controller
 
         $sample = null;
         $state = null;
+        $chain = null;
         $prediction = session('prediction');
 
         if ($id = $request->integer('sample_id')) {
             $sample = Sample::with(['patientCase:id,submitter_id', 'diseaseSubtype:id,name'])->find($id);
             if ($sample) {
                 $state = $this->workflow->inspect($sample, $model);
+                $chain = Cache::get(AdvanceWorkflow::stateKey($sample->id));
+                // A prediction the queue produced outlives the one-shot session
+                // flash, so an unattended run is still here when you come back.
+                $prediction = $prediction ?: Cache::get(AdvanceWorkflow::resultKey($sample->id));
             }
         }
 
@@ -74,7 +90,7 @@ class AiWorkflowController extends Controller
                    'feature_extraction_status']);
 
         return view('admin.ai-workflow', compact(
-            'models', 'modelKey', 'model', 'sample', 'state', 'prediction', 'ready', 'pending'
+            'models', 'modelKey', 'model', 'sample', 'state', 'prediction', 'ready', 'pending', 'chain'
         ));
     }
 
@@ -155,7 +171,15 @@ class AiWorkflowController extends Controller
     }
 
     /**
-     * Bring a slide in from a Drive link, or from an uploaded file.
+     * Bring a slide in, by whichever route moves the bytes best.
+     *
+     * A whole-slide image is one to three gigabytes, so the browser is the
+     * worst possible carrier for it: no resume, a request held open for the
+     * length of the copy, and a size ceiling to raise at every hop — nginx,
+     * PHP, the request handler. The three routes that matter here all hand the
+     * transfer to the queue and let the browser carry nothing but an
+     * identifier: a path already on this server, a GDC file UUID, or a Drive
+     * link. Direct upload stays for the occasional small file and nothing else.
      *
      * The record is created first and the transfer queued after, so a slide
      * that fails mid-copy is visible as a failed row rather than vanishing.
@@ -163,12 +187,39 @@ class AiWorkflowController extends Controller
     public function intake(Request $request): RedirectResponse
     {
         $validated = $request->validate([
-            'source'      => ['required', 'in:upload,gdrive'],
+            'source'      => ['required', 'in:upload,gdrive,server_path,gdc'],
             'wsi'         => ['required_if:source,upload', 'file', 'mimes:svs,tiff,tif,ndpi,scn'],
             'gdrive_link' => ['required_if:source,gdrive', 'string', 'max:500'],
+            'server_path' => ['required_if:source,server_path', 'string', 'max:1000'],
+            'gdc_file_id' => ['required_if:source,gdc', 'string', 'max:64'],
+            'gdc_md5'     => ['nullable', 'string', 'size:32'],
             'label'       => ['nullable', 'string', 'max:150'],
             'model'       => ['nullable', 'string'],
+            'auto'        => ['nullable'],
         ]);
+
+        // Resolve the server path before creating anything, so a typo leaves no
+        // orphan row behind. It is confined to the slide directories: this field
+        // names a file for a background job to read, and an unconfined one would
+        // read any file on the box that the worker can reach.
+        $localPath = null;
+        if ($validated['source'] === 'server_path') {
+            $localPath = realpath(trim($validated['server_path']));
+            $allowed = false;
+            foreach (self::PATH_ROOTS as $root) {
+                if ($localPath && str_starts_with($localPath, $root)) {
+                    $allowed = true;
+                    break;
+                }
+            }
+            if (! $localPath || ! is_file($localPath) || ! $allowed) {
+                return back()->withErrors(['server_path' =>
+                    'No readable slide at that path. It must sit under ' . implode(' or ', self::PATH_ROOTS)]);
+            }
+            if (! preg_match('/\.(svs|tiff?|ndpi|scn)$/i', $localPath)) {
+                return back()->withErrors(['server_path' => 'That file is not a slide image.']);
+            }
+        }
 
         $organ = Organ::where('name', 'Breast')->first();
         $category = $organ
@@ -190,7 +241,22 @@ class AiWorkflowController extends Controller
         ]);
 
         try {
-            if ($validated['source'] === 'upload') {
+            if ($validated['source'] === 'server_path') {
+                // deleteSource stays false: this file belongs to whoever put it
+                // there, and the intake form is not the place to destroy it.
+                $sample->update(['file_name' => basename($localPath)]);
+                ProcessSampleUpload::dispatch($sample->id, $localPath, null, null, null, null, false);
+            } elseif ($validated['source'] === 'gdc') {
+                $fileId = trim($validated['gdc_file_id']);
+                $name = $this->gdcFileName($fileId);
+                if (! $name) {
+                    $sample->delete();
+                    return back()->withErrors(['gdc_file_id' =>
+                        'GDC does not know that file id, or it is not an open-access file.']);
+                }
+                $sample->update(['file_name' => $name, 'file_id' => $fileId]);
+                FetchSlideFromGdc::dispatch($sample->id, $fileId, $name, $validated['gdc_md5'] ?? null);
+            } elseif ($validated['source'] === 'upload') {
                 $path = $request->file('wsi')->store('wsi_intake');
                 $sample->update(['file_name' => $request->file('wsi')->getClientOriginalName()]);
                 ProcessSampleUpload::dispatch($sample->id, storage_path("app/{$path}"));
@@ -213,10 +279,60 @@ class AiWorkflowController extends Controller
             return back()->withErrors(['source' => 'Could not take the slide in: ' . $e->getMessage()]);
         }
 
+        $modelKey = $validated['model'] ?: config('diagnosis_models.default');
+        $auto = (bool) ($validated['auto'] ?? false);
+        if ($auto) {
+            AdvanceWorkflow::dispatch($sample->id, $modelKey)->delay(now()->addSeconds(10));
+        }
+
         return redirect()->route('admin.ai-workflow', [
-            'sample_id' => $sample->id, 'model' => $validated['model'] ?? null,
-        ])->with('success',
-            "Slide accepted as #{$sample->id}. The transfer is queued; patch extraction "
-            . 'becomes available once it lands.');
+            'sample_id' => $sample->id, 'model' => $modelKey,
+        ])->with('success', $auto
+            ? "Slide accepted as #{$sample->id}. The queue will carry it the whole way — "
+              . 'transfer, patches, features, then the model. This page follows along.'
+            : "Slide accepted as #{$sample->id}. The transfer is queued; patch extraction "
+              . 'becomes available once it lands.');
+    }
+
+    /** Hand a slide already in the system to the queue and let it finish. */
+    public function autorun(Request $request): RedirectResponse
+    {
+        $validated = $request->validate([
+            'sample_id' => ['required', 'integer', 'exists:samples,id'],
+            'model'     => ['required', 'string'],
+        ]);
+
+        Cache::forget(AdvanceWorkflow::resultKey($validated['sample_id']));
+        AdvanceWorkflow::dispatch($validated['sample_id'], $validated['model']);
+
+        return redirect()->route('admin.ai-workflow', [
+            'sample_id' => $validated['sample_id'], 'model' => $validated['model'],
+        ])->with('success', 'The queue has it. Every remaining step runs without you.');
+    }
+
+    /**
+     * Ask GDC what a file id is called.
+     *
+     * Only the name is needed — the bytes are the queue's problem — but asking
+     * first means a mistyped UUID fails here, in front of the person who typed
+     * it, instead of an hour later inside a worker.
+     */
+    private function gdcFileName(string $fileId): ?string
+    {
+        try {
+            $ch = curl_init("https://api.gdc.cancer.gov/files/{$fileId}?fields=file_name,access");
+            curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 20]);
+            $body = curl_exec($ch);
+            curl_close($ch);
+
+            $data = json_decode((string) $body, true)['data'] ?? null;
+            if (! is_array($data) || ($data['access'] ?? '') !== 'open') {
+                return null;
+            }
+            return $data['file_name'] ?? null;
+        } catch (\Throwable $e) {
+            Log::error("[AiWorkflow] GDC lookup failed for {$fileId}: {$e->getMessage()}");
+            return null;
+        }
     }
 }

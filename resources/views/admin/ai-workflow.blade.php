@@ -62,8 +62,10 @@
       <h3>1 · Choose a slide</h3>
       <div class="wf-tabs">
         <div class="wf-tab on" data-pane="existing">From the archive</div>
-        <div class="wf-tab" data-pane="upload">Upload a file</div>
+        <div class="wf-tab" data-pane="path">A path on this server</div>
+        <div class="wf-tab" data-pane="gdc">From GDC</div>
         <div class="wf-tab" data-pane="gdrive">From a Drive link</div>
+        <div class="wf-tab" data-pane="upload">Upload a file</div>
       </div>
 
       <div class="wf-pane on" id="pane-existing">
@@ -94,6 +96,49 @@
         </form>
       </div>
 
+      <div class="wf-pane" id="pane-path">
+        <form method="POST" action="{{ route('admin.ai-workflow.intake') }}">
+          @csrf
+          <input type="hidden" name="source" value="server_path">
+          <input type="hidden" name="model" value="{{ $modelKey }}">
+          <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+            <input type="text" name="server_path" class="form-control" style="flex:1;min-width:24rem"
+                   placeholder="/var/www/HISTO_AI/holdout_test/SLIDE.svs" required>
+            <input type="text" name="label" class="form-control" placeholder="label (optional)" style="width:12rem">
+            <button class="btn btn-primary">Take it in</button>
+          </div>
+          <label style="display:block;margin:.6rem 0 0;font-size:.88rem">
+            <input type="checkbox" name="auto" value="1" checked> Run the whole workflow without me
+          </label>
+          <p style="color:#6b6480;font-size:.84rem;margin:.5rem 0 0">
+            Nothing travels through the browser — the queue reads the file where it already sits,
+            and the original is left untouched. Paths must be under /var/www/HISTO_AI/.
+          </p>
+        </form>
+      </div>
+
+      <div class="wf-pane" id="pane-gdc">
+        <form method="POST" action="{{ route('admin.ai-workflow.intake') }}">
+          @csrf
+          <input type="hidden" name="source" value="gdc">
+          <input type="hidden" name="model" value="{{ $modelKey }}">
+          <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+            <input type="text" name="gdc_file_id" class="form-control" style="flex:1;min-width:20rem"
+                   placeholder="910b5349-046d-483e-8277-fcaa07cb35ca" required>
+            <input type="text" name="gdc_md5" class="form-control" placeholder="md5 (optional)" style="width:15rem">
+            <input type="text" name="label" class="form-control" placeholder="label (optional)" style="width:12rem">
+            <button class="btn btn-primary">Fetch from GDC</button>
+          </div>
+          <label style="display:block;margin:.6rem 0 0;font-size:.88rem">
+            <input type="checkbox" name="auto" value="1" checked> Run the whole workflow without me
+          </label>
+          <p style="color:#6b6480;font-size:.84rem;margin:.5rem 0 0">
+            The queue downloads straight from GDC — gigabytes never touch your connection.
+            Give the md5 from the manifest and the bytes are verified before anything is built on them.
+          </p>
+        </form>
+      </div>
+
       <div class="wf-pane" id="pane-upload">
         <form method="POST" action="{{ route('admin.ai-workflow.intake') }}" enctype="multipart/form-data">
           @csrf
@@ -104,8 +149,12 @@
             <input type="text" name="label" class="form-control" placeholder="label (optional)" style="width:14rem">
             <button class="btn btn-primary">Accept slide</button>
           </div>
-          <p style="color:#6b6480;font-size:.84rem;margin:.6rem 0 0">
-            The file is copied to Drive first. Patch and feature extraction are offered once it lands.
+          <label style="display:block;margin:.6rem 0 0;font-size:.88rem">
+            <input type="checkbox" name="auto" value="1" checked> Run the whole workflow without me
+          </label>
+          <p style="color:#6b6480;font-size:.84rem;margin:.5rem 0 0">
+            <strong>Last resort.</strong> A whole-slide image is one to three gigabytes and the browser
+            is a poor carrier for it: no resume, and a ceiling at every hop. Prefer a server path or GDC.
           </p>
         </form>
       </div>
@@ -121,8 +170,11 @@
             <input type="text" name="label" class="form-control" placeholder="label (optional)" style="width:12rem">
             <button class="btn btn-primary">Fetch</button>
           </div>
-          <p style="color:#6b6480;font-size:.84rem;margin:.6rem 0 0">
-            The file must be shared with this account, or the link cannot be read.
+          <label style="display:block;margin:.6rem 0 0;font-size:.88rem">
+            <input type="checkbox" name="auto" value="1" checked> Run the whole workflow without me
+          </label>
+          <p style="color:#6b6480;font-size:.84rem;margin:.5rem 0 0">
+            The queue pulls it from Drive. The file must be shared with this account, or the link cannot be read.
           </p>
         </form>
       </div>
@@ -161,6 +213,27 @@
       @elseif($state['blocking'])
         <div class="wf-verdict refer" style="margin-top:1rem">
           <div>{{ $state['blocking'] }}</div>
+
+          @if(($chain['status'] ?? null) === 'running')
+            <div style="margin-top:.7rem;font-size:.9rem;color:#4b3a94">
+              The queue is carrying this slide. Nothing here needs you —
+              this page reloads itself while it works.
+            </div>
+          @elseif(($chain['status'] ?? null) === 'stopped')
+            <div style="margin-top:.7rem;font-size:.9rem;color:#a3343a">
+              Unattended run stopped: {{ $chain['message'] }}
+            </div>
+          @endif
+
+          @if(($chain['status'] ?? null) !== 'running')
+            <form method="POST" action="{{ route('admin.ai-workflow.autorun') }}" style="margin-top:.7rem">
+              @csrf
+              <input type="hidden" name="sample_id" value="{{ $sample->id }}">
+              <input type="hidden" name="model" value="{{ $modelKey }}">
+              <button class="btn btn-primary">Run everything that is left — no clicks</button>
+            </form>
+          @endif
+
           @if($state['next_action'] === 'patches')
             <form method="POST" action="{{ route('admin.ai-workflow.advance') }}" style="margin-top:.7rem">
               @csrf
@@ -315,5 +388,24 @@
       document.getElementById('pane-' + t.dataset.pane).classList.add('on');
     });
   });
+
+@if($sample && empty($prediction) && (($chain['status'] ?? null) === 'running' || in_array($sample->storage_status, ['downloading']) || $sample->tiling_status === 'processing' || $sample->feature_extraction_status === 'processing'))
+  // Work is in flight. Reload on a timer rather than making the person press
+  // F5 to discover whether a twenty-minute step has finished. The reload stops
+  // as soon as there is an answer, because this block is then not rendered.
+  (function () {
+    var left = 15;
+    var el = document.createElement('div');
+    el.style.cssText = 'position:fixed;right:1rem;bottom:1rem;background:#4b3a94;color:#fff;'
+      + 'padding:.5rem .9rem;border-radius:6px;font-size:.85rem;z-index:999';
+    document.body.appendChild(el);
+    function tick() {
+      el.textContent = 'working — refreshing in ' + left + 's';
+      if (left-- <= 0) { location.reload(); return; }
+      setTimeout(tick, 1000);
+    }
+    tick();
+  })();
+@endif
 </script>
 @endsection
