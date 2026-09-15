@@ -27,6 +27,7 @@ class ScoreSlides extends Command
 {
     protected $signature = 'ai:score-slides
         {--model= : key in config/diagnosis_models; defaults to the configured default}
+        {--manifest= : CSV naming the slides to score; a file_id per row confines the run to one cohort}
         {--site= : only slides whose barcode carries this TSS code, e.g. AN}
         {--source= : only slides from this data source name}
         {--limit=0 : stop after this many}
@@ -48,6 +49,39 @@ class ScoreSlides extends Command
         $q = Sample::with(['diseaseSubtype:id,name'])
             ->where('feature_extraction_status', 'completed')
             ->whereNotNull('features_gdrive_path');
+
+        // Without this the run sweeps up every slide in the archive that
+        // happens to carry features — frozen sections, GTEx normals, anything
+        // — and mixes several hundred unrelated rows into the results of one
+        // experiment. A cohort is defined by its manifest, not by whatever is
+        // processed.
+        if ($manifest = $this->option('manifest')) {
+            if (! is_file($manifest)) {
+                $this->error("No manifest at {$manifest}.");
+                return self::FAILURE;
+            }
+            $fileIds = [];
+            foreach (file($manifest) as $i => $line) {
+                if ($i === 0) {
+                    continue;                       // header
+                }
+                $cols = str_getcsv(trim($line));
+                foreach ($cols as $c) {
+                    // a UUID in any column is the file id; positions differ
+                    // between the label sheet and the gdc-client manifest
+                    if (preg_match('/^[0-9a-f-]{36}$/i', $c)) {
+                        $fileIds[] = $c;
+                        break;
+                    }
+                }
+            }
+            if (! $fileIds) {
+                $this->error('No file ids found in that manifest.');
+                return self::FAILURE;
+            }
+            $this->line('  confined to ' . count($fileIds) . ' slides from the manifest');
+            $q->whereIn('file_id', $fileIds);
+        }
 
         if ($site = $this->option('site')) {
             $q->where('entity_submitter_id', 'like', "TCGA-{$site}-%");
