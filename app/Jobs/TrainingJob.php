@@ -248,7 +248,7 @@ class TrainingJob implements ShouldQueue
             'server'           => $server->name,
             'server_api_url'   => $server->api_url,
             'feature_model'    => $featureModelName,
-            'label_type'       => $labelType,
+            'label_type'       => $run->label_type,
             'label_map'        => $labelMap,
             'split'            => ['train' => $nTrain, 'val' => $nVal, 'test' => $nTest],
             'training_params'  => $trainingParams,
