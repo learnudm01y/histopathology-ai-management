@@ -35,6 +35,10 @@ Route::get('/',        [PublicPagesController::class, 'home'])->name('public.hom
 Route::get('/privacy', [PublicPagesController::class, 'privacy'])->name('public.privacy');
 Route::get('/terms',   [PublicPagesController::class, 'terms'])->name('public.terms');
 
+// API and classification reference for systems that send slides in. Public so
+// an integrator can read it without an admin login; it holds no keys or counts.
+Route::get('/docs/api', [PublicPagesController::class, 'apiDocs'])->name('public.api-docs');
+
 Route::prefix('admin')->name('admin.')->group(function () {
     // Guest (login)
     Route::middleware('guest')->group(function () {

@@ -130,6 +130,8 @@
     .foot .links{margin-left:auto;display:flex;gap:22px;flex-wrap:wrap;}
     .foot .tm{color:#7E9C84;font-size:14px;margin-top:14px;}
 
+    @yield('styles')
+
     @media (max-width:620px){
         body{font-size:16px;}
         .hero{padding:52px 0 46px;}
@@ -149,6 +151,7 @@
             <a href="{{ route('public.home') }}">Home</a>
             <a href="{{ route('public.privacy') }}">Privacy</a>
             <a href="{{ route('public.terms') }}">Terms</a>
+            <a href="{{ route('public.api-docs') }}">API docs</a>
             <a class="cta" href="{{ route('admin.dashboard') }}">Platform sign-in</a>
         </nav>
     </div>
@@ -164,6 +167,7 @@
                 <a href="{{ route('public.home') }}">Home</a>
                 <a href="{{ route('public.privacy') }}">Privacy Policy</a>
                 <a href="{{ route('public.terms') }}">Terms of Service</a>
+                <a href="{{ route('public.api-docs') }}">API documentation</a>
                 <a href="mailto:{{ $contactEmail }}">{{ $contactEmail }}</a>
             </div>
         </div>

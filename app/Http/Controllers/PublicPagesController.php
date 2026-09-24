@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\DiseaseSubtype;
+use App\Services\TaxonomyCatalog;
 use Illuminate\View\View;
 
 /**
@@ -38,6 +40,24 @@ class PublicPagesController extends Controller
     public function terms(): View
     {
         return view('public.terms', $this->shared());
+    }
+
+    /**
+     * The API and classification reference. The taxonomy sections are read from
+     * the live tables through the same catalog the API serves, so the page and
+     * GET /api/v1/taxonomy always describe the same tree.
+     */
+    public function apiDocs(TaxonomyCatalog $catalog): View
+    {
+        return view('public.api-docs', $this->shared() + [
+            'baseUrl'    => rtrim((string) config('app.url'), '/'),
+            'tree'       => $catalog->tree(),
+            'unrooted'   => $catalog->unrootedCategories(),
+            'stains'     => $catalog->stains(),
+            'reference'  => $catalog->reference(),
+            'maxDepth'   => DiseaseSubtype::MAX_DEPTH,
+            'models'     => config('diagnosis_models.models', []),
+        ]);
     }
 
     /**
