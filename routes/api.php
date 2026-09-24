@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\V1\FeatureExtractionApiController;
 use App\Http\Controllers\Api\V1\InferenceApiController;
+use App\Http\Controllers\Api\V1\TaxonomyApiController;
 use App\Http\Controllers\Api\V1\TrainingApiController;
 use Illuminate\Support\Facades\Route;
 
@@ -22,6 +23,8 @@ use Illuminate\Support\Facades\Route;
 |   GET  /api/v1/health                             – auth ping
 |   POST /api/v1/feature-extraction/report          – status report (unified)
 |   GET  /api/v1/feature-extraction/jobs/{sample}   – read current status
+|   GET  /api/v1/taxonomy[/organs|stains|reference|resolve] – classification vocabulary
+|   …plus training/inference callbacks — full reference at /docs/api
 */
 
 // Public health-check (no auth) — useful for connectivity tests.
@@ -56,6 +59,16 @@ Route::prefix('v1')
                 ->name('api.training.progress');
             Route::post('/report', [TrainingApiController::class, 'report'])
                 ->name('api.training.report');
+        });
+
+        // Classification vocabulary — read-only, for systems labelling slides
+        // before they send them in. Documented at /docs/api.
+        Route::prefix('taxonomy')->group(function () {
+            Route::get('/',          [TaxonomyApiController::class, 'tree'])->name('api.taxonomy.tree');
+            Route::get('/organs',    [TaxonomyApiController::class, 'organs'])->name('api.taxonomy.organs');
+            Route::get('/stains',    [TaxonomyApiController::class, 'stains'])->name('api.taxonomy.stains');
+            Route::get('/reference', [TaxonomyApiController::class, 'reference'])->name('api.taxonomy.reference');
+            Route::get('/resolve',   [TaxonomyApiController::class, 'resolve'])->name('api.taxonomy.resolve');
         });
 
         // Inference callbacks — called by RunPod CLAM server after inference completes
