@@ -51,17 +51,39 @@ class V2DiagnoseRunner
         File::ensureDirectoryExists($dir);
         File::deleteDirectory("{$dir}/patches");   // a retried run starts clean
 
-        $result = $this->python([
-            base_path('scripts/patch_extract.py'),
-            '--input', $wsi,
-            '--output_dir', "{$dir}/patches",
-            '--patch_size', (string) $t['patch_size'],
-            '--target_mpp', (string) $t['target_mpp'],
-            '--max_patches', (string) $t['max_patches'],
-            '--tissue_threshold', (string) $t['tissue_threshold'],
-            '--workers', (string) max(1, $t['workers']),
-            '--format', 'png', '--seed', '42', '--save_coords', '--overview',
-        ], 6 * 3600);
+        // Tiling reads thousands of scattered regions, and on the Drive mount
+        // each one is a network round trip: 18 tiles in 30 minutes, measured.
+        // One sequential copy of the whole file runs at full bandwidth (a
+        // 70 MB slide in 11 s), so the slide is copied in first and tiled
+        // locally. The copy is only for tiling; the viewer keeps the original.
+        $source = $wsi;
+        $local = null;
+        $mount = rtrim((string) config('services.gdrive_mount', '/mnt/gdrive'), '/');
+        if (str_starts_with($wsi, $mount . '/')) {
+            $local = "{$dir}/slide." . pathinfo($wsi, PATHINFO_EXTENSION);
+            if (! @copy($wsi, $local)) {
+                throw new \RuntimeException('Could not copy the slide from Drive for tiling.');
+            }
+            $source = $local;
+        }
+
+        try {
+            $result = $this->python([
+                base_path('scripts/patch_extract.py'),
+                '--input', $source,
+                '--output_dir', "{$dir}/patches",
+                '--patch_size', (string) $t['patch_size'],
+                '--target_mpp', (string) $t['target_mpp'],
+                '--max_patches', (string) $t['max_patches'],
+                '--tissue_threshold', (string) $t['tissue_threshold'],
+                '--workers', (string) max(1, $t['workers']),
+                '--format', 'png', '--seed', '42', '--save_coords', '--overview',
+            ], 6 * 3600);
+        } finally {
+            if ($local) {
+                @unlink($local);    // one slide copy per run is enough disk to spend
+            }
+        }
 
         if (empty($result['patches_extracted'])) {
             throw new \RuntimeException('Tiling produced no tissue tiles.');
