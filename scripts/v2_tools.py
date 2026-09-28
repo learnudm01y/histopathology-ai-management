@@ -11,6 +11,7 @@ here, so that nothing numeric depends on a language model doing arithmetic:
     show     RUN P007         print one tile's density grid (0-9) — for the model
     contours RUN P007 [--level 0.55]
                               density iso-contours of one tile in view px — for the model
+    export   RUN              rebuild view.json/heat.json and the display check from final.json
     validate RUN              check RUN/result.json against the contract; exit 1 on errors
     finalize RUN [--sam-ckpt ...]
                               validate, (optionally) refine with SAM, convert to level-0
@@ -429,7 +430,7 @@ def cmd_tile(a) -> None:
     f = k / ds
     for _, x0, y0 in coords:
         cv2.rectangle(tint, (int(x0 * f), int(y0 * f)), (int((x0 + size_l0) * f), int((y0 + size_l0) * f)), (30, 30, 30), 1)
-    Image.fromarray(tint).save(os.path.join(run, "coverage.png"))
+    Image.fromarray(tint).save(os.path.join(run, "coverage.jpg"), quality=80)
     Image.fromarray(img).save(os.path.join(run, "thumb.jpg"), quality=88)
 
     out({"patches_extracted": len(jobs), "candidates_total": cols * rows, "patches_skipped": 0,
@@ -528,7 +529,7 @@ def cmd_prepare(a) -> None:
             sheet[y0:y0 + cell - 6, x0:x0 + cell - 6] = thumbs[m["id"]]
             for col, w in (((0, 0, 0), 5), ((255, 255, 255), 2)):
                 cv2.putText(sheet, m["id"], (x0 + 6, y0 + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, col, w, cv2.LINE_AA)
-        Image.fromarray(sheet).save(os.path.join(run, "sheets", f"sheet_{s // per + 1:02d}.jpg"), quality=85)
+        Image.fromarray(sheet).save(os.path.join(run, "sheets", f"sheet_{s // per + 1:02d}.jpg"), quality=80)
 
     # The overview: the slide with every tile outlined and labelled, so a tile
     # id can be placed on the slide at a glance.
@@ -543,7 +544,7 @@ def cmd_prepare(a) -> None:
             cv2.rectangle(ov, (x0, y0), (x1, y1), (20, 90, 200), 1)
             for col, w in (((255, 255, 255), 3), ((0, 0, 0), 1)):
                 cv2.putText(ov, m["id"], (x0 + 3, y0 + int(14 * fs / 0.5)), cv2.FONT_HERSHEY_SIMPLEX, fs, col, w, cv2.LINE_AA)
-        Image.fromarray(ov).save(os.path.join(run, "overview.png"))
+        Image.fromarray(ov).save(os.path.join(run, "overview.jpg"), quality=88)
 
     save(os.path.join(run, "manifest.json"), {
         "view_px": VIEW_PX, "grid": GRID, "patch_size": int(tiling["patch_size"]),
@@ -985,6 +986,133 @@ def point_in_poly(x: float, y: float, poly: list) -> bool:
     return cv2.pointPolygonTest(np.array(poly, np.float32).reshape(-1, 1, 2), (float(x), float(y)), False) >= 0
 
 
+def audit(final: dict) -> tuple[dict, list]:
+    """Check a finished result is drawable: regions and mask present where they
+    must be, inside the slide, and on the tiles that were read.
+
+    Returns (checks, problems). A problem means the viewer would show the wrong
+    thing, or nothing, and is surfaced as a warning on the run."""
+    W, H = final["slide_width"], final["slide_height"]
+    tiles = final["tiles"]
+    size = tiles[0]["size_l0"] if tiles else 1
+    cells = {(round(t["x"] / size), round(t["y"] / size)) for t in tiles}
+    tumour_tiles = sum(1 for t in tiles if float(t.get("tumour_score", 0)) >= 0.5)
+    regions = final.get("regions") or []
+    polys = (final.get("tumour_mask") or {}).get("polygons") or []
+
+    def pts_of_regions():
+        for g in regions:
+            yield from g["polygon"]
+
+    def pts_of_mask():
+        for poly in polys:
+            for ring in poly:
+                yield from ring
+
+    def outside(p):
+        return not (-1 <= p[0] <= W + size and -1 <= p[1] <= H + size)
+
+    def off_tiles(p):
+        # A point on a tile's edge (any of the four) belongs to that tile, and
+        # a pixel or two of overshoot at the edge is the drawing, not an error.
+        tol = 0.01 * size
+        cs = {int((p[0] - tol) // size), int((p[0] + tol) // size)}
+        rs = {int((p[1] - tol) // size), int((p[1] + tol) // size)}
+        return not any((c, r) in cells for c in cs for r in rs)
+
+    rp, mp = list(pts_of_regions()), list(pts_of_mask())
+    checks = {
+        "tiles": len(tiles), "tumour_tiles": tumour_tiles,
+        "regions": len(regions), "mask_polygons": len(polys),
+        "points_outside_slide": sum(map(outside, rp)) + sum(map(outside, mp)),
+        "region_points_off_tiles": sum(map(off_tiles, rp)),
+        "mask_points_off_tiles": sum(map(off_tiles, mp)),
+    }
+    problems = []
+    if tumour_tiles and not polys:
+        problems.append(f"{tumour_tiles} tiles were scored as tumour but no tumour mask was produced.")
+    if tumour_tiles and not any(g["label"] in TUMOUR_LABELS for g in regions):
+        problems.append("Tumour was reported but no tumour region was drawn.")
+    if checks["points_outside_slide"]:
+        problems.append(f"{checks['points_outside_slide']} drawn points fall outside the slide.")
+    if rp and checks["region_points_off_tiles"] > 0.02 * len(rp):
+        problems.append(f"{checks['region_points_off_tiles']} region points fall off the tiles that were read.")
+    if mp and checks["mask_points_off_tiles"] > 0.02 * len(mp):
+        problems.append(f"{checks['mask_points_off_tiles']} mask points fall off the tiles that were read.")
+    return checks, problems
+
+
+def _grid_b64(grid) -> str:
+    """A heat grid (rows of 0..1) as base64 bytes 0..255: ~8x smaller than JSON numbers."""
+    import base64
+    a = np.clip(np.asarray(grid, np.float32), 0, 1)
+    return base64.b64encode(np.round(a * 255).astype(np.uint8).tobytes()).decode("ascii")
+
+
+def export(run: str, final: dict) -> dict:
+    """The files the viewer loads, cut down from final.json.
+
+    view.json: everything drawn as vectors (tiles, regions, SAM prompts, the
+    tumour mask) with whole-pixel coordinates — first, so the mask and the
+    regions appear at once. heat.json: the two heat layers, one base64 byte
+    grid per tile, loaded after. final.json stays the full record."""
+    def ints(ps):
+        return [[int(round(x)), int(round(y))] for x, y in ps]
+
+    view = {
+        "slide_width": final["slide_width"], "slide_height": final["slide_height"],
+        "grid": final["grid"], "view_px": final.get("view_px", VIEW_PX),
+        "tiles": [{k: t[k] for k in ("id", "x", "y", "size_l0", "tissue", "tumour_score", "note") if k in t}
+                  for t in final["tiles"]],
+        "regions": [{**{k: g[k] for k in ("id", "patch", "label", "confidence", "note") if k in g},
+                     "box": [int(round(v)) for v in g["box"]],
+                     "polygon": ints(g["polygon"]),
+                     "positive_points": ints(g.get("positive_points", [])),
+                     "negative_points": ints(g.get("negative_points", [])),
+                     "sam_polygons": [ints(p) for p in g.get("sam_polygons", [])]}
+                    for g in final.get("regions") or []],
+        "tumour_mask": {"polygons": [[ints(r) for r in poly]
+                                     for poly in (final.get("tumour_mask") or {}).get("polygons") or []]},
+        "coverage": final.get("coverage"), "checks": final.get("checks"),
+        "sam_refined": final.get("sam_refined", False), "warnings": final.get("warnings", []),
+    }
+    heat = {
+        "grid": final["grid"],
+        "model": {pid: _grid_b64(g) for pid, g in (final.get("heatmap") or {}).get("tiles", {}).items()},
+        "density": {pid: _grid_b64(g) for pid, g in (final.get("density") or {}).items()},
+    }
+    save(os.path.join(run, "view.json"), view)
+    save(os.path.join(run, "heat.json"), heat)
+    return {"view_bytes": os.path.getsize(os.path.join(run, "view.json")),
+            "heat_bytes": os.path.getsize(os.path.join(run, "heat.json"))}
+
+
+def _png_to_jpg(run: str, name: str) -> None:
+    png, jpg = os.path.join(run, name + ".png"), os.path.join(run, name + ".jpg")
+    if os.path.isfile(png) and not os.path.isfile(jpg):
+        Image.open(png).convert("RGB").save(jpg, quality=80)
+
+
+def cmd_export(a) -> None:
+    """Rebuild the viewer files (and the audit) of a finished run from final.json."""
+    run = a.run
+    final = load(os.path.join(run, "final.json"))
+    checks, problems = audit(final)
+    final["checks"] = checks
+    final["warnings"] = [w for w in final.get("warnings", []) if not w.startswith("Display check:")] + \
+        [f"Display check: {p}" for p in problems]
+    # The display check: what the viewer is about to draw, verified.
+    checks, problems = audit(final)
+    final["checks"] = checks
+    final["warnings"] += [f"Display check: {p}" for p in problems]
+    save(os.path.join(run, "final.json"), final)
+    export(run, final)
+    for name in ("coverage", "overview"):
+        _png_to_jpg(run, name)
+    sizes = export(run, final)
+    out({"ok": True, "checks": checks, "problems": problems, **sizes})
+
+
 def cmd_finalize(a) -> None:
     run = a.run
     # --legacy re-finalizes a run made before the box-size rule existed.
@@ -1123,6 +1251,7 @@ def main() -> None:
     p = sub.add_parser("contours"); p.add_argument("run"); p.add_argument("tile")
     p.add_argument("--level", type=float, default=0.55)
     p = sub.add_parser("validate"); p.add_argument("run")
+    p = sub.add_parser("export"); p.add_argument("run")
     p = sub.add_parser("finalize"); p.add_argument("run")
     p.add_argument("--sam-ckpt", default=""); p.add_argument("--sam-model", default="vit_b")
     p.add_argument("--sam-device", default="cpu")
@@ -1130,7 +1259,7 @@ def main() -> None:
     a = ap.parse_args()
     try:
         {"estimate-mpp": cmd_estimate_mpp, "tile": cmd_tile, "prepare": cmd_prepare, "density": cmd_density, "show": cmd_show, "contours": cmd_contours,
-         "validate": cmd_validate, "finalize": cmd_finalize}[a.cmd](a)
+         "validate": cmd_validate, "export": cmd_export, "finalize": cmd_finalize}[a.cmd](a)
     except SystemExit:
         raise
     except Exception as e:  # noqa: BLE001

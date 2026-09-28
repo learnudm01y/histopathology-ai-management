@@ -215,6 +215,17 @@ class V2DiagnoseRunner
         return $this->python($args, 3600, allowFailure: true);
     }
 
+    /**
+     * Build the viewer files (view.json, heat.json) and the display check from
+     * final.json — for runs finished before those files existed. Uses the
+     * copy of the tools in the scripts folder, so an old run gets the current
+     * export rather than the version it was analysed with.
+     */
+    public function export(V2Diagnosis $run): array
+    {
+        return $this->python([base_path('scripts/v2_tools.py'), 'export', $this->runDir($run)], 600);
+    }
+
     /** Drop the full-resolution tiles; keep what Claude saw and what was drawn. */
     public function cleanup(V2Diagnosis $run): void
     {

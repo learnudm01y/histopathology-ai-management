@@ -115,7 +115,12 @@ class V2DiagnoseTest extends TestCase
             'summary' => "line one\nline two", 'regions_count' => 1]);
         $dir = "{$this->runs}/{$run->id}";
         File::ensureDirectoryExists("{$dir}/view");
-        file_put_contents("{$dir}/final.json", json_encode(['slide_width' => 1000, 'regions' => [['id' => 'R1']]]));
+        file_put_contents("{$dir}/final.json", json_encode(['slide_width' => 1000, 'regions' => [['id' => 'R1']],
+            'density' => ['P001' => array_fill(0, 50, array_fill(0, 50, 0.5))]]));
+        touch("{$dir}/final.json", time() - 60);
+        file_put_contents("{$dir}/view.json", json_encode(['slide_width' => 1000, 'regions' => [['id' => 'R1']],
+            'tumour_mask' => ['polygons' => []], 'coverage' => ['tissue_read' => 0.998, 'tumour_tiles' => 3]]));
+        file_put_contents("{$dir}/heat.json", json_encode(['grid' => 50, 'model' => ['P001' => base64_encode(str_repeat("\x80", 2500))], 'density' => []]));
         file_put_contents("{$dir}/prompt.md", 'the prompt');
         file_put_contents("{$dir}/view/P001.jpg", 'jpg');
         $run->update(['run_dir' => $dir]);
@@ -128,7 +133,21 @@ class V2DiagnoseTest extends TestCase
         $this->assertStringNotContainsStringIgnoringCase('claude', $page->getContent());
         $this->assertStringNotContainsStringIgnoringCase('claude',
             $this->get('/admin/v2-diagnose')->getContent());
-        $this->getJson("/admin/v2-diagnose/{$run->id}/result")->assertOk()->assertJsonPath('regions.0.id', 'R1');
+        $file = fn ($res) => file_get_contents($res->baseResponse->getFile()->getPathname());
+        $plain = $this->get("/admin/v2-diagnose/{$run->id}/result")->assertOk();
+        $this->assertSame('R1', json_decode($file($plain), true)['regions'][0]['id']);
+
+        // What the viewer draws first is the small vector file, gzipped, never
+        // the full record: final.json once took ~a minute to arrive and the
+        // mask and regions showed nothing until it did.
+        $res = $this->get("/admin/v2-diagnose/{$run->id}/result", ['Accept-Encoding' => 'gzip, deflate']);
+        $res->assertOk()->assertHeader('Content-Encoding', 'gzip');
+        $body = json_decode(gzdecode($file($res)), true);
+        $this->assertSame('R1', $body['regions'][0]['id']);
+        $this->assertArrayNotHasKey('density', $body, 'heat grids must not ride on the drawing payload');
+        $heat = json_decode($file($this->get("/admin/v2-diagnose/{$run->id}/heat")->assertOk()), true);
+        $this->assertSame(50, $heat['grid']);
+        $page->assertSee('99.8% of the slide');
         $this->getJson("/admin/v2-diagnose/{$run->id}/status")->assertOk()->assertJsonPath('status', 'completed');
         $this->get("/admin/v2-diagnose/{$run->id}/download/prompt")->assertOk();
         $this->get("/admin/v2-diagnose/{$run->id}/asset/view/P001.jpg")->assertOk();

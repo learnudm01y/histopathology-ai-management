@@ -73,4 +73,17 @@ class V2Diagnosis extends Model
         }
         return json_decode((string) file_get_contents($path), true) ?: null;
     }
+
+    /**
+     * The small drawing file (view.json): coverage, checks and warnings for
+     * the page, without reading the multi-megabyte final.json on every view.
+     */
+    public function viewData(): ?array
+    {
+        $path = $this->run_dir ? $this->run_dir . '/view.json' : null;
+        if (! $path || ! is_file($path)) {
+            return null;
+        }
+        return json_decode((string) file_get_contents($path), true) ?: null;
+    }
 }

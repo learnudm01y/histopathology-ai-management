@@ -41,6 +41,9 @@
   #osd svg g.lowzoom path{stroke-opacity:0;fill-opacity:.28}
   .vw-bar.vw-bar-fp{margin:10px;border-radius:8px;background:rgba(250,249,252,.94);
                      box-shadow:0 2px 10px rgba(0,0,0,.25);width:max-content;max-width:calc(100vw - 190px)}
+  .vw-status{position:absolute;z-index:11;left:50%;top:14px;transform:translateX(-50%);padding:.45rem .9rem;
+             border-radius:6px;background:rgba(20,16,32,.88);color:#fff;font-size:.85rem;pointer-events:auto}
+  .vw-status.err{background:#b03d64;cursor:pointer}
   .v2-code{display:inline-block;background:#4b3a94;color:#fff;border-radius:6px;padding:.05rem .55rem;margin-right:.35rem;letter-spacing:.03em}
 </style>
 @endpush
@@ -151,7 +154,7 @@
       <span class="vw-legend"><span class="vw-chip" style="background:linear-gradient(90deg,#3b4cc0,#22d0d0,#a3f24a,#f9a825,#c0392b);width:52px"></span>low → high</span>
     </div>
     <div id="vwHint" style="display:none;background:#faf0da;border:1px solid #e8d19a;border-top:0;padding:.45rem .8rem;font-size:.82rem;color:#5c4a14"></div>
-    <div id="osd"><div class="vw-tip" id="tip"></div></div>
+    <div id="osd"><div class="vw-tip" id="tip"></div><div class="vw-status" id="vwStatus" style="display:none"></div></div>
   </div>
   <div class="vw-side" id="side">
     @if(!$final)<p style="padding:.8rem;color:#8a83a0;font-size:.85rem">Regions appear here when the run completes.</p>@endif
@@ -170,26 +173,38 @@
 @endif
 
 @if($run->run_dir && in_array($run->status, ['analysing','finalising','completed'], true))
-<div class="v2-card">
-  <h3>Tiles analysed</h3>
-  @if(is_file($run->run_dir . '/coverage.png'))
-  <p style="font-size:.82rem;color:#6b6480;margin:-.3rem 0 .7rem">
+@php
+  // JPEG where the run has it: the PNGs of earlier runs were 6-7 MB each and
+  // held up the viewer's own data on a slow link.
+  $img = fn ($n) => is_file("{$run->run_dir}/{$n}.jpg") ? "{$n}.jpg" : (is_file("{$run->run_dir}/{$n}.png") ? "{$n}.png" : null);
+  $coverageImg = $img('coverage'); $overviewImg = $img('overview');
+@endphp
+<details class="v2-card" id="tilesCard">
+  <summary style="cursor:pointer;font-weight:600;font-size:1rem">
+    Tiles analysed — coverage map, overview and {{ (int) ceil(($run->patches ?? 0) / 16) }} contact sheets</summary>
+  @if($coverageImg)
+  <p style="font-size:.82rem;color:#6b6480;margin:.6rem 0 .7rem">
     First image: the coverage map — tissue that was read in green, tissue left out in red, with the tile grid.</p>
   @endif
+  {{-- Loaded only when opened, so they never compete with the viewer's data. --}}
   <div class="v2-sheets">
-    @if(is_file($run->run_dir . '/coverage.png'))
-    <a href="{{ route('admin.v2-diagnose.asset', [$run, 'coverage.png']) }}" target="_blank">
-      <img src="{{ route('admin.v2-diagnose.asset', [$run, 'coverage.png']) }}" alt="coverage" loading="lazy"></a>
-    @endif
-    <a href="{{ route('admin.v2-diagnose.asset', [$run, 'overview.png']) }}" target="_blank">
-      <img src="{{ route('admin.v2-diagnose.asset', [$run, 'overview.png']) }}" alt="overview" loading="lazy"></a>
+    @foreach(array_filter([$coverageImg, $overviewImg]) as $n)
+    <a href="{{ route('admin.v2-diagnose.asset', [$run, $n]) }}" target="_blank">
+      <img data-src="{{ route('admin.v2-diagnose.asset', [$run, $n]) }}" alt="{{ $n }}"></a>
+    @endforeach
     @for($i = 1; $i <= (int) ceil(($run->patches ?? 0) / 16); $i++)
       @php $p = sprintf('sheets/sheet_%02d.jpg', $i); @endphp
       <a href="{{ route('admin.v2-diagnose.asset', [$run, $p]) }}" target="_blank">
-        <img src="{{ route('admin.v2-diagnose.asset', [$run, $p]) }}" alt="sheet {{ $i }}" loading="lazy"></a>
+        <img data-src="{{ route('admin.v2-diagnose.asset', [$run, $p]) }}" alt="sheet {{ $i }}"></a>
     @endfor
   </div>
-</div>
+</details>
+<script>
+document.getElementById('tilesCard').addEventListener('toggle', function () {
+  if (!this.open) return;
+  this.querySelectorAll('img[data-src]').forEach(function (i) { i.src = i.dataset.src; i.removeAttribute('data-src'); });
+});
+</script>
 @endif
 
 @if($run->isRunning())
@@ -239,16 +254,63 @@
 
   @if($final)
   var R = @json(route('admin.v2-diagnose.result', $run));
+  var RH = @json(route('admin.v2-diagnose.heat', $run));
   var NS = 'http://www.w3.org/2000/svg';
   var COLORS = { tumour: '#18c964', in_situ: '#f5a524', lymphovascular_invasion: '#f31260',
                  necrosis: '#9aa0a6', lymphoid: '#3b82f6', normal: '#a78bfa', other: '#e5e7eb' };
   var data, W, svg, gAll, layers = {}, heatItem = null, scaleNow = 0;
   var hits = { regions: [], mask: [] };
 
-  fetch(R, { headers: { 'Accept': 'application/json' } }).then(function (r) { return r.json(); }).then(function (d) {
-    data = d; W = d.slide_width;
-    if (viewer.world.getItemCount()) build(); else viewer.addOnceHandler('open', build);
-  });
+  var heat = null;          // byte grids per tile, arrive after the vectors
+
+  // The state of the overlay, on the viewer itself: a result that is still on
+  // its way, or that failed, must never look like a result with nothing in it.
+  var status = document.getElementById('vwStatus');
+  function say(text, isError) {
+    status.style.display = text ? '' : 'none';
+    status.textContent = text || '';
+    status.classList.toggle('err', !!isError);
+  }
+
+  function getJson(url) {
+    return fetch(url, { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      });
+  }
+
+  function load() {
+    say('Loading the tumour mask and the regions…');
+    getJson(R).then(function (d) {
+      data = d; W = d.slide_width;
+      var go = function () { build(); say(''); loadHeat(); };
+      if (viewer.world.getItemCount()) go(); else viewer.addOnceHandler('open', go);
+    }).catch(function (e) {
+      say('The tumour mask and regions could not be loaded (' + e.message + '). Click to retry.', true);
+      status.onclick = function () { status.onclick = null; load(); };
+    });
+  }
+
+  function loadHeat() {
+    getJson(RH).then(function (h) {
+      heat = { grid: h.grid, model: decodeAll(h.model), density: decodeAll(h.density) };
+      drawHeat();
+    }).catch(function (e) {
+      say('The heatmap could not be loaded (' + e.message + '); the mask and regions are shown.', true);
+    });
+  }
+
+  function decodeAll(m) {
+    var outp = {};
+    Object.keys(m || {}).forEach(function (k) {
+      var bin = atob(m[k]), a = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+      outp[k] = a;
+    });
+    return outp;
+  }
+  load();
 
   // ── SVG overlay in level-0 pixels, re-transformed on every viewport change ──
   function el(tag, attrs, parent) {
@@ -341,8 +403,10 @@
     maskPolys.forEach(function (poly) { hits.mask.push({ rings: poly, bbox: bboxOf(poly[0]) }); });
     var hasMask = maskPolys.length > 0;
     if (hasMask) {
-      // The mask is the precise border; the rough outline would only cover it.
-      document.getElementById('lyPoly').checked = false;
+      // Both stay on: the mask is where the tumour is, the outlines are the
+      // regions the reading was based on. Over the mask the outlines keep only
+      // a faint fill so the mask is not hidden under them.
+      layers.poly.querySelectorAll('polygon').forEach(function (e) { e.setAttribute('fill-opacity', 0.06); });
     } else {
       var mb = document.getElementById('lyMask');
       mb.checked = false; mb.disabled = true;
@@ -445,9 +509,10 @@
       if (heatItem) { viewer.world.removeItem(heatItem); heatItem = null; }
       return;
     }
-    var grids = which === 'model' ? data.heatmap.tiles : data.density;
+    if (!heat) return;                                    // drawn when it arrives
+    var grids = which === 'model' ? heat.model : heat.density;
     var floor = document.getElementById('heatFloor').value / 100;
-    var n = data.grid, cell = data.tiles[0].size_l0 / n;
+    var n = heat.grid, cell = data.tiles[0].size_l0 / n;
     var cols = Math.ceil(data.slide_width / cell), rows = Math.ceil(data.slide_height / cell);
     var cv = document.createElement('canvas'); cv.width = cols; cv.height = rows;
     var ctx = cv.getContext('2d'), img = ctx.createImageData(cols, rows);
@@ -455,8 +520,8 @@
       var g = grids[t.id]; if (!g) return;
       var gx = Math.round(t.x / cell), gy = Math.round(t.y / cell);
       for (var r = 0; r < n; r++) for (var c = 0; c < n; c++) {
-        var v = g[r][c], X = gx + c, Y = gy + r;
-        if (v == null || v < floor || X >= cols || Y >= rows) continue;
+        var v = g[r * n + c] / 255, X = gx + c, Y = gy + r;
+        if (v <= 0 || v < floor || X >= cols || Y >= rows) continue;
         var rgb = jet(Math.min(1, v)), o = (Y * cols + X) * 4;
         img.data[o] = rgb[0]; img.data[o + 1] = rgb[1]; img.data[o + 2] = rgb[2];
         img.data[o + 3] = Math.round(120 + 135 * Math.min(1, v));

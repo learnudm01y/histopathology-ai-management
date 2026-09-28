@@ -151,6 +151,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::get('v2-diagnose/{run}',                   [V2DiagnoseController::class, 'show'])->whereNumber('run')->name('v2-diagnose.show');
         Route::get('v2-diagnose/{run}/status',            [V2DiagnoseController::class, 'status'])->whereNumber('run')->name('v2-diagnose.status');
         Route::get('v2-diagnose/{run}/result',            [V2DiagnoseController::class, 'result'])->whereNumber('run')->name('v2-diagnose.result');
+        Route::get('v2-diagnose/{run}/heat',              [V2DiagnoseController::class, 'heat'])->whereNumber('run')->name('v2-diagnose.heat');
         Route::get('v2-diagnose/{run}/asset/{path}',      [V2DiagnoseController::class, 'asset'])->whereNumber('run')->where('path', '.+')->name('v2-diagnose.asset');
         Route::get('v2-diagnose/{run}/download/{kind}',   [V2DiagnoseController::class, 'download'])->whereNumber('run')->name('v2-diagnose.download');
         Route::post('v2-diagnose/{run}/rerun',            [V2DiagnoseController::class, 'rerun'])->whereNumber('run')->name('v2-diagnose.rerun');

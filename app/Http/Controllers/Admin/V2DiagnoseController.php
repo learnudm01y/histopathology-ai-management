@@ -126,11 +126,18 @@ class V2DiagnoseController extends Controller
             $tiles = ['direct' => false, 'url' => "/wsi/{$run->sample_id}.dzi"];
         }
 
+        $done = $run->status === 'completed' && $run->run_dir && is_file($run->run_dir . '/final.json');
+        if ($done) {
+            $this->ensureViewerFiles($run);
+        }
+
         return view('admin.v2-diagnose.show', [
             'run'    => $run,
             'viewer' => (bool) $tiles,
             'tiles'  => $tiles,
-            'final'  => $run->status === 'completed' ? $run->finalResult() : null,
+            // The small drawing file only: final.json runs to megabytes and is
+            // never needed to render the page.
+            'final'  => $done ? $run->viewData() : null,
         ]);
     }
 
@@ -142,24 +149,83 @@ class V2DiagnoseController extends Controller
         ]));
     }
 
-    /** The drawable result: level-0 coordinates, heat grids, tile scores. */
-    public function result(V2Diagnosis $run): JsonResponse
+    /**
+     * What the viewer draws first: tiles, regions, SAM prompts and the tumour
+     * mask as vectors (view.json).
+     *
+     * Served gzipped from a file made once. The whole final.json used to be
+     * sent instead — up to 8 MB of uncompressed JSON, which took close to a
+     * minute to reach the browser, and nothing was drawn until it arrived.
+     */
+    public function result(Request $request, V2Diagnosis $run)
     {
-        $final = $run->finalResult();
-        abort_unless($final, 404);
-        return response()->json($final);
+        return $this->viewerFile($request, $run, 'view.json');
+    }
+
+    /** The two heat layers as byte grids (heat.json), loaded after the vectors. */
+    public function heat(Request $request, V2Diagnosis $run)
+    {
+        return $this->viewerFile($request, $run, 'heat.json');
     }
 
     /**
-     * Images from a run — what Claude was shown. Whitelisted by pattern, so a
-     * file name from the URL can never reach outside the run directory.
+     * Images from a run — what the model was shown. Whitelisted by pattern, so
+     * a file name from the URL can never reach outside the run directory.
      */
     public function asset(V2Diagnosis $run, string $path)
     {
-        abort_unless(preg_match('#^(view/P\d{3,4}\.jpg|sheets/sheet_\d{2,3}\.jpg|overview\.png|coverage\.png)$#', $path), 404);
+        abort_unless(preg_match(
+            '#^(view/P\d{3,4}\.jpg|sheets/sheet_\d{2,3}\.jpg|overview\.(png|jpg)|coverage\.(png|jpg))$#', $path), 404);
         $file = $run->run_dir . '/' . $path;
         abort_unless($run->run_dir && is_file($file), 404);
-        return response()->file($file);
+        // A run's images never change once written.
+        return response()->file($file, ['Cache-Control' => 'private, max-age=604800']);
+    }
+
+    /**
+     * A viewer file, gzipped once and kept beside it.
+     *
+     * Compressed here rather than by nginx, whose gzip covers HTML only on
+     * this host — and so that the fix does not live in server config that a
+     * rebuild would lose.
+     */
+    private function viewerFile(Request $request, V2Diagnosis $run, string $name)
+    {
+        abort_unless($run->run_dir && is_file($run->run_dir . '/final.json'), 404);
+        $this->ensureViewerFiles($run);
+        $file = $run->run_dir . '/' . $name;
+        abort_unless(is_file($file), 404);
+
+        $headers = ['Content-Type' => 'application/json', 'Cache-Control' => 'private, no-cache', 'Vary' => 'Accept-Encoding'];
+        if (! str_contains((string) $request->header('Accept-Encoding'), 'gzip')) {
+            return response()->file($file, $headers);
+        }
+        $gz = $file . '.gz';
+        if (! is_file($gz) || filemtime($gz) < filemtime($file)) {
+            file_put_contents($gz, gzencode((string) file_get_contents($file), 6));
+        }
+        return response()->file($gz, $headers + ['Content-Encoding' => 'gzip']);
+    }
+
+    /**
+     * Runs finished before view.json/heat.json existed get them — and the
+     * display check — built from their final.json on first view.
+     */
+    private function ensureViewerFiles(V2Diagnosis $run): void
+    {
+        $dir = $run->run_dir;
+        if (is_file("{$dir}/view.json") && is_file("{$dir}/heat.json")
+            && filemtime("{$dir}/view.json") >= filemtime("{$dir}/final.json")) {
+            return;
+        }
+        try {
+            $r = $this->runner->export($run);
+            $checks = collect($r['problems'] ?? [])->map(fn ($p) => "Display check: {$p}")->all();
+            $run->update(['warnings' => array_values(array_unique(array_merge(
+                array_filter($run->warnings ?? [], fn ($w) => ! str_starts_with($w, 'Display check:')), $checks)))]);
+        } catch (\Throwable $e) {
+            Log::error("[V2Diagnose] viewer files for run #{$run->id} could not be built: {$e->getMessage()}");
+        }
     }
 
     /** Every record of a run, downloadable as it was written. */

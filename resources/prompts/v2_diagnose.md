@@ -10,7 +10,7 @@ You are a senior diagnostic histopathologist doing a first-pass review of one wh
 
 ## What is in this folder
 - `manifest.json` — every tile: `id` (P001…), its position on the slide, and `tissue_fraction`. {{TILES}} tiles, each {{PATCH_UM}} µm square ({{PATCH_PX}} px at {{MPP}} µm/px), cut from a {{SLIDE_W}} × {{SLIDE_H}} px slide. **These tiles are the whole slide**: every tile that holds any tissue ({{COVERAGE}} of the tissue), not a sample. Your reading must account for all of them.
-- `overview.png` — the whole slide with every tile outlined and labelled with its id. Use it for architecture, distribution, and to find where a tile sits.
+- `overview.jpg` — the whole slide with every tile outlined and labelled with its id. Use it for architecture, distribution, and to find where a tile sits.
 - `sheets/sheet_NN.jpg` — contact sheets, 16 labelled tiles each, for the first pass.
 - `view/P001.jpg` … — each tile at **1000 × 1000 px**, with tick marks every 100 px on the edges. **All coordinates you return are pixels in these 1000 × 1000 images**: origin top-left, x to the right, y downward, 0–1000.
 - `density.json` — a measured, lymphocyte-suppressed large-nucleus density per tile on a 25 × 25 grid (each cell 40 view px), 0–1, normalised to the slide. It is a measurement of cellularity, not a tumour probability: dense lymphoid tissue, glands and DCIS are dense too. It is large: do not read it whole — use the `show` helper for the tiles you need.
@@ -20,7 +20,7 @@ You are a senior diagnostic histopathologist doing a first-pass review of one wh
   - `{{PY}} tools/v2_tools.py validate .` — checks `result.json`.
 
 ## Procedure
-1. Read `manifest.json` and `overview.png`.
+1. Read `manifest.json` and `overview.jpg`.
 2. Read **every** contact sheet — all {{SHEETS}} of them, none skipped. Give **every** tile a tissue class and tumour score; this is how the whole slide is read, and every tile you score ≥ 0.5 gets the pixel-level tumour mask drawn on it automatically, whether or not you open it.
 3. Open `view/<id>.jpg` at full size for: every tile you cannot classify with confidence from its thumbnail; every tile where tumour meets other dense tissue (lymphoid aggregates, in-situ lesions, normal ducts and lobules) or shows necrosis or possible vascular invasion; and at least 12 representative tumour tiles spread across all tissue pieces, to establish type and grade. Aim for about 30–60 full views on a large slide; you do not need to open every tumour tile. You may place a region only on a tile you have opened.
 4. On each opened tile, mark each distinct lesion focus as a region:
