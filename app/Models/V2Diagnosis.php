@@ -51,6 +51,71 @@ class V2Diagnosis extends Model
         return $this->belongsTo(User::class);
     }
 
+    /** Codes that mean carcinoma, invasive or in situ. */
+    private const MALIGNANT = ['IDC', 'ILC', 'MIXED', 'DCIS', 'LCIS', 'MUC', 'TUB', 'MPC', 'MBC', 'MED'];
+
+    /** Codes that name a benign lesion. */
+    private const BENIGN_LESION = ['BENIGN', 'FA', 'PHY', 'UDH', 'FCC', 'ADENOSIS', 'PASH', 'FIBROCYSTIC'];
+
+    /**
+     * The diagnosis recorded for the slide in the archive, as a class the
+     * answer can be compared with: IDC, ILC, PB, Normal — or null when the
+     * slide carries no label (an upload, a slide nobody has classified).
+     */
+    public function recordedClass(): ?string
+    {
+        $s = $this->sample;
+        if (! $s) {
+            return null;
+        }
+        $sub = strtolower((string) $s->diseaseSubtype?->name);
+        $cat = strtolower((string) $s->category?->label_en);
+        return match (true) {
+            $sub === 'idc' => 'IDC',
+            $sub === 'ilc' => 'ILC',
+            str_contains($sub, 'benign') || $cat === 'benign' => 'PB',
+            $cat === 'normal' => 'Normal',
+            $sub !== '' => strtoupper($s->diseaseSubtype->name),
+            default => null,
+        };
+    }
+
+    /**
+     * The answer against the recorded diagnosis: correct, partial or wrong,
+     * with the reason — the same rules as the evaluation report
+     * (reports/v2_eval_2026-09-28.csv). Null when there is nothing to compare:
+     * the run has not finished or the slide has no recorded diagnosis.
+     *
+     * @return array{result: string, truth: string, reason: string}|null
+     */
+    public function verdict(): ?array
+    {
+        $truth = $this->recordedClass();
+        if (! $truth || $this->status !== 'completed' || ! $this->diagnosis_code) {
+            return null;
+        }
+        $code = strtoupper($this->diagnosis_code);
+        [$result, $reason] = match ($truth) {
+            'Normal' => match (true) {
+                in_array($code, ['NORMAL', 'BENIGN'], true) => ['correct', 'no disease called on normal tissue'],
+                $code === 'NONDX' => ['partial', 'no cancer called, but reported as non-diagnostic rather than normal'],
+                default => ['wrong', "{$code} called on normal tissue"],
+            },
+            'PB' => match (true) {
+                in_array($code, self::BENIGN_LESION, true) => ['correct', 'benign lesion called'],
+                $code === 'NORMAL' => ['partial', 'no cancer called, but the benign lesion was missed'],
+                default => ['wrong', "{$code} called on a benign lesion"],
+            },
+            default => match (true) {
+                $code === $truth => ['correct', 'right type'],
+                $code === 'MIXED' && in_array($truth, ['IDC', 'ILC'], true) => ['partial', 'mixed ductal-lobular called'],
+                in_array($code, self::MALIGNANT, true) => ['wrong', "carcinoma found, but typed as {$code}"],
+                default => ['wrong', "the carcinoma was missed ({$code})"],
+            },
+        };
+        return ['result' => $result, 'truth' => $truth, 'reason' => $reason];
+    }
+
     public function isRunning(): bool
     {
         return in_array($this->status, self::RUNNING, true);

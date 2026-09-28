@@ -44,6 +44,11 @@
   .vw-status{position:absolute;z-index:11;left:50%;top:14px;transform:translateX(-50%);padding:.45rem .9rem;
              border-radius:6px;background:rgba(20,16,32,.88);color:#fff;font-size:.85rem;pointer-events:auto}
   .vw-status.err{background:#b03d64;cursor:pointer}
+  .v2-vs{border-radius:6px;padding:.5rem .8rem;margin:0 0 .7rem;font-size:.9rem;border:1px solid}
+  .v2-vs.correct{background:#e4f1ec;border-color:#b9ddd0;color:#1f5446}
+  .v2-vs.partial{background:#faf0da;border-color:#e8d19a;color:#6b4e0e}
+  .v2-vs.wrong{background:#fbe9f0;border-color:#f0c2d3;color:#8c2a4d}
+  .v2-vs.none{background:#f5f3fa;border-color:#e3e0ea;color:#6b6480}
   .v2-code{display:inline-block;background:#4b3a94;color:#fff;border-radius:6px;padding:.05rem .55rem;margin-right:.35rem;letter-spacing:.03em}
 </style>
 @endpush
@@ -74,6 +79,15 @@
       @endphp
       <div class="v2-dx">@if($code)<span class="v2-code">{{ $code }}</span> @endif{{ $name }}
         <span style="font-weight:400;font-size:1rem;color:#6b6480">· confidence {{ round(($run->confidence ?? 0) * 100) }}%</span></div>
+      @php $v = $run->verdict(); @endphp
+      <div class="v2-vs {{ $v['result'] ?? 'none' }}">
+        @if($v)
+          <b>{{ ['correct' => '✓ Correct', 'partial' => '≈ Partially correct', 'wrong' => '✗ Wrong'][$v['result']] }}</b>
+          against the recorded diagnosis <b>{{ $v['truth'] }}</b> — {{ $v['reason'] }}.
+        @else
+          No recorded diagnosis for this slide in the archive, so the answer cannot be checked against one.
+        @endif
+      </div>
       <div class="v2-summary">{{ $run->summary }}</div>
       @if(!empty($run->warnings))
         <div class="v2-warn">@foreach($run->warnings as $w)<div>{{ $w }}</div>@endforeach</div>

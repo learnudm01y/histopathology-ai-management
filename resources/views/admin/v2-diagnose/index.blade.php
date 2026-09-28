@@ -74,6 +74,11 @@
   .v2-st.completed{background:#e4f1ec;color:#2c6b5b}
   .v2-st.failed{background:#fbe9f0;color:#b03d64}
   .v2-st.run{background:#faf0da;color:#8a6414}
+  .v2-match{display:inline-block;padding:.1rem .5rem;border-radius:99px;font-size:.78rem;font-weight:600;white-space:nowrap}
+  .v2-match.correct{background:#e4f1ec;color:#2c6b5b}
+  .v2-match.partial{background:#faf0da;color:#8a6414}
+  .v2-match.wrong{background:#fbe9f0;color:#b03d64}
+  .v2-tally{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:-.3rem 0 .9rem;font-size:.85rem;color:#57516a}
   .v2-eye{display:inline-flex;align-items:center;justify-content:center;width:2rem;height:2rem;border-radius:6px;
           color:#4b3a94;background:#f3f1f8;font-size:1.15rem;text-decoration:none;transition:background .15s,color .15s}
   .v2-eye:hover{background:#4b3a94;color:#fff;text-decoration:none}
@@ -189,14 +194,25 @@
 
   <div class="v2-card">
     <h3>Every run</h3>
+    @php $scored = array_sum($tally); @endphp
+    @if($scored)
+    <div class="v2-tally" title="Finished runs whose slide has a recorded diagnosis in the archive, compared with it.">
+      Against the recorded diagnosis ({{ $scored }} runs):
+      <span class="v2-match correct">✓ {{ $tally['correct'] }} correct</span>
+      <span class="v2-match partial">≈ {{ $tally['partial'] }} partial</span>
+      <span class="v2-match wrong">✗ {{ $tally['wrong'] }} wrong</span>
+      <span>· {{ round($tally['correct'] / $scored * 100) }}% fully correct</span>
+    </div>
+    @endif
     @if($runs->isEmpty())
       <p style="color:#6b6480">No runs yet.</p>
     @else
     <div style="overflow-x:auto">
     <table class="v2-runs">
-      <thead><tr><th>#</th><th>Slide</th><th>Context</th><th>Status</th><th>Diagnosis</th><th>When</th><th></th></tr></thead>
+      <thead><tr><th>#</th><th>Slide</th><th>Context</th><th>Status</th><th>Diagnosis</th><th>Recorded</th><th>Match</th><th>When</th><th></th></tr></thead>
       <tbody>
       @foreach($runs as $r)
+        @php $v = $r->verdict(); $truth = $r->recordedClass(); @endphp
         <tr>
           <td><a href="{{ route('admin.v2-diagnose.show', $r) }}">#{{ $r->id }}</a></td>
           <td>{{ $r->sample?->entity_submitter_id ?: ($r->sample?->file_name ?: '—') }}
@@ -206,6 +222,17 @@
           <td><span class="v2-st {{ in_array($r->status, ['completed','failed']) ? $r->status : 'run' }}">{{ $r->status }}</span></td>
           <td>{{ $r->diagnosis ?: '—' }}
               @if($r->confidence !== null)<div class="v2-hint">confidence {{ round($r->confidence * 100) }}% · {{ $r->regions_count }} regions</div>@endif</td>
+          <td>{{ $truth ?: '—' }}
+              @if(! $truth)<div class="v2-hint">no recorded diagnosis</div>@endif</td>
+          <td>
+            @if($v)
+              <span class="v2-match {{ $v['result'] }}" title="{{ $v['reason'] }}">
+                {{ ['correct' => '✓ Correct', 'partial' => '≈ Partial', 'wrong' => '✗ Wrong'][$v['result']] }}</span>
+              <div class="v2-hint">{{ $v['reason'] }}</div>
+            @else
+              <span class="v2-hint">—</span>
+            @endif
+          </td>
           <td class="v2-hint">{{ $r->created_at->format('Y-m-d H:i') }}</td>
           <td><a href="{{ route('admin.v2-diagnose.show', $r) }}" class="v2-eye" title="Open run #{{ $r->id }}: slide, regions, heatmap"
                  aria-label="Open run #{{ $r->id }}"><i class="mdi mdi-eye-outline"></i></a></td>

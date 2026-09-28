@@ -41,10 +41,17 @@ class V2DiagnoseTest extends TestCase
         Schema::create('samples', function (Blueprint $t) {
             $t->id(); $t->unsignedBigInteger('organ_id')->nullable(); $t->unsignedBigInteger('stain_id')->nullable();
             $t->unsignedBigInteger('case_id')->nullable();
+            $t->unsignedBigInteger('category_id')->nullable(); $t->unsignedBigInteger('disease_subtype_id')->nullable();
             $t->string('entity_submitter_id')->nullable(); $t->string('file_name')->nullable();
             $t->string('entity_type')->nullable(); $t->string('data_format')->nullable();
             $t->string('storage_status')->nullable(); $t->string('wsi_remote_path')->nullable();
             $t->boolean('is_usable')->default(true); $t->timestamps();
+        });
+        Schema::create('categories', function (Blueprint $t) {
+            $t->id(); $t->unsignedBigInteger('organ_id')->nullable(); $t->string('label_en'); $t->timestamps();
+        });
+        Schema::create('disease_subtypes', function (Blueprint $t) {
+            $t->id(); $t->unsignedBigInteger('category_id')->nullable(); $t->string('name'); $t->timestamps();
         });
         foreach (['2026_09_27_000001_create_v2_diagnoses_table', '2026_09_27_000002_add_usage_to_v2_diagnoses_table',
                   '2026_09_28_000001_add_diagnosis_code_to_v2_diagnoses_table'] as $m) {
@@ -157,6 +164,39 @@ class V2DiagnoseTest extends TestCase
         $this->get("/admin/v2-diagnose/{$run->id}/asset/view/..%2F..%2F.env")->assertNotFound();
         $this->get("/admin/v2-diagnose/{$run->id}/download/env")->assertNotFound();
         $this->get("/admin/v2-diagnose/{$run->id}/download/claude")->assertNotFound();
+    }
+
+    public function test_each_answer_is_judged_against_the_recorded_diagnosis(): void
+    {
+        $tumour = \Illuminate\Support\Facades\DB::table('categories')->insertGetId(['label_en' => 'tumor']);
+        $normal = \Illuminate\Support\Facades\DB::table('categories')->insertGetId(['label_en' => 'normal']);
+        $benign = \Illuminate\Support\Facades\DB::table('categories')->insertGetId(['label_en' => 'benign']);
+        $idc = \Illuminate\Support\Facades\DB::table('disease_subtypes')->insertGetId(['category_id' => $tumour, 'name' => 'IDC']);
+        $ilc = \Illuminate\Support\Facades\DB::table('disease_subtypes')->insertGetId(['category_id' => $tumour, 'name' => 'ILC']);
+        $pb = \Illuminate\Support\Facades\DB::table('disease_subtypes')->insertGetId(['category_id' => $benign, 'name' => 'Pathological Benign (PB)']);
+
+        $case = function (?int $cat, ?int $sub, ?string $code, string $status = 'completed') {
+            $s = Sample::forceCreate(['entity_submitter_id' => 'S', 'category_id' => $cat, 'disease_subtype_id' => $sub]);
+            return V2Diagnosis::create(['sample_id' => $s->id, 'organ' => 'Breast', 'status' => $status,
+                'diagnosis_code' => $code, 'diagnosis' => "{$code} — x"]);
+        };
+        $expect = [
+            [$tumour, $idc, 'IDC', 'correct'], [$tumour, $ilc, 'ILC', 'correct'], [$tumour, $ilc, 'IDC', 'wrong'],
+            [$tumour, $idc, 'MIXED', 'partial'], [$tumour, $idc, 'NORMAL', 'wrong'],
+            [$normal, null, 'NORMAL', 'correct'], [$normal, null, 'BENIGN', 'correct'],
+            [$normal, null, 'NONDX', 'partial'], [$normal, null, 'IDC', 'wrong'],
+            [$benign, $pb, 'FA', 'correct'], [$benign, $pb, 'NORMAL', 'partial'], [$benign, $pb, 'LCIS', 'wrong'],
+        ];
+        foreach ($expect as [$cat, $sub, $code, $result]) {
+            $this->assertSame($result, $case($cat, $sub, $code)->fresh()->verdict()['result'], "{$code} on {$cat}/{$sub}");
+        }
+        // Nothing to judge: no recorded diagnosis, or not finished.
+        $this->assertNull($case(null, null, 'IDC')->fresh()->verdict());
+        $this->assertNull($case($tumour, $idc, null, 'analysing')->fresh()->verdict());
+
+        $page = $this->actingAs($this->user)->get('/admin/v2-diagnose')->assertOk();
+        $page->assertSee('Against the recorded diagnosis (12 runs)')->assertSee('5 correct')
+             ->assertSee('3 partial')->assertSee('4 wrong');
     }
 
     public function test_rerun_copies_the_inputs_into_a_new_run(): void

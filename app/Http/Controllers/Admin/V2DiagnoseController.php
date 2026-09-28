@@ -29,8 +29,20 @@ class V2DiagnoseController extends Controller
 
     public function index(Request $request)
     {
-        $runs = V2Diagnosis::with('sample:id,entity_submitter_id,file_name')
-            ->latest('id')->paginate(25);
+        $withTruth = ['sample:id,entity_submitter_id,file_name,category_id,disease_subtype_id',
+                      'sample.category:id,label_en', 'sample.diseaseSubtype:id,name'];
+        $runs = V2Diagnosis::with($withTruth)->latest('id')->paginate(25);
+
+        // The tally across every finished run whose slide has a recorded
+        // diagnosis — not only the page shown.
+        $tally = ['correct' => 0, 'partial' => 0, 'wrong' => 0];
+        V2Diagnosis::with($withTruth)->where('status', 'completed')
+            ->get(['id', 'sample_id', 'status', 'diagnosis_code'])
+            ->each(function ($r) use (&$tally) {
+                if ($v = $r->verdict()) {
+                    $tally[$v['result']]++;
+                }
+            });
 
         $samples = Sample::where('storage_status', 'available')
             ->whereNotNull('wsi_remote_path')
@@ -39,6 +51,7 @@ class V2DiagnoseController extends Controller
 
         return view('admin.v2-diagnose.index', [
             'runs'    => $runs,
+            'tally'   => $tally,
             'samples' => $samples,
             'organs'  => Organ::orderBy('name')->pluck('name'),
             'stains'  => Stain::orderBy('name')->pluck('name'),
@@ -112,7 +125,8 @@ class V2DiagnoseController extends Controller
 
     public function show(V2Diagnosis $run)
     {
-        $run->load('sample:id,entity_submitter_id,file_name,wsi_remote_path', 'user:id,name');
+        $run->load('sample:id,entity_submitter_id,file_name,wsi_remote_path,category_id,disease_subtype_id',
+            'sample.category:id,label_en', 'sample.diseaseSubtype:id,name', 'user:id,name');
         $wsi = $this->runner->resolveWsi($run);
         $tiles = null;
         if ($wsi && config('v2_diagnose.tile_source') === 'direct') {
