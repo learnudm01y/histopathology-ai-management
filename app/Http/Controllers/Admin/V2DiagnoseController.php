@@ -156,7 +156,7 @@ class V2DiagnoseController extends Controller
      */
     public function asset(V2Diagnosis $run, string $path)
     {
-        abort_unless(preg_match('#^(view/P\d{3}\.jpg|sheets/sheet_\d{2}\.jpg|overview\.png)$#', $path), 404);
+        abort_unless(preg_match('#^(view/P\d{3,4}\.jpg|sheets/sheet_\d{2,3}\.jpg|overview\.png|coverage\.png)$#', $path), 404);
         $file = $run->run_dir . '/' . $path;
         abort_unless($run->run_dir && is_file($file), 404);
         return response()->file($file);

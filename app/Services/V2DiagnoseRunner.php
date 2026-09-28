@@ -67,17 +67,16 @@ class V2DiagnoseRunner
             $source = $local;
         }
 
+        // The whole slide, every tile that holds tissue — not patch_extract.py,
+        // which samples for training: a 100-tile random cap and a half-tissue
+        // rule left 70% of the tissue unread on the first production runs.
+        // v2_tools measures the coverage it achieves, and the run records it.
         try {
             $result = $this->python([
-                base_path('scripts/patch_extract.py'),
-                '--input', $source,
-                '--output_dir', "{$dir}/patches",
-                '--patch_size', (string) $t['patch_size'],
-                '--target_mpp', (string) $t['target_mpp'],
-                '--max_patches', (string) $t['max_patches'],
-                '--tissue_threshold', (string) $t['tissue_threshold'],
+                base_path('scripts/v2_tools.py'), 'tile', $dir, $source,
+                '--patch', (string) $t['patch_size'],
+                '--mpp', (string) $t['target_mpp'],
                 '--workers', (string) max(1, $t['workers']),
-                '--format', 'png', '--seed', '42', '--save_coords', '--overview',
             ], 6 * 3600);
         } finally {
             if ($local) {
@@ -89,9 +88,6 @@ class V2DiagnoseRunner
             throw new \RuntimeException('Tiling produced no tissue tiles.');
         }
         file_put_contents("{$dir}/tiling.json", json_encode($result, JSON_PRETTY_PRINT));
-        if (! empty($result['overview_file']) && is_file($result['overview_file'])) {
-            copy($result['overview_file'], "{$dir}/overview.png");
-        }
 
         $run->update([
             'run_dir'      => $dir,
@@ -139,6 +135,8 @@ class V2DiagnoseRunner
             '{{SLIDE_W}}'  => (string) $run->slide_width,
             '{{SLIDE_H}}'  => (string) $run->slide_height,
             '{{PY}}'       => $this->pythonBin(),
+            '{{SHEETS}}'   => (string) (int) ceil(((int) $run->patches) / 16),
+            '{{COVERAGE}}' => ($cov = $this->coverage($run)) !== null ? round($cov * 100, 1) . '%' : 'all',
         ]);
     }
 
@@ -223,11 +221,16 @@ class V2DiagnoseRunner
         if (config('v2_diagnose.keep_full_patches')) {
             return;
         }
-        foreach (glob($this->runDir($run) . '/patches/*.png') ?: [] as $f) {
-            if (basename($f) !== 'overview.png') {
-                @unlink($f);
-            }
+        foreach (glob($this->runDir($run) . '/patches/patch_*') ?: [] as $f) {
+            @unlink($f);
         }
+    }
+
+    /** Share of the slide's tissue the tiles cover, as measured at tiling. */
+    public function coverage(V2Diagnosis $run): ?float
+    {
+        $t = json_decode((string) @file_get_contents($this->runDir($run) . '/tiling.json'), true);
+        return isset($t['coverage']) ? (float) $t['coverage'] : null;
     }
 
     public function pythonBin(): string

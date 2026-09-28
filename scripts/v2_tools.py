@@ -5,6 +5,7 @@ V2 Diagnose — the deterministic half of the pipeline.
 The model reads the tiles and answers in coordinates; everything around that is
 here, so that nothing numeric depends on a language model doing arithmetic:
 
+    tile     RUN SLIDE        the whole slide, every tile with tissue; measures coverage
     prepare  RUN              view images, contact sheets, nuclear-density grids, manifest
     density  RUN              rebuild density.json and masks/ for an existing run
     show     RUN P007         print one tile's density grid (0-9) — for the model
@@ -174,25 +175,168 @@ def draw_ticks(img: np.ndarray) -> None:
             cv2.line(img, a, b, (0, 0, 0), 2)
 
 
-def write_density(run: str, smalls: dict, thr: float, mpp_work: float) -> dict:
+def write_density(run: str, smalls, thr: float, mpp_work: float) -> dict:
     """density.json (25x25 heat grids, normalised across the slide) and
     masks/raw_P001.png (the unsmoothed large-nucleus, lymphocyte and tissue
     fractions at MASK_PX, as the R, G and B channels) for the slide-wide mask.
-    Returns each tile's tissue fraction."""
-    raw = {pid: density_raw(small, thr, mpp_work) for pid, small in smalls.items()}
-    vals = np.concatenate([v[t > 0.3] for v, t, _ in raw.values()] or [np.zeros(1)])
+
+    *smalls* yields (tile id, analysis image) one at a time: a whole slide is
+    several hundred tiles, and only each tile's small grids are kept, never
+    its pixels. Returns each tile's tissue fraction."""
+    os.makedirs(os.path.join(run, "masks"), exist_ok=True)
+    raw = {}
+    for pid, small in smalls:
+        v, t, fine = density_raw(small, thr, mpp_work)
+        Image.fromarray(np.round(np.clip(fine, 0, 1) * 255).astype(np.uint8)).save(
+            os.path.join(run, "masks", f"raw_{pid}.png"))
+        raw[pid] = (v, t)
+    vals = np.concatenate([v[t > 0.3] for v, t in raw.values()] or [np.zeros(1)])
     vmax = max(float(np.percentile(vals, 99)) if vals.size else 1.0, 1e-4)
     save(os.path.join(run, "density.json"), {
         "grid": GRID, "method": "lymphocyte-suppressed large-nucleus density, normalised to slide p99",
         "hematoxylin_threshold": round(thr, 4),
         "tiles": {pid: np.round((np.clip(v / vmax, 0, 1) * (t > 0.3)).astype(np.float64), 3).tolist()
-                  for pid, (v, t, _) in raw.items()},
+                  for pid, (v, t) in raw.items()},
     })
-    os.makedirs(os.path.join(run, "masks"), exist_ok=True)
-    for pid, (_, _, fine) in raw.items():
-        Image.fromarray(np.round(np.clip(fine, 0, 1) * 255).astype(np.uint8)).save(
-            os.path.join(run, "masks", f"raw_{pid}.png"))
-    return {pid: round(float(t.mean()), 3) for pid, (_, t, _) in raw.items()}
+    return {pid: round(float(t.mean()), 3) for pid, (_, t) in raw.items()}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# tile — the whole slide, every tile with tissue in it
+# ═════════════════════════════════════════════════════════════════════════════
+# V2 does not use patch_extract.py. That script samples patches for training:
+# it keeps tiles that are at least half tissue, drops mostly-white ones, caps
+# the count at random, and never reaches the right and bottom edge strips. For
+# a diagnosis, each of those silently removes tissue from the reading — on the
+# first production runs only 22-31% of the tissue on large slides was read.
+# Here the lattice covers the slide to its last pixel, a tile is kept if it
+# holds any tissue at all, nothing is sampled, and the coverage is measured.
+
+TILE_MASK_MPP = 8.0        # tissue mask resolution, um per pixel
+MIN_TISSUE = 0.01          # a tile is read if at least 1% of it is tissue
+
+_slide = None
+
+
+def _open_slide(path: str) -> None:
+    global _slide
+    import openslide
+    _slide = openslide.OpenSlide(path)
+
+
+def _read_tile(job: tuple) -> str:
+    """Read one tile at the analysis scale and write it as JPEG (worker)."""
+    x0, y0, size_l0, level, patch_px, out_path = job
+    ds = _slide.level_downsamples[level]
+    n = int(math.ceil(size_l0 / ds))
+    region = _slide.read_region((x0, y0), level, (n, n))      # beyond the slide: transparent
+    tile = Image.new("RGB", region.size, (255, 255, 255))
+    tile.paste(region, mask=region.split()[3])
+    tile = tile.resize((patch_px, patch_px), Image.LANCZOS)
+    tile.save(out_path, "JPEG", quality=90)
+    return out_path
+
+
+def slide_tissue_mask(slide, mpp0: float) -> tuple[np.ndarray, float, np.ndarray]:
+    """Tissue mask of the whole slide at ~8 um/px, with its level-0 px per mask px
+    and the thumbnail it was cut from. Saturation with a per-slide Otsu cut,
+    as patch_extract does, so both pipelines agree on what tissue is."""
+    W0, H0 = slide.dimensions
+    k = max(1.0, TILE_MASK_MPP / mpp0)
+    thumb = np.array(slide.get_thumbnail((int(W0 / k), int(H0 / k))).convert("RGB"))
+    ds = W0 / thumb.shape[1]
+    sat = cv2.medianBlur(cv2.cvtColor(thumb, cv2.COLOR_RGB2HSV)[..., 1], 7)
+    t, m = cv2.threshold(sat, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if t < 5 or t > 200:
+        _, m = cv2.threshold(sat, 20, 255, cv2.THRESH_BINARY)
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15)))
+    cs, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    clean = np.zeros_like(m)
+    for c in cs:
+        if cv2.contourArea(c) >= 500:
+            cv2.drawContours(clean, [c], -1, 255, cv2.FILLED)
+    return clean > 0, ds, thumb
+
+
+def cmd_tile(a) -> None:
+    import openslide
+    from multiprocessing import Pool
+
+    run, pdir = a.run, os.path.join(a.run, "patches")
+    os.makedirs(pdir, exist_ok=True)
+    slide = openslide.OpenSlide(a.slide)
+    W0, H0 = slide.dimensions
+    mpp0 = None
+    for key in (openslide.PROPERTY_NAME_MPP_X, "aperio.MPP"):
+        try:
+            mpp0 = float(slide.properties.get(key) or 0) or None
+        except ValueError:
+            mpp0 = None
+        if mpp0:
+            break
+    if not mpp0:
+        out({"error": "The slide declares no microns-per-pixel, so it cannot be tiled at a known scale."}, 1)
+
+    scale = a.mpp / mpp0                              # level-0 px per output px
+    size_l0 = int(round(a.patch * scale))
+    level = 0
+    for i, d in enumerate(slide.level_downsamples):   # deepest level that needs no upsampling
+        if d <= scale + 1e-6:
+            level = i
+
+    mask, ds, thumb = slide_tissue_mask(slide, mpp0)
+    cols, rows = math.ceil(W0 / size_l0), math.ceil(H0 / size_l0)
+    covered = np.zeros_like(mask)
+    jobs, coords = [], []
+    for r in range(rows):
+        for c in range(cols):
+            x0, y0 = c * size_l0, r * size_l0
+            my0, my1 = int(y0 / ds), min(mask.shape[0], int(math.ceil((y0 + size_l0) / ds)))
+            mx0, mx1 = int(x0 / ds), min(mask.shape[1], int(math.ceil((x0 + size_l0) / ds)))
+            cell = mask[my0:my1, mx0:mx1]
+            if cell.size == 0 or cell.sum() < MIN_TISSUE * (size_l0 / ds) ** 2:
+                continue
+            covered[my0:my1, mx0:mx1] = cell
+            name = f"patch_{len(jobs):05d}_x{x0}_y{y0}.jpg"
+            jobs.append((x0, y0, size_l0, level, a.patch, os.path.join(pdir, name)))
+            coords.append((name, x0, y0))
+    slide.close()
+    if not jobs:
+        out({"error": "No tissue was found on the slide."}, 1)
+
+    with Pool(max(1, a.workers), initializer=_open_slide, initargs=(a.slide,)) as pool:
+        for _ in pool.imap_unordered(_read_tile, jobs, chunksize=4):
+            pass
+
+    with open(os.path.join(pdir, "patch_coords.csv"), "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["file", "x", "y", "w", "h", "level"])
+        for name, x0, y0 in coords:
+            w.writerow([name, x0, y0, size_l0, size_l0, level])
+
+    tissue_px = int(mask.sum())
+    coverage = float(covered.sum()) / tissue_px if tissue_px else 1.0
+
+    # The audit image: tissue read in green, tissue left out in red, tile grid.
+    k = min(1.0, 2400 / thumb.shape[1])
+    img = cv2.resize(thumb, (int(thumb.shape[1] * k), int(thumb.shape[0] * k)), interpolation=cv2.INTER_AREA)
+    m_s = cv2.resize(mask.astype(np.uint8), img.shape[1::-1], interpolation=cv2.INTER_NEAREST) > 0
+    c_s = cv2.resize(covered.astype(np.uint8), img.shape[1::-1], interpolation=cv2.INTER_NEAREST) > 0
+    tint = img.copy()
+    tint[m_s & c_s] = (0.6 * tint[m_s & c_s] + 0.4 * np.array([40, 190, 90])).astype(np.uint8)
+    tint[m_s & ~c_s] = (0.4 * tint[m_s & ~c_s] + 0.6 * np.array([230, 40, 40])).astype(np.uint8)
+    f = k / ds
+    for _, x0, y0 in coords:
+        cv2.rectangle(tint, (int(x0 * f), int(y0 * f)), (int((x0 + size_l0) * f), int((y0 + size_l0) * f)), (30, 30, 30), 1)
+    Image.fromarray(tint).save(os.path.join(run, "coverage.png"))
+    Image.fromarray(img).save(os.path.join(run, "thumb.jpg"), quality=88)
+
+    out({"patches_extracted": len(jobs), "candidates_total": cols * rows, "patches_skipped": 0,
+         "patch_size": a.patch, "level": level, "base_mpp": mpp0, "target_mpp": a.mpp,
+         "scale_l0_px_per_out_px": round(scale, 6), "slide_width": W0, "slide_height": H0,
+         "max_patches": None, "min_tissue": MIN_TISSUE, "grid": [cols, rows],
+         "coverage": round(coverage, 4), "tissue_px_at_8um": tissue_px,
+         "thumb_file": os.path.join(run, "thumb.jpg"), "thumb_scale": round(ds / k, 4)})
 
 
 def cmd_density(a) -> None:
@@ -206,19 +350,21 @@ def cmd_density(a) -> None:
     tiling = load(os.path.join(run, "tiling.json"))
     work_px = 952
     mpp_work = float(tiling.get("target_mpp") or 0.5) * int(tiling["patch_size"]) / work_px
-    smalls, samples = {}, []
-    for t in man["tiles"]:
+
+    def small_of(t):
         full = os.path.join(run, "patches", t["file"])
         src = full if os.path.isfile(full) else os.path.join(run, t["view"])
-        rgb = np.array(Image.open(src).convert("RGB"))
-        small = cv2.resize(rgb, (work_px, work_px), interpolation=cv2.INTER_AREA)
-        smalls[t["id"]] = small
+        return cv2.resize(np.array(Image.open(src).convert("RGB")), (work_px, work_px), interpolation=cv2.INTER_AREA)
+
+    samples = []
+    for t in man["tiles"]:
+        small = small_of(t)
         h = hematoxylin(small)[tissue_mask(small)]
         if h.size:
-            samples.append(h[:: max(1, h.size // 20000)])
+            samples.append(h[:: max(1, h.size // 5000)])
     thr = otsu(np.concatenate(samples)) if samples else 1.0
-    write_density(run, smalls, thr, mpp_work)
-    out({"ok": True, "tiles": len(smalls), "hematoxylin_threshold": round(thr, 4)})
+    write_density(run, ((t["id"], small_of(t)) for t in man["tiles"]), thr, mpp_work)
+    out({"ok": True, "tiles": len(man["tiles"]), "hematoxylin_threshold": round(thr, 4)})
 
 
 def cmd_prepare(a) -> None:
@@ -237,44 +383,65 @@ def cmd_prepare(a) -> None:
     work_px = 952                                          # analysis resolution (~1 um/px at 0.5 mpp tiles)
     mpp_work = mpp_tile * int(tiling["patch_size"]) / work_px
 
-    # Pass 1: one hematoxylin threshold for the whole slide, from every tile.
-    samples = []
-    imgs = {}
+    # Pass 1, one tile at a time (a whole slide can be several hundred): the
+    # view image the model reads, a thumbnail for the contact sheets, and a
+    # sample of hematoxylin for one threshold across the whole slide. Only the
+    # thumbnails stay in memory.
+    per, cell = 16, 245
+    samples, thumbs, ids = [], {}, {}
+    pad = max(3, len(str(len(rows))))
     for i, r in enumerate(rows):
-        pid = f"P{i + 1:03d}"
+        pid = f"P{i + 1:0{pad}d}"
+        ids[r["file"]] = pid
         rgb = np.array(Image.open(os.path.join(pdir, r["file"])).convert("RGB"))
         small = cv2.resize(rgb, (work_px, work_px), interpolation=cv2.INTER_AREA)
-        # The view image is written now so the full-resolution tile (11 MB in
-        # memory) is dropped straight away rather than held for all 100.
         view = cv2.resize(rgb, (VIEW_PX, VIEW_PX), interpolation=cv2.INTER_AREA)
+        del rgb
         draw_ticks(view)
         Image.fromarray(view).save(os.path.join(run, "view", f"{pid}.jpg"), quality=88)
-        del rgb, view
-        imgs[pid] = (r, small)
-        tis = tissue_mask(small)
-        h = hematoxylin(small)[tis]
+        thumbs[pid] = cv2.resize(small, (cell - 6, cell - 6), interpolation=cv2.INTER_AREA)
+        h = hematoxylin(small)[tissue_mask(small)]
         if h.size:
-            samples.append(h[:: max(1, h.size // 20000)])
+            samples.append(h[:: max(1, h.size // 5000)])
     thr = otsu(np.concatenate(samples)) if samples else 1.0
 
-    fractions = write_density(run, {pid: small for pid, (_, small) in imgs.items()}, thr, mpp_work)
+    # Pass 2: the density maps, from the tiles again rather than from memory.
+    def smalls():
+        for r in rows:
+            rgb = np.array(Image.open(os.path.join(pdir, r["file"])).convert("RGB"))
+            yield ids[r["file"]], cv2.resize(rgb, (work_px, work_px), interpolation=cv2.INTER_AREA)
+
+    fractions = write_density(run, smalls(), thr, mpp_work)
     manifest = [{
-        "id": pid, "file": r["file"], "view": f"view/{pid}.jpg",
+        "id": ids[r["file"]], "file": r["file"], "view": f"view/{ids[r['file']]}.jpg",
         "x": int(r["x"]), "y": int(r["y"]), "size_l0": int(r["w"]),
-        "tissue_fraction": fractions[pid],
-    } for pid, (r, _) in imgs.items()]
+        "tissue_fraction": fractions[ids[r["file"]]],
+    } for r in rows]
 
     # Contact sheets: 16 tiles per sheet, labelled, for the first look.
-    per, cell = 16, 245
     for s in range(0, len(manifest), per):
         sheet = np.full((4 * cell + 20, 4 * cell + 20, 3), 255, np.uint8)
         for k, m in enumerate(manifest[s:s + per]):
-            th = cv2.resize(imgs[m["id"]][1], (cell - 6, cell - 6), interpolation=cv2.INTER_AREA)
             y0, x0 = 10 + (k // 4) * cell, 10 + (k % 4) * cell
-            sheet[y0:y0 + cell - 6, x0:x0 + cell - 6] = th
+            sheet[y0:y0 + cell - 6, x0:x0 + cell - 6] = thumbs[m["id"]]
             for col, w in (((0, 0, 0), 5), ((255, 255, 255), 2)):
                 cv2.putText(sheet, m["id"], (x0 + 6, y0 + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, col, w, cv2.LINE_AA)
         Image.fromarray(sheet).save(os.path.join(run, "sheets", f"sheet_{s // per + 1:02d}.jpg"), quality=85)
+
+    # The overview: the slide with every tile outlined and labelled, so a tile
+    # id can be placed on the slide at a glance.
+    tfile = tiling.get("thumb_file")
+    if tfile and os.path.isfile(tfile):
+        ov = np.array(Image.open(tfile).convert("RGB"))
+        f = 1.0 / float(tiling["thumb_scale"])
+        fs = max(0.3, min(0.9, manifest[0]["size_l0"] * f / 90))
+        for m in manifest:
+            x0, y0 = int(m["x"] * f), int(m["y"] * f)
+            x1, y1 = int((m["x"] + m["size_l0"]) * f), int((m["y"] + m["size_l0"]) * f)
+            cv2.rectangle(ov, (x0, y0), (x1, y1), (20, 90, 200), 1)
+            for col, w in (((255, 255, 255), 3), ((0, 0, 0), 1)):
+                cv2.putText(ov, m["id"], (x0 + 3, y0 + int(14 * fs / 0.5)), cv2.FONT_HERSHEY_SIMPLEX, fs, col, w, cv2.LINE_AA)
+        Image.fromarray(ov).save(os.path.join(run, "overview.png"))
 
     save(os.path.join(run, "manifest.json"), {
         "view_px": VIEW_PX, "grid": GRID, "patch_size": int(tiling["patch_size"]),
@@ -512,7 +679,8 @@ def _clusters(cells: dict) -> list:
     return groups
 
 
-def slide_mask(run: str, tiles: dict, regions: list, um_per_view_px: float) -> tuple[list, dict, dict]:
+def slide_mask(run: str, tiles: dict, regions: list, um_per_view_px: float,
+               implicit: set | None = None) -> tuple[list, dict, dict]:
     """The tumour mask of the whole slide, cut in one piece.
 
     Each tile's raw fractions are laid side by side into one canvas per piece
@@ -520,66 +688,90 @@ def slide_mask(run: str, tiles: dict, regions: list, um_per_view_px: float) -> t
     runs across tile borders exactly as the tissue does: no seams, no gaps,
     no edges drawn along the side of a tile.
 
-    The model decides what is tumour. The boxes of its tumour regions say where a
-    mask may exist (and at which mask_level), its non-tumour regions are cut
-    out, and its negative points remove what they sit on. The border itself
-    comes from the pixels.
+    The model decides what is tumour. The boxes of its tumour regions say where
+    a mask may exist (and at which mask_level); every tile it scored as tumour
+    without drawing a region (*implicit*) counts as one whole-tile box, so the
+    mask reaches all the tumour on the slide and not only the tiles it opened.
+    Its non-tumour regions are cut out, and its negative points remove what
+    they sit on. The border itself comes from the pixels.
 
     The heat density is taken from the same stitched map (smoothed over
     ~25 um instead of ~8), so it too runs across tile borders unbroken.
+
+    A whole slide can be several hundred tiles on a server with a few GB of
+    memory, so each piece is built twice (once for the slide-wide scale, once
+    to be cut) rather than every piece being held at once.
 
     Returns (polygons in level-0 px, each [outer ring, *holes]; per-tile mask
     coverage and per-tile density, both HEAT_GRID x HEAT_GRID).
     """
     size, ox, oy, cells = _tile_grid(tiles)
-    R, UP = MASK_PX, 2                        # canvas: 2 view px per pixel
-    RU = R * UP
-    k_view = RU / VIEW_PX                     # view px -> canvas px within a tile
+    R = MASK_PX
     um_per_raw = um_per_view_px * VIEW_PX / R
     sig = max(0.5, 8.0 / um_per_raw)          # ~8 um: follows a nest border
     sig_heat = max(0.5, 25.0 / um_per_raw)    # ~25 um: the heat, as before
+    implicit = implicit or set()
 
     by_tile = {}
     for g in regions:
         by_tile.setdefault(g["patch"], []).append(g)
-
-    pieces = []
+    groups = []
     for group in _clusters(cells):
         cs = [cells[p][0] for p in group]
         rs = [cells[p][1] for p in group]
-        c0, r0 = min(cs), min(rs)
-        nc, nr = max(cs) - c0 + 1, max(rs) - r0 + 1
-        raw = np.zeros((nr * R, nc * R, 3), np.float32)
+        groups.append((group, min(cs), min(rs), max(cs) - min(cs) + 1, max(rs) - min(rs) + 1))
+
+    def build(group, c0, r0, nc, nr):
+        raw = np.zeros((nr * R, nc * R, 3), np.uint8)
         for pid in group:
             path = os.path.join(run, "masks", f"raw_{pid}.png")
             if os.path.isfile(path):
                 c, r = cells[pid]
-                raw[(r - r0) * R:(r - r0 + 1) * R, (c - c0) * R:(c - c0 + 1) * R] = \
-                    np.asarray(Image.open(path), np.float32) / 255.0
-        big, lym, tis = raw[..., 0], raw[..., 1], raw[..., 2]
-        t_s = np.maximum(cv2.GaussianBlur(tis, (0, 0), sig), 0.7)
-        d_lym = cv2.GaussianBlur(lym, (0, 0), sig) / t_s
-        v = cv2.GaussianBlur(big, (0, 0), sig) / t_s * np.clip(1 - (d_lym - 0.06) / 0.10, 0, 1)
-        t_h = np.maximum(cv2.GaussianBlur(tis, (0, 0), sig_heat), 0.7)
-        d_lym_h = cv2.GaussianBlur(lym, (0, 0), sig_heat) / t_h
-        vh = cv2.GaussianBlur(big, (0, 0), sig_heat) / t_h * np.clip(1 - (d_lym_h - 0.06) / 0.10, 0, 1)
-        pieces.append((group, c0, r0, nc, nr, v, tis, vh))
+                raw[(r - r0) * R:(r - r0 + 1) * R, (c - c0) * R:(c - c0 + 1) * R] = np.asarray(Image.open(path))
+        big, lym, tis = (raw[..., i].astype(np.float32) / 255.0 for i in range(3))
+        del raw
 
-    def p99(arrays):
-        x = np.concatenate(arrays or [np.zeros(1)])
+        def dens(sg):
+            t_s = np.maximum(cv2.GaussianBlur(tis, (0, 0), sg), 0.7)
+            d_lym = cv2.GaussianBlur(lym, (0, 0), sg) / t_s
+            return cv2.GaussianBlur(big, (0, 0), sg) / t_s * np.clip(1 - (d_lym - 0.06) / 0.10, 0, 1)
+        return dens(sig), tis, dens(sig_heat)
+
+    # Pass 1: the slide-wide scale, from a sample of every piece.
+    vs, hs = [], []
+    for gr in groups:
+        v, tis, vh = build(*gr)
+        sel = tis > 0.3
+        step = max(1, int(sel.sum()) // 200_000)
+        vs.append(v[sel][::step])
+        hs.append(vh[sel][::step])
+        del v, tis, vh
+
+    def p99(parts):
+        x = np.concatenate(parts or [np.zeros(1)])
         return max(float(np.percentile(x, 99)) if x.size else 1.0, 1e-4)
+    vmax, hmax = p99(vs), p99(hs)
+    del vs, hs
 
-    vmax = p99([v[t > 0.3] for _, _, _, _, _, v, t, _ in pieces])
-    hmax = p99([vh[t > 0.3] for _, _, _, _, _, _, t, vh in pieces])
-
-    rings, cover, dens = [], {}, {}
-    a = (RU / VIEW_PX) ** 2                   # view px^2 -> canvas px^2
-    for group, c0, r0, nc, nr, v, tis, vh in pieces:
+    rings, cover, dens_out = [], {}, {}
+    for group, c0, r0, nc, nr in groups:
+        v, tis, vh = build(group, c0, r0, nc, nr)
+        # Cut at 2 view px per pixel where the piece is small enough, at the
+        # raw 4 (~3.8 um, still below a cell) where a doubled canvas would not fit.
+        UP = 2 if nc * nr <= 120 else 1
+        RU = R * UP
+        k_view = RU / VIEW_PX                 # view px -> canvas px within a tile
+        a = k_view ** 2                       # view px^2 -> canvas px^2
         H, W = nr * RU, nc * RU
-        up = cv2.resize(np.clip(v / vmax, 0, 1), (W, H), interpolation=cv2.INTER_CUBIC)
-        tis_up = cv2.resize(tis, (W, H), interpolation=cv2.INTER_LINEAR)
+        up = np.clip(v / vmax, 0, 1)
+        if UP > 1:
+            up = cv2.resize(up, (W, H), interpolation=cv2.INTER_CUBIC)
+            tis_c = cv2.resize(tis, (W, H), interpolation=cv2.INTER_LINEAR)
+        else:
+            tis_c = tis
+        del v
 
-        def to_canvas(pid, p, c0=c0, r0=r0):
+        def to_canvas(pid, p, c0=c0, r0=r0, RU=RU, k_view=k_view):
             c, r = cells[pid]
             return ((c - c0) * RU + p[0] * k_view, (r - r0) * RU + p[1] * k_view)
 
@@ -587,6 +779,10 @@ def slide_mask(run: str, tiles: dict, regions: list, um_per_view_px: float) -> t
         exclude = np.zeros((H, W), np.uint8)
         negatives = []
         for pid in group:
+            if pid in implicit:
+                x0, y0 = to_canvas(pid, (0, 0))
+                sl = level[int(y0):int(y0) + RU, int(x0):int(x0) + RU]
+                np.minimum(sl, MASK_LEVEL, out=sl)
             for g in by_tile.get(pid, []):
                 if g["label"] in TUMOUR_LABELS:
                     x0, y0 = to_canvas(pid, g["box"][:2])
@@ -598,13 +794,14 @@ def slide_mask(run: str, tiles: dict, regions: list, um_per_view_px: float) -> t
                     poly = np.array([to_canvas(pid, p) for p in g["polygon"]], np.int32)
                     cv2.fillPoly(exclude, [poly], 1)
 
-        m = ((up >= level) & (tis_up > 0.3) & (exclude == 0)).astype(np.uint8)
+        m = ((up >= level) & (tis_c > 0.3) & (exclude == 0)).astype(np.uint8)
+        del level, exclude, tis_c
         kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         m = cv2.morphologyEx(cv2.morphologyEx(m, cv2.MORPH_OPEN, kern), cv2.MORPH_CLOSE, kern)
 
         # Negative points: a compact dense patch goes whole; inside a large
         # confluent one, only what is continuous with the point and alike in
-        # density, plus a small hole around it.
+        # density (flood-filled within ~150 um), plus a small hole around it.
         n, lab, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
         drop = np.zeros(n, bool)
         for x, y in negatives:
@@ -619,17 +816,22 @@ def slide_mask(run: str, tiles: dict, regions: list, um_per_view_px: float) -> t
                 win = up[y0w:yi + rw + 1, x0w:xi + rw + 1]
                 sy, sx = np.unravel_index(int(np.argmax(win)), win.shape)
                 sx, sy = x0w + int(sx), y0w + int(sy)
-                ff = np.ones((H + 2, W + 2), np.uint8)
-                cv2.circle(ff, (sx + 1, sy + 1), int(NEG_FLOOD_PX * k_view), 0, -1)
-                cv2.floodFill(up.copy(), ff, (sx, sy), 0, NEG_FLOOD_TOL, NEG_FLOOD_TOL,
+                fr = int(NEG_FLOOD_PX * k_view)
+                wy0, wx0 = max(0, sy - fr - 1), max(0, sx - fr - 1)
+                wy1, wx1 = min(H, sy + fr + 2), min(W, sx + fr + 2)
+                sub = np.ascontiguousarray(up[wy0:wy1, wx0:wx1])
+                ff = np.ones((wy1 - wy0 + 2, wx1 - wx0 + 2), np.uint8)
+                cv2.circle(ff, (sx - wx0 + 1, sy - wy0 + 1), fr, 0, -1)
+                cv2.floodFill(sub, ff, (sx - wx0, sy - wy0), 0, NEG_FLOOD_TOL, NEG_FLOOD_TOL,
                               4 | cv2.FLOODFILL_FIXED_RANGE | cv2.FLOODFILL_MASK_ONLY | (2 << 8))
-                m[ff[1:-1, 1:-1] == 2] = 0
+                m[wy0:wy1, wx0:wx1][ff[1:-1, 1:-1] == 2] = 0
                 cv2.circle(m, (xi, yi), int(NEG_CARVE_PX * k_view), 0, -1)
         m[drop[lab]] = 0
         n, lab, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
         keep = stats[:, cv2.CC_STAT_AREA] >= 300 * a
         keep[0] = False
         m = keep[lab].astype(np.uint8)
+        del lab, up
 
         l0_per_px = size / RU
         bx, by = ox + c0 * size, oy + r0 * size
@@ -637,7 +839,7 @@ def slide_mask(run: str, tiles: dict, regions: list, um_per_view_px: float) -> t
         # so a hole is never drawn apart from the ring it belongs to.
         found, hier = cv2.findContours(m, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
 
-        def ring(cnt):
+        def ring(cnt, bx=bx, by=by, l0_per_px=l0_per_px):
             p = cv2.approxPolyDP(cnt, 0.75, True).reshape(-1, 2)
             return [[round(bx + float(x) * l0_per_px, 1), round(by + float(y) * l0_per_px, 1)]
                     for x, y in p] if len(p) >= 3 else None
@@ -663,8 +865,9 @@ def slide_mask(run: str, tiles: dict, regions: list, um_per_view_px: float) -> t
             sl = (slice((r - r0) * R, (r - r0 + 1) * R), slice((c - c0) * R, (c - c0 + 1) * R))
             d = cv2.resize(np.clip(vh[sl] / hmax, 0, 1), (HEAT_GRID, HEAT_GRID), interpolation=cv2.INTER_AREA)
             t = cv2.resize(tis[sl], (HEAT_GRID, HEAT_GRID), interpolation=cv2.INTER_AREA)
-            dens[pid] = d * (t > 0.3)
-    return rings, cover, dens
+            dens_out[pid] = d * (t > 0.3)
+        del m, tis, vh
+    return rings, cover, dens_out
 
 
 def with_code(code: str, text: str) -> str:
@@ -705,8 +908,13 @@ def cmd_finalize(a) -> None:
     # One tumour mask for the whole slide, cut across tile borders (slide_mask).
     has_raw = os.path.isfile(os.path.join(run, "masks", f"raw_{next(iter(tiles))}.png"))
     um_per_view_px = float(man.get("target_mpp") or 0.5) * int(man["patch_size"]) / VIEW_PX
-    mask_rings_l0, tile_cover, tile_dens = (slide_mask(run, tiles, result.get("regions") or [], um_per_view_px)
-                                            if has_raw else ([], {}, {}))
+    # Tiles scored as tumour where no tumour region was drawn: the mask is cut
+    # on them as whole-tile regions, so it covers every tumour tile read.
+    drawn = {g["patch"] for g in result.get("regions") or [] if g["label"] in TUMOUR_LABELS}
+    implicit = {p["id"] for p in result["patches"]
+                if float(p.get("tumour_score", 0)) >= 0.5 and p["id"] not in drawn}
+    mask_rings_l0, tile_cover, tile_dens = (slide_mask(run, tiles, result.get("regions") or [], um_per_view_px,
+                                                       implicit) if has_raw else ([], {}, {}))
     # The heat grid: the slide-wide one when the raw maps exist, else the
     # per-tile density.json of older runs.
     hg = HEAT_GRID if has_raw else GRID
@@ -760,6 +968,17 @@ def cmd_finalize(a) -> None:
         heat[pid] = np.round((d * w).astype(np.float64), 3).tolist()
         method[pid] = "density_x_regions"
 
+    # How much of the slide's tissue was read at all — measured at tiling.
+    tiling = load(os.path.join(run, "tiling.json")) if os.path.isfile(os.path.join(run, "tiling.json")) else {}
+    coverage = {"tissue_read": tiling.get("coverage"), "tiles": len(tiles),
+                "tumour_tiles": sum(1 for p in result["patches"] if float(p.get("tumour_score", 0)) >= 0.5),
+                "tiles_opened_as_regions": len({g["patch"] for g in result.get("regions") or []}),
+                "tumour_tiles_masked_without_region": len(implicit)}
+    if tiling.get("coverage") is None:
+        warnings.append("Tissue coverage was not measured for this run (tiled before full-slide tiling existed).")
+    elif tiling["coverage"] < 0.99:
+        warnings.append(f"Only {tiling['coverage']:.0%} of the tissue was tiled; the rest was not read.")
+
     summary_lines = [ln.rstrip() for ln in result["summary"].strip().splitlines() if ln.strip()][:MAX_SUMMARY_LINES]
     final = {
         "coordinate_space": "svs_level0_pixels",
@@ -772,6 +991,7 @@ def cmd_finalize(a) -> None:
         "tiles": [{**tiles[pid], "tissue": scores[pid]["tissue"], "tumour_score": scores[pid]["tumour_score"],
                    "note": str(scores[pid].get("note", ""))[:300]} for pid in tiles],
         "regions": regions,
+        "coverage": coverage,
         "tumour_mask": {"polygons": mask_rings_l0, "method": "slide-wide nuclear-density mask inside "
                         "the tumour regions, minus non-tumour regions and negative points",
                         "default_level": MASK_LEVEL},
@@ -789,6 +1009,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("prepare"); p.add_argument("run")
+    p = sub.add_parser("tile"); p.add_argument("run"); p.add_argument("slide")
+    p.add_argument("--patch", type=int, default=1904); p.add_argument("--mpp", type=float, default=0.5)
+    p.add_argument("--workers", type=int, default=2)
     p = sub.add_parser("density"); p.add_argument("run")
     p = sub.add_parser("show"); p.add_argument("run"); p.add_argument("tile")
     p = sub.add_parser("contours"); p.add_argument("run"); p.add_argument("tile")
@@ -800,7 +1023,7 @@ def main() -> None:
     p.add_argument("--legacy", action="store_true", help="skip the box-size rule (runs made before it)")
     a = ap.parse_args()
     try:
-        {"prepare": cmd_prepare, "density": cmd_density, "show": cmd_show, "contours": cmd_contours,
+        {"tile": cmd_tile, "prepare": cmd_prepare, "density": cmd_density, "show": cmd_show, "contours": cmd_contours,
          "validate": cmd_validate, "finalize": cmd_finalize}[a.cmd](a)
     except SystemExit:
         raise

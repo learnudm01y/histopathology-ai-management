@@ -57,11 +57,14 @@ class RunV2Diagnosis implements ShouldQueue
             }
 
             $t = config('v2_diagnose.tiling');
-            $run->stage('tiling', "Cutting tiles: {$t['patch_size']} px at {$t['target_mpp']} µm/px, "
-                . "up to {$t['max_patches']}.");
+            $run->stage('tiling', "Cutting the whole slide into {$t['patch_size']} px tiles at "
+                . "{$t['target_mpp']} µm/px — every tile that holds tissue.");
             $runner->tile($run, $wsi);
 
-            $run->refresh()->stage('preparing', "{$run->patches} tiles cut. Building view images, "
+            $cov = $runner->coverage($run);
+            $run->refresh()->stage('preparing', "{$run->patches} tiles cut"
+                . ($cov !== null ? ', covering ' . round($cov * 100, 1) . '% of the tissue' : '')
+                . ". Building view images, "
                 . 'contact sheets and the density measurement.');
             $runner->prepare($run);
 

@@ -10,10 +10,10 @@
 | back is coordinates — never pictures. Those coordinates are converted to
 | level-0 slide pixels here and drawn on the live SVS in the viewer.
 |
-| The tiling settings are the ones that produced the reference results
-| (B_fullcover_max100_0.5mpp_1904px): 1904 px patches at 0.5 um/px, at most
-| 100 per slide. Change them and every stored coordinate stays valid, because
-| each run records the scale it was cut at.
+| Tiles are 1904 px at 0.5 um/px, the scale of the reference results, and
+| the whole slide is tiled: every tile that holds any tissue, with no cap
+| (a 100-tile cap once left most of a large slide unread). Change the scale
+| and every stored coordinate stays valid, because each run records it.
 */
 
 return [
@@ -27,7 +27,7 @@ return [
         // API-price estimate (it applies on a subscription login too, where
         // nothing is billed: there it simply stops a run that goes on too long).
         // The first full run used ~$6-equivalent.
-        'max_budget_usd' => (float) env('V2_CLAUDE_MAX_BUDGET_USD', 20),
+        'max_budget_usd' => (float) env('V2_CLAUDE_MAX_BUDGET_USD', 40),
         // One run reads every tile; an hour is generous, two is the ceiling.
         'timeout'   => (int) env('V2_CLAUDE_TIMEOUT', 5400),
         // How many times a run whose result fails validation is sent back to
@@ -45,8 +45,8 @@ return [
     'tiling' => [
         'patch_size'       => (int) env('V2_PATCH_SIZE', 1904),
         'target_mpp'       => (float) env('V2_TARGET_MPP', 0.5),
-        'max_patches'      => (int) env('V2_MAX_PATCHES', 100),
-        'tissue_threshold' => (float) env('V2_TISSUE_THRESHOLD', 0.5),
+        // No cap and no tissue threshold: every tile with any tissue is read
+        // (scripts/v2_tools.py tile), and the coverage is measured per run.
         'workers'          => (int) env('V2_PATCH_WORKERS', 2),
     ],
 

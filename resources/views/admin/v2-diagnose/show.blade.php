@@ -92,6 +92,13 @@
     <div class="v2-kv"><span>Context</span><b>{{ $run->organ }}{{ $run->stain ? ' · '.$run->stain : '' }}</b></div>
     <div class="v2-kv"><span>Patient</span><b>{{ collect([$run->age !== null ? $run->age.' y' : null, $run->sex, $run->race])->filter()->implode(' · ') ?: '—' }}</b></div>
     <div class="v2-kv"><span>Tiles</span><b>{{ $run->patches ?? '—' }}{{ $run->patch_size ? ' × '.$run->patch_size.' px @ '.$run->target_mpp.' µm/px' : '' }}</b></div>
+    @php $cov = $final['coverage'] ?? null; @endphp
+    <div class="v2-kv" title="Share of the slide's tissue that was tiled and read. Before full-slide tiling, large slides were read only in part.">
+      <span>Tissue read</span>
+      <b style="{{ isset($cov['tissue_read']) && $cov['tissue_read'] < 0.99 ? 'color:#b03d64' : '' }}">
+        {{ isset($cov['tissue_read']) ? round($cov['tissue_read'] * 100, 1).'% of the slide' : 'not measured (older run)' }}
+        @if($cov && isset($cov['tumour_tiles'])) · {{ $cov['tumour_tiles'] }} tumour tiles @endif
+      </b></div>
     <div class="v2-kv"><span>Slide</span><b>{{ $run->slide_width ? number_format($run->slide_width).' × '.number_format($run->slide_height) : '—' }}</b></div>
     @php
       $u = $run->usage ?? [];
@@ -165,7 +172,15 @@
 @if($run->run_dir && in_array($run->status, ['analysing','finalising','completed'], true))
 <div class="v2-card">
   <h3>Tiles analysed</h3>
+  @if(is_file($run->run_dir . '/coverage.png'))
+  <p style="font-size:.82rem;color:#6b6480;margin:-.3rem 0 .7rem">
+    First image: the coverage map — tissue that was read in green, tissue left out in red, with the tile grid.</p>
+  @endif
   <div class="v2-sheets">
+    @if(is_file($run->run_dir . '/coverage.png'))
+    <a href="{{ route('admin.v2-diagnose.asset', [$run, 'coverage.png']) }}" target="_blank">
+      <img src="{{ route('admin.v2-diagnose.asset', [$run, 'coverage.png']) }}" alt="coverage" loading="lazy"></a>
+    @endif
     <a href="{{ route('admin.v2-diagnose.asset', [$run, 'overview.png']) }}" target="_blank">
       <img src="{{ route('admin.v2-diagnose.asset', [$run, 'overview.png']) }}" alt="overview" loading="lazy"></a>
     @for($i = 1; $i <= (int) ceil(($run->patches ?? 0) / 16); $i++)
