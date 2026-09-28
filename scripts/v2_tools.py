@@ -258,6 +258,107 @@ def slide_tissue_mask(slide, mpp0: float) -> tuple[np.ndarray, float, np.ndarray
     return clean > 0, ds, thumb
 
 
+SCANNER_MPPS = (0.125, 0.25, 0.5, 1.0)   # the scales slides are actually scanned at
+NUCLEUS_UM = 8.0                          # area-weighted median nuclear diameter: the tissue's own ruler
+
+
+def declared_mpp(slide) -> tuple[float | None, str]:
+    """The slide's scale from its metadata: explicit MPP, then TIFF resolution,
+    then objective power. (None, '') when it declares none of them."""
+    import openslide
+    props = slide.properties
+    for key in (openslide.PROPERTY_NAME_MPP_X, "aperio.MPP"):
+        try:
+            v = float(props.get(key) or 0)
+        except ValueError:
+            v = 0
+        if v > 0:
+            return v, key
+    try:
+        res, unit = float(props.get("tiff.XResolution") or 0), props.get("tiff.ResolutionUnit", "")
+        per_um = {"centimeter": 1e4, "inch": 25400.0}.get(unit)
+        if res > 0 and per_um and 0.05 < per_um / res < 5:
+            return per_um / res, "tiff.XResolution"
+    except ValueError:
+        pass
+    for key in (openslide.PROPERTY_NAME_OBJECTIVE_POWER, "aperio.AppMag"):
+        try:
+            mag = float(props.get(key) or 0)
+        except ValueError:
+            mag = 0
+        if mag > 0:
+            return 10.0 / mag, key
+    return None, ""
+
+
+def estimate_mpp(slide, mask: np.ndarray, ds: float) -> tuple[float | None, float | None]:
+    """The scale of a slide that declares none, from the size of its nuclei.
+
+    Small round dark nuclei (lymphocytes) are ~7 um across on every slide, so
+    their size in level-0 pixels gives microns per pixel. The measured value
+    is snapped to the nearest real scanner scale. Returns (snapped, measured).
+    """
+    import openslide  # noqa: F401  (slide is an OpenSlide)
+    W0, H0 = slide.dimensions
+    win = 1536
+    # Sample the most tissue-dense windows.
+    k = max(1, int(win / ds))
+    dens = cv2.blur(mask.astype(np.float32), (k, k))
+    cand = np.dstack(np.unravel_index(np.argsort(dens.ravel())[::-1], dens.shape))[0]
+    picked, diams = [], []
+    for my, mx in cand:
+        if len(picked) >= 6 or dens[my, mx] < 0.5:
+            break
+        x0 = int(min(max(0, mx * ds - win / 2), max(0, W0 - win)))
+        y0 = int(min(max(0, my * ds - win / 2), max(0, H0 - win)))
+        if any(abs(x0 - px) < win and abs(y0 - py) < win for px, py in picked):
+            continue
+        picked.append((x0, y0))
+        region = slide.read_region((x0, y0), 0, (win, win))
+        rgb = Image.new("RGB", region.size, (255, 255, 255))
+        rgb.paste(region, mask=region.split()[3])
+        rgb = np.array(rgb)
+        H = hematoxylin(rgb)
+        tis = tissue_mask(rgb)
+        if tis.mean() < 0.3:
+            continue
+        thr = otsu(H[tis])
+        nuc = cv2.morphologyEx(((H > thr) & tis).astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        # Fill the pale centres of vesicular nuclei: flood the background from
+        # an added empty border (never from a corner that may be a nucleus).
+        filled = cv2.copyMakeBorder(nuc, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+        cv2.floodFill(filled, np.zeros((win + 4, win + 4), np.uint8), (0, 0), 1)
+        nuc = nuc | (1 - filled[1:-1, 1:-1])
+        n, lab, st, _ = cv2.connectedComponentsWithStats(nuc, connectivity=8)
+        for i in range(1, n):
+            w, h, area = st[i, cv2.CC_STAT_WIDTH], st[i, cv2.CC_STAT_HEIGHT], st[i, cv2.CC_STAT_AREA]
+            if area < 12 or max(w, h) > 2.5 * min(w, h) or area < 0.55 * w * h:
+                continue                          # debris, or not round and solid
+            diams.append((2 * math.sqrt(area / math.pi), area))
+    if len(diams) < 200:
+        return None, None
+    # The area-weighted median diameter: dominated by whole nuclei, not by the
+    # speckle a plain percentile picks up. Calibrated on slides of known scale
+    # (0.25 and 0.5 um/px): it reads 7.0-9.6 um on every one of them, well
+    # inside the ±41% that still snaps to the right scanner scale.
+    d = np.array(sorted(diams))
+    cw = np.cumsum(d[:, 1]) / d[:, 1].sum()
+    d_px = float(d[np.searchsorted(cw, 0.5), 0])
+    measured = NUCLEUS_UM / d_px
+    snapped = min(SCANNER_MPPS, key=lambda m: abs(math.log(m / measured)))
+    return snapped, round(measured, 4)
+
+
+def cmd_estimate_mpp(a) -> None:
+    """Check the estimator on a slide: declared scale next to the estimated one."""
+    import openslide
+    slide = openslide.OpenSlide(a.slide)
+    declared, src = declared_mpp(slide)
+    mask, ds, _ = slide_tissue_mask(slide, declared or 0.5)
+    snapped, measured = estimate_mpp(slide, mask, ds)
+    out({"declared": declared, "declared_from": src, "estimated": snapped, "measured": measured})
+
+
 def cmd_tile(a) -> None:
     import openslide
     from multiprocessing import Pool
@@ -266,16 +367,16 @@ def cmd_tile(a) -> None:
     os.makedirs(pdir, exist_ok=True)
     slide = openslide.OpenSlide(a.slide)
     W0, H0 = slide.dimensions
-    mpp0 = None
-    for key in (openslide.PROPERTY_NAME_MPP_X, "aperio.MPP"):
-        try:
-            mpp0 = float(slide.properties.get(key) or 0) or None
-        except ValueError:
-            mpp0 = None
-        if mpp0:
-            break
+    mpp0, mpp_source = declared_mpp(slide)
+    mpp_measured = None
     if not mpp0:
-        out({"error": "The slide declares no microns-per-pixel, so it cannot be tiled at a known scale."}, 1)
+        # No scale in the file at all: measure it from the nuclei rather than
+        # refuse the slide, and say so on the result.
+        mask0, ds0, _ = slide_tissue_mask(slide, 0.5)
+        mpp0, mpp_measured = estimate_mpp(slide, mask0, ds0)
+        mpp_source = "estimated from nuclear size"
+        if not mpp0:
+            out({"error": "The slide declares no scale, and too few nuclei were found to measure one."}, 1)
 
     scale = a.mpp / mpp0                              # level-0 px per output px
     size_l0 = int(round(a.patch * scale))
@@ -335,6 +436,7 @@ def cmd_tile(a) -> None:
          "patch_size": a.patch, "level": level, "base_mpp": mpp0, "target_mpp": a.mpp,
          "scale_l0_px_per_out_px": round(scale, 6), "slide_width": W0, "slide_height": H0,
          "max_patches": None, "min_tissue": MIN_TISSUE, "grid": [cols, rows],
+         "mpp_source": mpp_source, "mpp_measured": mpp_measured,
          "coverage": round(coverage, 4), "tissue_px_at_8um": tissue_px,
          "thumb_file": os.path.join(run, "thumb.jpg"), "thumb_scale": round(ds / k, 4)})
 
@@ -974,6 +1076,9 @@ def cmd_finalize(a) -> None:
                 "tumour_tiles": sum(1 for p in result["patches"] if float(p.get("tumour_score", 0)) >= 0.5),
                 "tiles_opened_as_regions": len({g["patch"] for g in result.get("regions") or []}),
                 "tumour_tiles_masked_without_region": len(implicit)}
+    if tiling.get("mpp_source") == "estimated from nuclear size":
+        warnings.append(f"The slide file declares no scale; it was estimated from nuclear size as "
+                        f"{tiling.get('base_mpp')} um/px (measured {tiling.get('mpp_measured')}).")
     if tiling.get("coverage") is None:
         warnings.append("Tissue coverage was not measured for this run (tiled before full-slide tiling existed).")
     elif tiling["coverage"] < 0.99:
@@ -1009,6 +1114,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("prepare"); p.add_argument("run")
+    p = sub.add_parser("estimate-mpp"); p.add_argument("slide")
     p = sub.add_parser("tile"); p.add_argument("run"); p.add_argument("slide")
     p.add_argument("--patch", type=int, default=1904); p.add_argument("--mpp", type=float, default=0.5)
     p.add_argument("--workers", type=int, default=2)
@@ -1023,7 +1129,7 @@ def main() -> None:
     p.add_argument("--legacy", action="store_true", help="skip the box-size rule (runs made before it)")
     a = ap.parse_args()
     try:
-        {"tile": cmd_tile, "prepare": cmd_prepare, "density": cmd_density, "show": cmd_show, "contours": cmd_contours,
+        {"estimate-mpp": cmd_estimate_mpp, "tile": cmd_tile, "prepare": cmd_prepare, "density": cmd_density, "show": cmd_show, "contours": cmd_contours,
          "validate": cmd_validate, "finalize": cmd_finalize}[a.cmd](a)
     except SystemExit:
         raise
