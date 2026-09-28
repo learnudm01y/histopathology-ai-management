@@ -1,0 +1,88 @@
+<?php
+
+/*
+|--------------------------------------------------------------------------
+| V2 Diagnose — Claude reads the tiles, the platform draws the answer
+|--------------------------------------------------------------------------
+|
+| A slide is tiled at a fixed physical scale, the tiles and the clinical
+| context are handed to the Claude Code CLI in headless mode, and what comes
+| back is coordinates — never pictures. Those coordinates are converted to
+| level-0 slide pixels here and drawn on the live SVS in the viewer.
+|
+| The tiling settings are the ones that produced the reference results
+| (B_fullcover_max100_0.5mpp_1904px): 1904 px patches at 0.5 um/px, at most
+| 100 per slide. Change them and every stored coordinate stays valid, because
+| each run records the scale it was cut at.
+*/
+
+return [
+
+    // ── Claude Code CLI ─────────────────────────────────────────────────
+    'claude' => [
+        // Absolute path is safest under a queue worker, whose PATH is not yours.
+        'binary'    => env('V2_CLAUDE_BIN', 'claude'),
+        'model'     => env('V2_CLAUDE_MODEL', 'claude-opus-5-5'),
+        // A ceiling on how much one call may consume, measured in the CLI's
+        // API-price estimate (it applies on a subscription login too, where
+        // nothing is billed: there it simply stops a run that goes on too long).
+        // The first full run used ~$6-equivalent.
+        'max_budget_usd' => (float) env('V2_CLAUDE_MAX_BUDGET_USD', 20),
+        // One run reads every tile; an hour is generous, two is the ceiling.
+        'timeout'   => (int) env('V2_CLAUDE_TIMEOUT', 5400),
+        // How many times a run whose result fails validation is sent back to
+        // the same Claude session with the errors, before the run is failed.
+        'repair_attempts' => (int) env('V2_CLAUDE_REPAIR_ATTEMPTS', 2),
+        // HOME for the CLI when the worker user is not the one logged in to
+        // Claude (e.g. www-data). Leave empty to inherit the worker's own.
+        'home'      => env('V2_CLAUDE_HOME'),
+    ],
+
+    // ── Python (the same interpreter patch extraction uses) ─────────────
+    'python' => env('V2_PYTHON', env('PYTHON_PATH', 'python3')),
+
+    // ── Tiling ──────────────────────────────────────────────────────────
+    'tiling' => [
+        'patch_size'       => (int) env('V2_PATCH_SIZE', 1904),
+        'target_mpp'       => (float) env('V2_TARGET_MPP', 0.5),
+        'max_patches'      => (int) env('V2_MAX_PATCHES', 100),
+        'tissue_threshold' => (float) env('V2_TISSUE_THRESHOLD', 0.5),
+        'workers'          => (int) env('V2_PATCH_WORKERS', 2),
+    ],
+
+    // Edge of the image Claude actually sees. The Read tool shrinks anything
+    // above ~1.15 megapixels, and a coordinate given on a shrunk image is off
+    // by the shrink factor — so Claude is shown exactly this size and answers
+    // in exactly this space.
+    'view_px' => 1000,
+
+    // Heat grid per tile: 25 x 25 cells of 40 view px (~38 um at 0.5 mpp).
+    'grid' => 25,
+
+    // Where runs live. Full-resolution tiles are deleted once a run finishes
+    // (hundreds of MB each); the view images Claude read are kept as evidence.
+    'runs_dir'          => env('V2_RUNS_DIR', storage_path('app/v2_diagnose')),
+    'keep_full_patches' => (bool) env('V2_KEEP_FULL_PATCHES', false),
+
+    // Optional SAM refinement of Claude's prompts. Left empty, Claude's own
+    // polygons are drawn and its SAM prompts are shown as points and boxes.
+    'sam' => [
+        'checkpoint' => env('V2_SAM_CHECKPOINT'),
+        'model'      => env('V2_SAM_MODEL', 'vit_b'),
+        'device'     => env('V2_SAM_DEVICE', 'cpu'),
+    ],
+
+    // Where the live viewer gets slide tiles.
+    //   nginx  : /wsi/{sample}.dzi, the tile service the AI workflow viewer uses (production)
+    //   direct : straight from scripts/wsi_tile_server.py at tile_server_url — for a local
+    //            machine without nginx. It puts the slide's file path in the page, so it
+    //            is for development only.
+    'tile_source'     => env('V2_TILE_SOURCE', 'nginx'),
+    'tile_server_url' => env('V2_TILE_SERVER_URL', 'http://127.0.0.1:8001'),
+
+    // Queue: a run holds one worker for up to the Claude timeout, so it gets a
+    // connection whose retry_after is longer than that (see config/queue.php)
+    // and a queue of its own, so it never blocks patch extraction.
+    'queue_connection' => env('V2_QUEUE_CONNECTION', 'database_long'),
+    'queue'            => env('V2_QUEUE', 'v2'),
+];

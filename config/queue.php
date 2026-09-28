@@ -44,6 +44,18 @@ return [
             'after_commit' => false,
         ],
 
+        // For jobs that hold a worker for over an hour (V2 Diagnose runs Claude
+        // over every tile of a slide). On the 90 s connection above, such a job
+        // would be handed to a second worker while the first is still on it.
+        'database_long' => [
+            'driver' => 'database',
+            'connection' => env('DB_QUEUE_CONNECTION'),
+            'table' => env('DB_QUEUE_TABLE', 'jobs'),
+            'queue' => 'v2',
+            'retry_after' => (int) env('DB_QUEUE_LONG_RETRY_AFTER', 7500),
+            'after_commit' => false,
+        ],
+
         'beanstalkd' => [
             'driver' => 'beanstalkd',
             'host' => env('BEANSTALKD_QUEUE_HOST', 'localhost'),

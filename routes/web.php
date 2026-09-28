@@ -12,6 +12,7 @@ use App\Http\Controllers\Admin\OperationsAuditController;
 use App\Http\Controllers\Admin\OperationsController;
 use App\Http\Controllers\Admin\SampleRejectionsController;
 use App\Http\Controllers\Admin\SamplesExportController;
+use App\Http\Controllers\Admin\V2DiagnoseController;
 use App\Http\Controllers\Admin\WsiPreviewController;
 use App\Http\Controllers\Admin\Settings\AiModelsController;
 use App\Http\Controllers\Admin\Settings\CategoriesController;
@@ -141,6 +142,18 @@ Route::prefix('admin')->name('admin.')->group(function () {
         // literal route is not swallowed by the binding.
         Route::get('ai-results/{prediction}', [AiResultsController::class, 'show'])
             ->whereNumber('prediction')->name('ai-results.show');
+
+        // V2 Diagnose — clinical context + slide → Claude (headless CLI) →
+        // ROI, heatmap and SAM prompts drawn on the live slide. No chat.
+        Route::get('v2-diagnose',                         [V2DiagnoseController::class, 'index'])->name('v2-diagnose');
+        Route::post('v2-diagnose',                        [V2DiagnoseController::class, 'store'])->name('v2-diagnose.store');
+        Route::get('v2-diagnose/sample/{sample}/context', [V2DiagnoseController::class, 'sampleContext'])->name('v2-diagnose.sample-context');
+        Route::get('v2-diagnose/{run}',                   [V2DiagnoseController::class, 'show'])->whereNumber('run')->name('v2-diagnose.show');
+        Route::get('v2-diagnose/{run}/status',            [V2DiagnoseController::class, 'status'])->whereNumber('run')->name('v2-diagnose.status');
+        Route::get('v2-diagnose/{run}/result',            [V2DiagnoseController::class, 'result'])->whereNumber('run')->name('v2-diagnose.result');
+        Route::get('v2-diagnose/{run}/asset/{path}',      [V2DiagnoseController::class, 'asset'])->whereNumber('run')->where('path', '.+')->name('v2-diagnose.asset');
+        Route::get('v2-diagnose/{run}/download/{kind}',   [V2DiagnoseController::class, 'download'])->whereNumber('run')->name('v2-diagnose.download');
+        Route::post('v2-diagnose/{run}/rerun',            [V2DiagnoseController::class, 'rerun'])->whereNumber('run')->name('v2-diagnose.rerun');
 
         // Cases (patients) — clinical case browser
         Route::get('cases',          [CasesController::class, 'index'])->name('cases.index');

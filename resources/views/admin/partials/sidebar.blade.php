@@ -67,6 +67,13 @@
             </a>
         </li>
 
+        <li class="nav-item {{ str_starts_with($routeName ?? '', 'admin.v2-diagnose') ? 'active' : '' }}">
+            <a class="nav-link" href="{{ route('admin.v2-diagnose') }}">
+                <i class="menu-icon mdi mdi-robot-outline"></i>
+                <span class="menu-title">V2 Diagnose</span>
+            </a>
+        </li>
+
         <li class="nav-item {{ str_starts_with($routeName ?? '', 'admin.ai-results') ? 'active' : '' }}">
             <a class="nav-link" href="{{ route('admin.ai-results') }}">
                 <i class="menu-icon mdi mdi-clipboard-text-outline"></i>
