@@ -62,6 +62,75 @@ model got it wrong, and the change it produced. Read this before changing
   does not count. (d024924)
 - **After:** run #31, ILC (0.70), correct. Tuning sample, not evidence.
 
+### Run #36 — TCGA-E9-A1R4, recorded IDC, answered ILC (0.70), held-out
+
+- **Tissue at 40×:** cohesive cords and trabeculae with **true small lumens
+  lined by polarised tumour cells** (tubule formation), next to solid sheets of
+  large polygonal cells with distinct borders and plasmacytoid nuclei. This is
+  high-grade IDC NST; the solid areas resemble pleomorphic ILC only at a
+  glance.
+- **Why wrong:** an overcorrection by the #21 rule. The model anchored on the
+  solid plasmacytoid sheets, noted "rosette-like lumina" but did not zoom into
+  them, and declared "no convincing tubules".
+- **Changes:** before ILC, zoom into at least three separate tumour areas
+  looking for lumens; true glands make pure ILC unlikely; solid sheets of large
+  plasmacytoid cells occur in high-grade IDC and are not lobular on their own.
+
+### Run #7 — TCGA-GM-A2D9, recorded Normal, answered IDC (0.45), before the rules
+
+- **Tissue at 40×:** a frozen section (TCGA `-TS`), fragmented and crushed,
+  with elongated cords of bland oval, streaming nuclei in sclerotic stroma,
+  some with small lumens. These are compressed benign ducts, vessels and
+  nerves, with no convincing atypia.
+- **Why wrong:** crush and freezing artefact read as infiltration, and IDC
+  given at 0.45. The calibration floor (0.65 → SUSP) added for #25 already
+  forbids this answer.
+- **Changes:** a note that cords of bland cells in crushed or frozen tissue
+  are usually benign structures and need atypia on zoom.
+
+### Runs #6, #8, #51, #53 — recorded Normal, answered NONDX (partial)
+
+- **Tissue:** every TCGA "Normal" slide is a frozen section of non-tumour
+  tissue (`-11A…-TS/BS`). These four hold fat, stroma, vessels, fibrin or
+  mounting medium and **no ducts or lobules**. Morphologically, NONDX was
+  defensible.
+- **Cause:** a definitional mismatch. "Normal" in the archive means
+  non-tumour tissue, not breast parenchyma seen. A standard sign-out for such
+  tissue is "benign fibroadipose tissue, no epithelium sampled", not
+  non-diagnostic.
+- **Changes:** NORMAL for non-lesional tissue without epithelium, with a line
+  5 note that no epithelium was sampled; NONDX only for tissue too damaged or
+  scant to exclude a lesion. **This rule moves answers towards the scoring
+  rule: judge it only on held-out normal slides.**
+- **Confound to remember:** in this archive, Normal equals frozen section and
+  tumour mostly equals FFPE `DX`. Preparation alone separates the classes.
+
+### Run #11 — BRACS_1511, recorded PB, answered NORMAL (partial), before the rules
+
+- **Tissue:** mostly fat; a narrow fibrous band holds a few lobules, one with
+  crowded acini and mild hyperplasia, which the model itself flagged. The
+  benign lesion is minor, and PB versus normal here is borderline. Tissue
+  masking skips most of the fat (pale), which does not affect epithelial
+  lesions.
+- **Changes:** none. Not used for a rule.
+
+### Technical failures
+
+- **#10, #14 (BRACS_1338, BRACS_1370):** OpenSlide cannot open the files; they
+  are truncated on Drive. They need a fresh download from the BRACS source; a
+  re-run cannot fix this.
+- **#17 (TCGA-OL-A5RY):** the slide declares no scale. Fixed in c0953a2 (scale
+  estimated from nuclear size); #27 on the same slide was correct.
+- **#48, #50:** voided by the integrity check for a refused command writing to
+  `/dev/null`. This was a false positive, fixed in f44543c.
+
+## Re-runs
+
+A re-run keeps its id (`php artisan v2:rerun <ids>`, or Re-run on the page).
+The previous attempt's folder stays as `<id>.attemptN`, and its answer is
+written into the stage log. #53 and #54 were opened as new runs before this
+existed.
+
 ## Isolation: how the model is kept from cheating
 
 The run folder sits inside the application, so an unscoped tool reaches .env,

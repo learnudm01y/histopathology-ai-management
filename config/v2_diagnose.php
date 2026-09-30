@@ -94,5 +94,11 @@ return [
     'tuning_samples' => [
         1062,   // BRACS_1408 (PB): LCIS called on clear-cell adenosis, run #25
         1138,   // TCGA-AC-A2FO (ILC): called IDC, run #21
+        938,    // TCGA-E9-A1R4 (IDC): called ILC despite true lumens, run #36
+        222,    // TCGA-GM-A2D9 (Normal): IDC called on crushed frozen tissue, run #7
+        85,     // TCGA-E9-A1RF (Normal): NONDX on fat and stroma only, run #6
+        125,    // TCGA-E9-A1NF (Normal): NONDX on scant frozen fragments, run #8
+        299,    // TCGA-BH-A1EW (Normal): NONDX on stroma only, run #51
+        475,    // TCGA-E2-A1IG (Normal): NONDX on scant frozen fragments, runs #48/#53
     ],
 ];

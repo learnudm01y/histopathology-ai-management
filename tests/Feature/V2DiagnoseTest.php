@@ -309,19 +309,37 @@ class V2DiagnoseTest extends TestCase
              ->assertSee('7 partial')->assertSee('4 wrong');
     }
 
-    public function test_rerun_copies_the_inputs_into_a_new_run(): void
+    public function test_rerun_keeps_the_same_id_and_the_previous_attempt(): void
     {
         Queue::fake();
         $s = $this->sample();
         $old = V2Diagnosis::create(['sample_id' => $s->id, 'organ' => 'Breast', 'age' => 40,
-            'status' => 'failed', 'error' => 'x']);
+            'status' => 'completed', 'diagnosis_code' => 'IDC', 'confidence' => 0.8, 'summary' => 'IDC — x',
+            'patches' => 12, 'error' => null]);
+        $dir = app(\App\Services\V2DiagnoseRunner::class)->runDir($old);
+        File::ensureDirectoryExists($dir);
+        file_put_contents("{$dir}/result.json", '{"diagnosis_code":"IDC"}');
 
-        $this->actingAs($this->user)->post("/admin/v2-diagnose/{$old->id}/rerun")->assertRedirect();
+        $this->actingAs($this->user)->post("/admin/v2-diagnose/{$old->id}/rerun")
+             ->assertRedirect("/admin/v2-diagnose/{$old->id}");
 
-        $new = V2Diagnosis::latest('id')->first();
-        $this->assertNotSame($old->id, $new->id);
-        $this->assertSame(['queued', 40, 'failed'], [$new->status, $new->age, $old->fresh()->status]);
-        Queue::assertPushed(RunV2Diagnosis::class, 1);
+        $run = $old->fresh();
+        $this->assertSame(1, V2Diagnosis::count(), 'no new run is opened');
+        $this->assertSame(['queued', 40, null, null, null, null],
+            [$run->status, $run->age, $run->diagnosis_code, $run->confidence, $run->summary, $run->patches]);
+        $this->assertFileDoesNotExist("{$dir}/result.json");
+        $this->assertFileExists("{$dir}.attempt1/result.json", 'the previous attempt is kept');
+        $this->assertStringContainsString('Previous attempt: IDC 0.8', $run->stage_message);
+        Queue::assertPushed(RunV2Diagnosis::class, fn ($job) => $job->runId === $old->id);
+
+        // A second re-run keeps the first attempt too; a running run is refused.
+        $run->update(['status' => 'completed']);
+        File::ensureDirectoryExists($dir);
+        $this->artisan('v2:rerun', ['ids' => [$old->id]])->assertSuccessful();
+        $this->assertDirectoryExists("{$dir}.attempt2");
+        $this->artisan('v2:rerun', ['ids' => [$old->id]])->assertFailed();
+        File::deleteDirectory("{$dir}.attempt1");
+        File::deleteDirectory("{$dir}.attempt2");
     }
 
     public function test_a_duplicate_delivery_does_not_start_the_run_twice(): void

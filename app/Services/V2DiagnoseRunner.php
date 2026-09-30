@@ -27,6 +27,41 @@ class V2DiagnoseRunner
         return rtrim((string) config('v2_diagnose.runs_dir'), '/\\') . '/' . $run->id;
     }
 
+    /**
+     * Run a finished run again under its own id: same slide, same case
+     * details, a fresh analysis. The previous attempt's folder is kept beside
+     * it as <id>.attemptN (the evidence of what it answered and which tools it
+     * called), its outcome is written into the stage log, and every result
+     * field is cleared, so the page and the evaluation see only the new answer.
+     */
+    public function rerunInPlace(V2Diagnosis $run): void
+    {
+        if ($run->isRunning()) {
+            throw new \RuntimeException("Run #{$run->id} is still {$run->status}.");
+        }
+        $dir = $this->runDir($run);
+        $kept = null;
+        if (is_dir($dir)) {
+            for ($n = 1; is_dir("{$dir}.attempt{$n}"); $n++);
+            if (! @rename($dir, "{$dir}.attempt{$n}")) {
+                throw new \RuntimeException("Could not set the previous attempt of run #{$run->id} aside.");
+            }
+            $kept = basename($dir) . ".attempt{$n}";
+        }
+        $previous = $run->status === 'completed'
+            ? trim(($run->diagnosis_code ?? '?') . ' ' . ($run->confidence ?? ''))
+            : 'failed — ' . mb_substr((string) $run->error, 0, 200);
+
+        $run->update(array_fill_keys(['stage_message', 'slide_width', 'slide_height', 'base_mpp', 'patch_size',
+            'target_mpp', 'scale_l0', 'patches', 'run_dir', 'claude_model', 'claude_session_id', 'prompt',
+            'raw_output', 'cost_usd', 'duration_ms', 'num_turns', 'usage', 'summary', 'diagnosis_code',
+            'diagnosis', 'confidence', 'regions_count', 'warnings', 'error', 'started_at', 'finished_at'], null)
+            + ['sam_refined' => false]);
+        $run->stage('queued', "Re-run in place. Previous attempt: {$previous}"
+            . ($kept ? "; its folder is kept as {$kept}." : '.'));
+        \App\Jobs\RunV2Diagnosis::dispatch($run->id);
+    }
+
     /** Where the slide can be read from right now, or null. */
     public function resolveWsi(V2Diagnosis $run): ?string
     {

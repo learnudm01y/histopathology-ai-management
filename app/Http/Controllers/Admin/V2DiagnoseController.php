@@ -485,6 +485,11 @@ class V2DiagnoseController extends Controller
         if ($root && $dir && $dir !== $root && str_starts_with($dir, $root . DIRECTORY_SEPARATOR)) {
             File::deleteDirectory($dir);
             $removed[] = $dir;
+            // Earlier attempts kept by a re-run in place.
+            foreach (glob($dir . '.attempt*', GLOB_ONLYDIR) ?: [] as $old) {
+                File::deleteDirectory($old);
+                $removed[] = $old;
+            }
         } elseif ($run->run_dir && $dir) {
             Log::warning("[V2Diagnose] run #{$run->id}: folder {$run->run_dir} is outside the runs directory, left in place");
         }
@@ -551,18 +556,19 @@ class V2DiagnoseController extends Controller
     }
 
     /** A fresh run with the same inputs. The old one stays as it was. */
+    /**
+     * Re-run under the same id: a re-run is the same slide asked again, not
+     * a new case, so it keeps its number (see V2DiagnoseRunner::rerunInPlace).
+     */
     public function rerun(Request $request, V2Diagnosis $run): RedirectResponse
     {
-        $new = V2Diagnosis::create([
-            ...$run->only(['sample_id', 'organ', 'stain', 'age', 'sex', 'race', 'clinical_notes', 'wsi_path']),
-            'user_id' => $request->user()?->id,
-            'status'  => 'queued',
-        ]);
-        $new->stage('queued', "Queued — re-run of #{$run->id}.");
-        RunV2Diagnosis::dispatch($new->id);
+        if ($run->isRunning()) {
+            return back()->withErrors(['run' => "Run #{$run->id} is still {$run->status}."]);
+        }
+        $this->runner->rerunInPlace($run);
 
-        return redirect()->route('admin.v2-diagnose.show', $new)
-            ->with('success', "Run #{$new->id} queued with the inputs of #{$run->id}.");
+        return redirect()->route('admin.v2-diagnose.show', $run)
+            ->with('success', "Run #{$run->id} queued again on the same slide; the previous attempt is kept.");
     }
 
     /**
