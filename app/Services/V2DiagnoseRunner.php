@@ -382,7 +382,8 @@ class V2DiagnoseRunner
                 }
                 preg_match_all('#(?:^|[\s\'"=(,])(/[^\s\'")<>;|&,]+)#', $c, $m);
                 foreach ($m[1] as $path) {
-                    if ($path !== $this->pythonBin()
+                    // /dev/null discards output; runs #48 and #50 were voided for it alone.
+                    if ($path !== $this->pythonBin() && $path !== '/dev/null'
                         && $this->toolViolation($dir, 'Read', ['file_path' => $path]) !== null) {
                         return true;
                     }

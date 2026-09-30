@@ -427,6 +427,9 @@ class V2DiagnoseTest extends TestCase
         $inside = "ls && {$py} -c \"import json;m=json.load(open('manifest.json'))\"";
         $log($call('a', $inside), json_encode(['denied' => 'a']) . "\n");
         $this->assertSame([], $runner->integrityViolations($run));
+        // Output thrown into /dev/null is not reaching outside (runs #48, #50).
+        $log($call('a', "cat > /dev/null <<'EOF'\nEOF\n{$py} - <<'EOF'\nimport json\nEOF"), json_encode(['denied' => 'a']) . "\n");
+        $this->assertSame([], $runner->integrityViolations($run));
 
         // The same command, not refused: it ran, the run is void.
         $log($call('a', $inside));
