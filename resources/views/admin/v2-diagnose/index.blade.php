@@ -83,6 +83,16 @@
           color:#4b3a94;background:#f3f1f8;font-size:1.15rem;text-decoration:none;transition:background .15s,color .15s}
   .v2-eye:hover{background:#4b3a94;color:#fff;text-decoration:none}
   table.v2-runs td:last-child{vertical-align:middle;text-align:center}
+  /* Results filter: organ → classification → disease, one GET form. */
+  .v2-rfilter{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:.7rem;align-items:end;margin-bottom:1rem}
+  @media(max-width:900px){.v2-rfilter{grid-template-columns:1fr}}
+  .v2-rfilter label{display:block;font-size:.8rem;font-weight:600;color:#41394f;margin-bottom:.35rem}
+  .v2-rfilter select.v2-in{display:block;width:100%;height:2.4rem;padding:.4rem .6rem;font-size:.88rem;color:#2d2540;background:#fff;
+          border:1px solid #d9d4e5;border-radius:7px;appearance:auto}
+  .v2-rfilter select.v2-in:disabled{background:#f7f6fa;color:#a39db3}
+  .v2-rclear{display:inline-flex;align-items:center;height:2.4rem;padding:0 .9rem;border-radius:7px;background:#f3f1f8;color:#4b3a94;
+          font-size:.84rem;font-weight:600;white-space:nowrap;text-decoration:none}
+  .v2-rclear:hover{background:#e8e3f6;text-decoration:none}
   .v2-rowbtns{display:flex;gap:.35rem;justify-content:center}
   .v2-del{display:inline-flex;align-items:center;justify-content:center;width:2rem;height:2rem;border:0;border-radius:6px;
           color:#b03d64;background:#fbe9f0;font-size:1.1rem;cursor:pointer;transition:background .15s,color .15s}
@@ -309,12 +319,47 @@
     <button class="btn btn-primary" id="runBtn" style="margin-top:1rem;width:100%">Run V2 Diagnose</button>
   </div>
 
-  <div class="v2-card">
-    <h3>Every run</h3>
+  <div class="v2-card" id="results">
+    <h3>Analysis results <span class="v2-hint" style="font-weight:400">· {{ $runs->total() }} {{ array_filter($rf) ? 'matching the filter' : 'in all' }}</span></h3>
+
+    {{-- The fields belong to the GET form below the page's POST form: forms cannot nest. --}}
+    <div class="v2-rfilter">
+      <div>
+        <label for="r_organ">Organ</label>
+        <select name="r_organ" id="r_organ" form="resultsFilter" class="v2-in" data-resets="r_cat r_dx">
+          <option value="">Every organ</option>
+          @foreach($rfOptions['organs'] as $o)
+            <option value="{{ $o['id'] }}" @selected($rf['organ'] === $o['id'])>{{ $o['name'] }} ({{ $o['n'] }})</option>
+          @endforeach
+        </select>
+      </div>
+      <div>
+        <label for="r_cat">Classification</label>
+        <select name="r_cat" id="r_cat" form="resultsFilter" class="v2-in" data-resets="r_dx" @disabled(! $rf['organ'])>
+          <option value="">{{ $rf['organ'] ? 'Every classification' : 'Choose the organ first' }}</option>
+          @foreach($rfOptions['cats'] as $c)
+            <option value="{{ $c['id'] }}" @selected((string) $rf['cat'] === (string) $c['id'])>{{ $c['name'] }} ({{ $c['n'] }})</option>
+          @endforeach
+        </select>
+      </div>
+      <div>
+        <label for="r_dx">Disease</label>
+        <select name="r_dx" id="r_dx" form="resultsFilter" class="v2-in" @disabled(! $rf['cat'] || $rf['cat'] === 'none' || ! $rfOptions['dxs'])>
+          <option value="">{{ $rf['cat'] && $rf['cat'] !== 'none' ? 'Every disease' : 'Choose the classification first' }}</option>
+          @foreach($rfOptions['dxs'] as $d)
+            <option value="{{ $d['id'] }}" @selected($rf['dx'] === $d['id'])>{!! str_repeat('&nbsp;&nbsp;&nbsp;', $d['depth']) !!}{{ $d['depth'] ? '└ ' : '' }}{{ $d['name'] }} ({{ $d['n'] }})</option>
+          @endforeach
+        </select>
+      </div>
+      @if(array_filter($rf))
+        <a href="{{ route('admin.v2-diagnose') }}#results" class="v2-rclear">Clear filter</a>
+      @endif
+    </div>
+
     @php $scored = array_sum($tally); @endphp
     @if($scored)
     <div class="v2-tally" title="Finished runs whose slide has a recorded diagnosis in the archive, compared with it.">
-      Against the recorded diagnosis ({{ $scored }} runs):
+      Against the recorded diagnosis ({{ $scored }} {{ array_filter($rf) ? 'filtered ' : '' }}results):
       <span class="v2-match correct">✓ {{ $tally['correct'] }} correct</span>
       <span class="v2-match partial">≈ {{ $tally['partial'] }} partial</span>
       <span class="v2-match wrong">✗ {{ $tally['wrong'] }} wrong</span>
@@ -322,7 +367,7 @@
     </div>
     @endif
     @if($runs->isEmpty())
-      <p style="color:#6b6480">No runs yet.</p>
+      <p style="color:#6b6480">{{ array_filter($rf) ? 'No result matches this filter.' : 'No results yet.' }}</p>
     @else
     <div style="overflow-x:auto">
     <table class="v2-runs">
@@ -371,6 +416,7 @@
 </form>
 {{-- Its own form: the runs table sits inside the run form, and forms cannot nest. --}}
 <form method="POST" id="delForm" style="display:none">@csrf @method('DELETE')</form>
+<form method="GET" id="resultsFilter" action="{{ route('admin.v2-diagnose') }}#results"></form>
 
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
 <script>
@@ -822,6 +868,20 @@
         b.disabled = true;
         send();
       });
+    });
+  });
+  /* ── Results filter: each choice applies at once, and clears the finer ones ── */
+  document.querySelectorAll('select[form="resultsFilter"]').forEach(function (sel) {
+    sel.addEventListener('change', function () {
+      (sel.dataset.resets || '').split(' ').filter(Boolean).forEach(function (id) {
+        var el = document.getElementById(id); if (el) el.value = '';
+      });
+      var f = document.getElementById('resultsFilter');
+      // Empty and disabled fields stay out of the address.
+      document.querySelectorAll('select[form="resultsFilter"]').forEach(function (el) {
+        el.disabled = el.disabled || !el.value;
+      });
+      f.submit();
     });
   });
 })();

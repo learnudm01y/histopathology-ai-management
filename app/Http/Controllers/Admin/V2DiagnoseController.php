@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Jobs\ProcessSampleUpload;
 use App\Jobs\RunV2Diagnosis;
+use App\Models\Category;
+use App\Models\DiseaseSubtype;
 use App\Models\Organ;
 use App\Models\Sample;
 use App\Models\Stain;
@@ -32,12 +34,38 @@ class V2DiagnoseController extends Controller
     {
         $withTruth = ['sample:id,entity_submitter_id,file_name,category_id,disease_subtype_id',
                       'sample.category:id,label_en', 'sample.diseaseSubtype:id,name'];
-        $runs = V2Diagnosis::with($withTruth)->latest('id')->paginate(25);
 
-        // The tally across every finished run whose slide has a recorded
-        // diagnosis — not only the page shown.
+        // The results, filtered by the slide's organ and its place in the
+        // taxonomy: classification group, then disease (with every finer
+        // disease under it).
+        $f = [
+            'organ' => $request->integer('r_organ') ?: null,
+            'cat'   => $request->input('r_cat') === 'none' ? 'none' : ($request->integer('r_cat') ?: null),
+            'dx'    => $request->integer('r_dx') ?: null,
+        ];
+        $filtered = function ($q) use ($f) {
+            $q->whereHas('sample', function ($s) use ($f) {
+                if ($f['organ']) {
+                    $s->where('organ_id', $f['organ']);
+                }
+                if ($f['cat'] === 'none') {
+                    $s->whereNull('category_id')->whereNull('disease_subtype_id');
+                } elseif ($f['cat']) {
+                    $s->where(fn ($w) => $w->where('category_id', $f['cat'])
+                        ->orWhereIn('disease_subtype_id', DiseaseSubtype::where('category_id', $f['cat'])->select('id')));
+                }
+                if ($f['dx']) {
+                    $s->whereIn('disease_subtype_id', DiseaseSubtype::subtreeIds($f['dx']));
+                }
+            });
+        };
+        $any = array_filter($f);
+        $runs = V2Diagnosis::with($withTruth)->when($any, $filtered)->latest('id')->paginate(25)->withQueryString()->fragment('results');
+
+        // The tally across every finished run in the filter whose slide has a
+        // recorded diagnosis — not only the page shown.
         $tally = ['correct' => 0, 'partial' => 0, 'wrong' => 0];
-        V2Diagnosis::with($withTruth)->where('status', 'completed')
+        V2Diagnosis::with($withTruth)->when($any, $filtered)->where('status', 'completed')
             ->get(['id', 'sample_id', 'status', 'diagnosis_code'])
             ->each(function ($r) use (&$tally) {
                 if ($v = $r->verdict()) {
@@ -71,6 +99,8 @@ class V2DiagnoseController extends Controller
         return view('admin.v2-diagnose.index', [
             'runs'    => $runs,
             'tally'   => $tally,
+            'rf'      => $f,
+            'rfOptions' => $this->resultFilterOptions($f),
             'archive' => $archive,
             'organs'  => Organ::orderBy('name')->pluck('name'),
             'stains'  => Stain::orderBy('name')->pluck('name'),
@@ -80,6 +110,68 @@ class V2DiagnoseController extends Controller
                 'stain' => $picked->stain_id ? (string) $picked->stain_id : 'none',
             ] : null,
         ]);
+    }
+
+    /**
+     * What the results filter offers: organs, then the chosen organ's
+     * classification groups, then the chosen group's diseases as an indented
+     * tree — each with how many results it holds, and only those that hold
+     * any. A disease counts every result filed under it or any finer disease.
+     *
+     * @return array{organs: list<array>, cats: list<array>, dxs: list<array>}
+     */
+    private function resultFilterOptions(array $f): array
+    {
+        $rows = V2Diagnosis::join('samples', 'samples.id', '=', 'v2_diagnoses.sample_id')
+            ->selectRaw('samples.organ_id, samples.category_id, samples.disease_subtype_id, count(*) as n')
+            ->groupBy('samples.organ_id', 'samples.category_id', 'samples.disease_subtype_id')->get();
+
+        $organNames = Organ::whereIn('id', $rows->pluck('organ_id')->filter())->pluck('name', 'id');
+        $organs = $rows->filter(fn ($r) => $r->organ_id)->groupBy('organ_id')
+            ->map(fn ($g, $id) => ['id' => (int) $id, 'name' => $organNames[$id] ?? "Organ #{$id}", 'n' => (int) $g->sum('n')])
+            ->sortBy('name')->values()->all();
+
+        $cats = $dxs = [];
+        if ($f['organ']) {
+            $mine = $rows->where('organ_id', $f['organ']);
+            $subtypes = DiseaseSubtype::where('organ_id', $f['organ'])->get(['id', 'parent_id', 'category_id', 'name'])->keyBy('id');
+
+            // Each result counts for its disease and every disease above it.
+            $perDx = [];
+            $perCat = [];
+            $unfiled = 0;
+            foreach ($mine as $r) {
+                $cat = $r->category_id ?: ($r->disease_subtype_id ? $subtypes->get($r->disease_subtype_id)?->category_id : null);
+                $cat ? $perCat[$cat] = ($perCat[$cat] ?? 0) + $r->n : $unfiled += $r->n;
+                for ($id = $r->disease_subtype_id, $hops = 0; $id && $hops < DiseaseSubtype::MAX_DEPTH; $hops++) {
+                    $perDx[$id] = ($perDx[$id] ?? 0) + $r->n;
+                    $id = $subtypes->get($id)?->parent_id;
+                }
+            }
+            $catNames = Category::whereIn('id', array_keys($perCat))->pluck('label_en', 'id');
+            $cats = collect($perCat)->map(fn ($n, $id) => ['id' => (int) $id, 'name' => $catNames[$id] ?? "Group #{$id}", 'n' => $n])
+                ->sortBy('name')->values()->all();
+            if ($unfiled) {
+                $cats[] = ['id' => 'none', 'name' => 'Not classified', 'n' => $unfiled];
+            }
+
+            if ($f['cat'] && $f['cat'] !== 'none') {
+                $walk = function ($parentId, $depth) use (&$walk, &$dxs, $subtypes, $perDx, $f) {
+                    $level = $subtypes->filter(fn ($d) => $parentId === null
+                        ? $d->parent_id === null && (int) $d->category_id === (int) $f['cat']
+                        : (int) $d->parent_id === $parentId)->sortBy('name');
+                    foreach ($level as $d) {
+                        if (! empty($perDx[$d->id]) && $depth <= DiseaseSubtype::MAX_DEPTH) {
+                            $dxs[] = ['id' => $d->id, 'name' => $d->name, 'n' => $perDx[$d->id], 'depth' => $depth];
+                            $walk($d->id, $depth + 1);
+                        }
+                    }
+                };
+                $walk(null, 0);
+            }
+        }
+
+        return ['organs' => $organs, 'cats' => $cats, 'dxs' => $dxs];
     }
 
     /**

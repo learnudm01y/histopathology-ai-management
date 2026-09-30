@@ -52,6 +52,8 @@ class V2DiagnoseTest extends TestCase
         });
         Schema::create('disease_subtypes', function (Blueprint $t) {
             $t->id(); $t->unsignedBigInteger('category_id')->nullable(); $t->string('name'); $t->timestamps();
+            $t->unsignedBigInteger('organ_id')->nullable(); $t->unsignedBigInteger('parent_id')->nullable();
+            $t->boolean('is_active')->default(true);
         });
         // The archive search reaches the case and its clinical record.
         Schema::create('cases', function (Blueprint $t) {
@@ -92,7 +94,7 @@ class V2DiagnoseTest extends TestCase
     public function test_index_lists_the_form_and_runs(): void
     {
         $this->actingAs($this->user)->get('/admin/v2-diagnose')
-            ->assertOk()->assertSee('Run V2 Diagnose')->assertSee('No runs yet.');
+            ->assertOk()->assertSee('Run V2 Diagnose')->assertSee('No results yet.');
     }
 
     public function test_a_run_on_an_archived_slide_is_recorded_and_queued(): void
@@ -187,6 +189,43 @@ class V2DiagnoseTest extends TestCase
         $this->assertNotNull(Sample::find($s->id));
         $this->assertNotNull(V2Diagnosis::find($other->id));
         File::deleteDirectory($home);
+    }
+
+    public function test_results_filter_by_organ_classification_and_disease_tree(): void
+    {
+        $breast = \App\Models\Organ::forceCreate(['name' => 'Breast']);
+        $lung = \App\Models\Organ::forceCreate(['name' => 'Lung']);
+        $malig = \App\Models\Category::forceCreate(['organ_id' => $breast->id, 'label_en' => 'Malignant']);
+        $normal = \App\Models\Category::forceCreate(['organ_id' => $breast->id, 'label_en' => 'Normal']);
+        $carc = \App\Models\DiseaseSubtype::forceCreate(['category_id' => $malig->id, 'name' => 'Carcinoma']);
+        $idc = \App\Models\DiseaseSubtype::forceCreate(['category_id' => $malig->id, 'parent_id' => $carc->id, 'name' => 'IDC']);
+        $ilc = \App\Models\DiseaseSubtype::forceCreate(['category_id' => $malig->id, 'parent_id' => $carc->id, 'name' => 'ILC']);
+        $slide = fn ($organ, $cat, $dx) => Sample::forceCreate(['organ_id' => $organ, 'category_id' => $cat,
+            'disease_subtype_id' => $dx, 'storage_status' => 'available', 'wsi_remote_path' => 'x.svs']);
+        $run = fn ($s) => V2Diagnosis::create(['sample_id' => $s->id, 'organ' => 'Breast', 'status' => 'completed']);
+        $a = $run($slide($breast->id, $malig->id, $idc->id));
+        $b = $run($slide($breast->id, $malig->id, $ilc->id));
+        $c = $run($slide($breast->id, $normal->id, null));
+        $d = $run($slide($lung->id, null, null));
+        $ids = fn ($res) => collect($res->viewData('runs')->items())->pluck('id')->sort()->values()->all();
+
+        $this->actingAs($this->user);
+        $this->assertSame([$a->id, $b->id, $c->id, $d->id], $ids($this->get('/admin/v2-diagnose')));
+        $this->assertSame([$a->id, $b->id, $c->id], $ids($this->get("/admin/v2-diagnose?r_organ={$breast->id}")));
+        $this->assertSame([$c->id], $ids($this->get("/admin/v2-diagnose?r_organ={$breast->id}&r_cat={$normal->id}")));
+        // A disease includes every finer disease under it.
+        $res = $this->get("/admin/v2-diagnose?r_organ={$breast->id}&r_cat={$malig->id}&r_dx={$carc->id}");
+        $this->assertSame([$a->id, $b->id], $ids($res));
+        $this->assertSame([$a->id], $ids($this->get("/admin/v2-diagnose?r_organ={$breast->id}&r_cat={$malig->id}&r_dx={$idc->id}")));
+        $this->assertSame([$d->id], $ids($this->get("/admin/v2-diagnose?r_organ={$lung->id}&r_cat=none")));
+
+        // Options: counts, the tree in order, and only what holds results.
+        $opt = $res->viewData('rfOptions');
+        $this->assertSame([['Breast', 3], ['Lung', 1]], array_map(fn ($o) => [$o['name'], $o['n']], $opt['organs']));
+        $this->assertSame([['Malignant', 2], ['Normal', 1]], array_map(fn ($o) => [$o['name'], $o['n']], $opt['cats']));
+        $this->assertSame([['Carcinoma', 2, 0], ['IDC', 1, 1], ['ILC', 1, 1]],
+            array_map(fn ($o) => [$o['name'], $o['n'], $o['depth']], $opt['dxs']));
+        $res->assertSee('Analysis results');
     }
 
     public function test_the_archive_is_paged_and_filtered_on_the_server(): void
@@ -305,7 +344,7 @@ class V2DiagnoseTest extends TestCase
         $this->assertNull($case($tumour, $idc, null, 'analysing')->fresh()->verdict());
 
         $page = $this->actingAs($this->user)->get('/admin/v2-diagnose')->assertOk();
-        $page->assertSee('Against the recorded diagnosis (17 runs)')->assertSee('6 correct')
+        $page->assertSee('Against the recorded diagnosis (17 results)')->assertSee('6 correct')
              ->assertSee('7 partial')->assertSee('4 wrong');
     }
 
