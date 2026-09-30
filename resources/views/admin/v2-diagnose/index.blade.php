@@ -4,8 +4,8 @@
 
 @section('content')
 <style>
-  .v2-grid{display:grid;gap:1.25rem}
-  @media(min-width:1100px){.v2-grid{grid-template-columns:minmax(0,30rem) minmax(0,1fr);align-items:start}}
+  .v2-grid{display:block}
+  .v2-grid > .v2-card:first-child{max-width:46rem}
   .v2-card{background:#fff;border:1px solid #e3e0ea;border-radius:8px;padding:1.1rem 1.25rem;margin-bottom:1.1rem}
   .v2-card h3{margin:0 0 .85rem;font-size:1.02rem;font-weight:600}
   .v2-tabs{display:flex;padding:3px;margin-bottom:1rem;background:#f3f1f8;border-radius:8px}
@@ -68,8 +68,34 @@
   .v2-seg label:has(input:checked){background:#f0edf8}
   .v2-seg label:has(input:focus-visible){box-shadow:inset 0 0 0 2px #6a55c2}
   .v2-fixed{background:#f5f3fa;border-radius:6px;padding:.6rem .8rem;font-size:.84rem;color:#41394f}
-  table.v2-runs{width:100%;border-collapse:collapse;font-size:.87rem}
-  table.v2-runs td,table.v2-runs th{padding:.45rem .5rem;border-bottom:1px solid #f0eef4;text-align:left;vertical-align:top}
+  /* Analysis results: full width, actions first, the result's colour on the row's edge. */
+  .v2-rwrap{overflow-x:auto;border:1px solid #ebe8f1;border-radius:8px}
+  table.v2-runs{width:100%;border-collapse:separate;border-spacing:0;font-size:.86rem;min-width:900px}
+  table.v2-runs th{background:#f7f6fa;color:#57516a;font-weight:600;font-size:.74rem;text-transform:uppercase;letter-spacing:.04em;
+          padding:.6rem .75rem;text-align:left;border-bottom:1px solid #e6e2ee;white-space:nowrap}
+  table.v2-runs td{padding:.7rem .75rem;border-bottom:1px solid #f0eef4;text-align:left;vertical-align:top;color:#2d2540}
+  table.v2-runs tbody tr:last-child td{border-bottom:0}
+  table.v2-runs tbody tr{transition:background .12s}
+  table.v2-runs tbody tr:hover{background:#faf9fd}
+  table.v2-runs tbody tr td:first-child{box-shadow:inset 3px 0 0 transparent}
+  table.v2-runs tr.v2-r-correct td:first-child{box-shadow:inset 3px 0 0 #3a9a7a}
+  table.v2-runs tr.v2-r-partial td:first-child{box-shadow:inset 3px 0 0 #d9a53a}
+  table.v2-runs tr.v2-r-wrong td:first-child,table.v2-runs tr.v2-r-failed td:first-child{box-shadow:inset 3px 0 0 #c9506f}
+  table.v2-runs .v2-c-act{width:1%;white-space:nowrap;vertical-align:middle;padding-right:.4rem}
+  table.v2-runs .v2-c-run{width:1%;white-space:nowrap}
+  table.v2-runs .v2-c-slide{max-width:17rem}
+  table.v2-runs .v2-c-dx{min-width:16rem;max-width:26rem}
+  table.v2-runs .v2-c-truth{width:1%;white-space:nowrap}
+  table.v2-runs .v2-c-res{min-width:11rem;max-width:16rem}
+  .v2-runno{font-weight:700;color:#4b3a94;margin-right:.35rem}
+  .v2-c-slide .v2-id{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .v2-dxtext{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.4}
+  .v2-conf{display:flex;align-items:center;gap:.4rem;margin-top:.35rem;font-size:.78rem;font-weight:600;color:#41394f}
+  .v2-bar{position:relative;width:4.5rem;height:.4rem;border-radius:99px;background:#ece9f3;overflow:hidden}
+  .v2-bar span{position:absolute;top:0;bottom:0;left:0;border-radius:99px;background:#6a55c2}
+  .v2-truth{display:inline-block;padding:.12rem .55rem;border-radius:5px;background:#eef3fb;color:#2f5586;font-weight:600;font-size:.8rem}
+  .v2-c-res .v2-sub{margin-top:.3rem}
+  #results nav{margin-top:.9rem}
   .v2-st{display:inline-block;padding:.1rem .5rem;border-radius:99px;font-size:.78rem;font-weight:600}
   .v2-st.completed{background:#e4f1ec;color:#2c6b5b}
   .v2-st.failed{background:#fbe9f0;color:#b03d64}
@@ -82,7 +108,6 @@
   .v2-eye{display:inline-flex;align-items:center;justify-content:center;width:2rem;height:2rem;border-radius:6px;
           color:#4b3a94;background:#f3f1f8;font-size:1.15rem;text-decoration:none;transition:background .15s,color .15s}
   .v2-eye:hover{background:#4b3a94;color:#fff;text-decoration:none}
-  table.v2-runs td:last-child{vertical-align:middle;text-align:center}
   /* Results filter: organ → classification → disease, one GET form. */
   .v2-rfilter{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:.7rem;align-items:end;margin-bottom:1rem}
   @media(max-width:900px){.v2-rfilter{grid-template-columns:1fr}}
@@ -93,7 +118,7 @@
   .v2-rclear{display:inline-flex;align-items:center;height:2.4rem;padding:0 .9rem;border-radius:7px;background:#f3f1f8;color:#4b3a94;
           font-size:.84rem;font-weight:600;white-space:nowrap;text-decoration:none}
   .v2-rclear:hover{background:#e8e3f6;text-decoration:none}
-  .v2-rowbtns{display:flex;gap:.35rem;justify-content:center}
+  .v2-rowbtns{display:flex;gap:.35rem;justify-content:flex-start}
   .v2-del{display:inline-flex;align-items:center;justify-content:center;width:2rem;height:2rem;border:0;border-radius:6px;
           color:#b03d64;background:#fbe9f0;font-size:1.1rem;cursor:pointer;transition:background .15s,color .15s}
   .v2-del:hover{background:#b03d64;color:#fff}
@@ -369,41 +394,64 @@
     @if($runs->isEmpty())
       <p style="color:#6b6480">{{ array_filter($rf) ? 'No result matches this filter.' : 'No results yet.' }}</p>
     @else
-    <div style="overflow-x:auto">
+    <div class="v2-rwrap">
     <table class="v2-runs">
-      <thead><tr><th>#</th><th>Slide</th><th>Context</th><th>Status</th><th>Diagnosis</th><th>Recorded</th><th>Match</th><th>When</th><th></th></tr></thead>
+      <thead><tr>
+        <th class="v2-c-act"><span class="sr-only">Actions</span></th>
+        <th>Run</th><th>Slide</th><th>AI diagnosis</th><th>Recorded</th><th>Result</th>
+      </tr></thead>
       <tbody>
       @foreach($runs as $r)
-        @php $v = $r->verdict(); $truth = $r->recordedClass(); @endphp
-        <tr>
-          <td><a href="{{ route('admin.v2-diagnose.show', $r) }}">#{{ $r->id }}</a></td>
-          <td>{{ $r->sample?->entity_submitter_id ?: ($r->sample?->file_name ?: '—') }}
-              <div class="v2-hint">sample #{{ $r->sample_id }}</div></td>
-          <td>{{ $r->organ }}{{ $r->stain ? ' · '.$r->stain : '' }}
-              <div class="v2-hint">{{ collect([$r->age ? $r->age.' y' : null, $r->sex, $r->race])->filter()->implode(' · ') }}</div></td>
-          <td><span class="v2-st {{ in_array($r->status, ['completed','failed']) ? $r->status : 'run' }}">{{ $r->status }}</span></td>
-          <td>{{ $r->diagnosis ?: '—' }}
-              @if($r->confidence !== null)<div class="v2-hint">confidence {{ round($r->confidence * 100) }}% · {{ $r->regions_count }} regions</div>@endif</td>
-          <td>{{ $truth ?: '—' }}
-              @if(! $truth)<div class="v2-hint">no recorded diagnosis</div>@endif</td>
-          <td>
-            @if($v)
-              <span class="v2-match {{ $v['result'] }}" title="{{ $v['reason'] }}">
-                {{ ['correct' => '✓ Correct', 'partial' => '≈ Partial', 'wrong' => '✗ Wrong'][$v['result']] }}</span>
-              <div class="v2-hint">{{ $v['reason'] }}</div>
-            @else
-              <span class="v2-hint">—</span>
-            @endif
-          </td>
-          <td class="v2-hint">{{ $r->created_at->format('Y-m-d H:i') }}</td>
-          <td><div class="v2-rowbtns">
+        @php
+          $v = $r->verdict(); $truth = $r->recordedClass();
+          $state = in_array($r->status, ['completed', 'failed']) ? $r->status : 'run';
+          $slide = $r->sample?->entity_submitter_id ?: ($r->sample?->file_name ?: 'sample #'.$r->sample_id);
+          $conf = $r->confidence !== null ? (int) round($r->confidence * 100) : null;
+          $who = collect([$r->sex ? ucfirst($r->sex) : null, $r->age ? $r->age.' y' : null, $r->race])->filter()->implode(' · ');
+        @endphp
+        <tr class="v2-r-{{ $v['result'] ?? ($state === 'failed' ? 'failed' : 'none') }}">
+          <td class="v2-c-act"><div class="v2-rowbtns">
             <a href="{{ route('admin.v2-diagnose.show', $r) }}" class="v2-eye" title="Open run #{{ $r->id }}: slide, regions, heatmap"
                aria-label="Open run #{{ $r->id }}"><i class="mdi mdi-eye-outline"></i></a>
             <button type="button" class="v2-del" data-del="{{ route('admin.v2-diagnose.destroy', $r) }}" data-id="{{ $r->id }}"
-                    data-slide="{{ $r->sample?->entity_submitter_id ?: ($r->sample?->file_name ?: 'sample #'.$r->sample_id) }}"
-                    data-dx="{{ $r->diagnosis }}" data-running="{{ $r->isRunning() ? $r->status : '' }}"
+                    data-slide="{{ $slide }}" data-dx="{{ $r->diagnosis }}" data-running="{{ $r->isRunning() ? $r->status : '' }}"
                     title="Delete run #{{ $r->id }}" aria-label="Delete run #{{ $r->id }}"><i class="mdi mdi-trash-can-outline"></i></button>
           </div></td>
+          <td class="v2-c-run">
+            <a href="{{ route('admin.v2-diagnose.show', $r) }}" class="v2-runno">#{{ $r->id }}</a>
+            <span class="v2-st {{ $state }}">{{ $r->status }}</span>
+            <div class="v2-sub" title="{{ $r->created_at->format('Y-m-d H:i') }}">{{ $r->created_at->format('d M Y · H:i') }}</div>
+          </td>
+          <td class="v2-c-slide">
+            <div class="v2-id" title="{{ $slide }}">{{ $slide }}</div>
+            <div class="v2-sub">sample #{{ $r->sample_id }} · {{ $r->organ }}{{ $r->stain ? ' · '.$r->stain : '' }}</div>
+            @if($who)<div class="v2-sub">{{ $who }}</div>@endif
+          </td>
+          <td class="v2-c-dx">
+            @if($r->diagnosis)
+              <div class="v2-dxtext" title="{{ $r->diagnosis }}">{{ $r->diagnosis }}</div>
+              @if($conf !== null)
+                <div class="v2-conf" title="Confidence {{ $conf }}%">
+                  <span class="v2-bar"><span style="width:{{ $conf }}%"></span></span>
+                  <span>{{ $conf }}%</span><span class="v2-sub">· {{ $r->regions_count }} regions</span>
+                </div>
+              @endif
+            @else
+              <span class="v2-missing">{{ $state === 'run' ? 'Running…' : '—' }}</span>
+            @endif
+          </td>
+          <td class="v2-c-truth">
+            @if($truth)<span class="v2-truth">{{ $truth }}</span>
+            @else<span class="v2-missing">not recorded</span>@endif
+          </td>
+          <td class="v2-c-res">
+            @if($v)
+              <span class="v2-match {{ $v['result'] }}">{{ ['correct' => '✓ Correct', 'partial' => '≈ Partial', 'wrong' => '✗ Wrong'][$v['result']] }}</span>
+              <div class="v2-sub">{{ $v['reason'] }}</div>
+            @else
+              <span class="v2-missing">{{ $state === 'failed' ? 'failed — no answer' : ($truth ? '—' : 'cannot be scored') }}</span>
+            @endif
+          </td>
         </tr>
       @endforeach
       </tbody>
