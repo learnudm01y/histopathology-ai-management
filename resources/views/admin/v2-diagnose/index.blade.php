@@ -106,14 +106,9 @@
   table.v2-arch tbody tr.sel{background:#efeafb;box-shadow:inset 3px 0 0 #6a55c2}
   /* Each row's own buttons: pick it, or run it straight away. */
   table.v2-arch td.v2-act{width:1%;white-space:nowrap;vertical-align:middle}
-  .v2-act-wrap{display:flex;flex-direction:column;gap:.35rem;min-width:7.2rem}
-  .v2-pick,.v2-go{display:inline-flex;align-items:center;justify-content:center;gap:.35rem;height:2rem;padding:0 .75rem;
+  .v2-act-wrap{display:flex;min-width:7.2rem}
+  .v2-go{display:inline-flex;align-items:center;justify-content:center;gap:.35rem;height:2rem;padding:0 .75rem;
           border-radius:6px;font-size:.8rem;font-weight:600;cursor:pointer;transition:background .15s,color .15s,border-color .15s,box-shadow .15s}
-  .v2-pick{border:1px solid #cfc6ea;background:#fff;color:#4b3a94}
-  .v2-pick:hover{border-color:#6a55c2;background:#f5f2fd}
-  .v2-pick .dot{width:.8rem;height:.8rem;border-radius:50%;border:2px solid currentColor;flex:none}
-  tr.sel .v2-pick{background:#6a55c2;border-color:#6a55c2;color:#fff}
-  tr.sel .v2-pick .dot{background:#fff;border-color:#fff;box-shadow:inset 0 0 0 2px #6a55c2}
   .v2-go{border:0;background:#2c7a5f;color:#fff;box-shadow:0 1px 2px rgba(20,60,45,.25)}
   .v2-go:hover{background:#23654e}
   .v2-go:disabled{opacity:.6;cursor:wait}
@@ -125,6 +120,17 @@
   .v2-pages button.on{background:#6a55c2;border-color:#6a55c2;color:#fff;font-weight:600}
   .v2-pages button:disabled{opacity:.45;cursor:default}
   .v2-pages span{color:#8a83a0;padding:0 .2rem}
+  /* The confirmation dialog (SweetAlert2 draws it outside the page card). */
+  .v2-sw{text-align:left;font-size:.9rem;color:#41394f;line-height:1.5}
+  .v2-sw-name{font-weight:700;font-size:1rem;color:#2d2540;margin-bottom:.35rem;word-break:break-all}
+  .v2-sw-note{margin-top:.8rem;color:#57516a}
+  .v2-sw-muted{color:#8a83a0;font-size:.8rem}
+  .v2-sw-why{color:#7a7390;font-size:.78rem;margin-top:.15rem}
+  table.v2-sw-runs{width:100%;border-collapse:collapse;margin-top:.8rem;font-size:.84rem}
+  table.v2-sw-runs th{background:#f7f6fa;color:#57516a;font-size:.74rem;text-transform:uppercase;letter-spacing:.03em;
+          padding:.45rem .5rem;text-align:left;border-bottom:1px solid #e6e2ee}
+  table.v2-sw-runs td{padding:.5rem;border-bottom:1px solid #f0eef4;vertical-align:top;text-align:left}
+  .swal2-popup .v2-match{font-size:.8rem}
   .v2-run-picked{margin-top:1rem;width:100%;height:2.7rem;font-size:.95rem}
   .v2-id{font-weight:600;word-break:break-all}
   .v2-sub{font-size:.76rem;color:#7a7390;margin-top:.15rem;line-height:1.35}
@@ -354,6 +360,7 @@
 </div>
 </form>
 
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
 <script>
 (function () {
   var src = document.getElementById('source');
@@ -587,7 +594,6 @@
       var path = [s.stage, s.tnm].filter(Boolean).join(' · ');
       return '<tr data-id="' + s.id + '" class="' + (s.runs.length ? 'used' : '') + (String(s.id) === sid.value ? ' sel' : '') + '">'
         + '<td class="v2-act"><div class="v2-act-wrap">'
-          + '<button type="button" class="v2-pick" data-act="pick"><span class="dot"></span>' + (String(s.id) === sid.value ? 'Selected' : 'Select') + '</button>'
           + '<button type="button" class="v2-go" data-act="run" title="Run V2 Diagnose on this slide now">▶ Run analysis</button>'
         + '</div></td>'
         + '<td><div class="v2-id">' + esc(s.case || s.label) + '</div><div class="v2-sub">#' + s.id
@@ -609,8 +615,59 @@
   });
 
   // Straight from the row: the slide's own context goes with it, nothing to fill in.
+  // Every run is confirmed first; a slide run before shows how those runs scored.
   function runNow(s, btn) {
-    if (s.runs.length && !confirm('This slide has already been run ' + s.runs.length + ' time(s). Run it again?')) return;
+    var name = esc(s.case || s.label) + ' <span style="color:#8a83a0;font-weight:400">· sample #' + s.id + '</span>';
+    var truth = s.disease || s.category;
+    var facts = [truth ? 'Recorded diagnosis: <b>' + esc(truth) + '</b>' : 'No recorded diagnosis — the answer cannot be scored.',
+                 [s.sex ? cap(s.sex) : null, s.age != null ? s.age + ' y' : null, s.stain].filter(Boolean).map(esc).join(' · ')]
+      .filter(Boolean).map(function (x) { return '<div>' + x + '</div>'; }).join('');
+    var html, opts;
+
+    if (!s.runs.length) {
+      html = '<div class="v2-sw"><div class="v2-sw-name">' + name + '</div>' + facts
+        + '<div class="v2-sw-note">This slide has not been analysed before.</div></div>';
+      opts = { icon: 'question', title: 'Run V2 Diagnose on this slide?', confirmButtonText: '▶ Yes, run it' };
+    } else {
+      var WORD = { correct: '✓ Correct', partial: '≈ Partially correct', wrong: '✗ Wrong' };
+      var runs = s.runs.map(function (r) {
+        var score = r.verdict
+          ? '<span class="v2-match ' + r.verdict + '">' + WORD[r.verdict] + '</span><div class="v2-sw-why">' + esc(r.reason || '') + '</div>'
+          : '<span class="v2-sw-muted">' + (r.status !== 'completed' ? 'Run ' + esc(r.status) + ' — no answer to score'
+              : 'Not scored — no recorded diagnosis') + '</span>';
+        return '<tr><td><a href="' + r.url + '" target="_blank">#' + r.id + '</a><div class="v2-sw-muted">' + esc(r.when || '') + '</div></td>'
+          + '<td>' + (r.diagnosis ? esc(r.diagnosis) : '<span class="v2-sw-muted">—</span>')
+          + (r.confidence != null ? '<div class="v2-sw-muted">confidence ' + r.confidence + '%</div>' : '') + '</td>'
+          + '<td>' + (r.truth ? esc(r.truth) : '<span class="v2-sw-muted">—</span>') + '</td><td>' + score + '</td></tr>';
+      }).join('');
+      var last = s.runs[0];
+      var head = last.verdict === 'correct' ? 'The last analysis of this slide was correct'
+               : last.verdict === 'wrong' ? 'The last analysis of this slide was wrong'
+               : last.verdict === 'partial' ? 'The last analysis of this slide was partially correct'
+               : 'This slide has been analysed before';
+      html = '<div class="v2-sw"><div class="v2-sw-name">' + name + '</div>' + facts
+        + '<table class="v2-sw-runs"><thead><tr><th>Run</th><th>AI answer</th><th>Recorded</th><th>Result</th></tr></thead><tbody>'
+        + runs + '</tbody></table><div class="v2-sw-note">Run it again? The earlier runs stay as they are.</div></div>';
+      opts = { icon: last.verdict === 'correct' ? 'success' : last.verdict === 'wrong' ? 'error' : last.verdict ? 'warning' : 'info',
+               title: head, confirmButtonText: '▶ Run again', showDenyButton: true, denyButtonText: 'Open the last result' };
+    }
+
+    if (!window.Swal) { // the CDN did not load: still ask
+      if (confirm((s.runs.length ? 'This slide has been analysed ' + s.runs.length + ' time(s) before. Run it again?'
+                                 : 'Run V2 Diagnose on this slide?'))) go(s, btn);
+      return;
+    }
+    Swal.fire(Object.assign({
+      html: html, width: s.runs.length ? 760 : 520, showCancelButton: true, cancelButtonText: 'Cancel',
+      confirmButtonColor: '#2c7a5f', denyButtonColor: '#6a55c2', cancelButtonColor: '#8a83a0',
+      focusCancel: false, reverseButtons: false,
+    }, opts)).then(function (res) {
+      if (res.isConfirmed) go(s, btn);
+      else if (res.isDenied) window.open(s.runs[0].url, '_blank');
+    });
+  }
+
+  function go(s, btn) {
     choose(s, true); render();
     [btn, rowsEl.querySelector('tr[data-id="' + s.id + '"] [data-act="run"]'), document.getElementById('runPicked')]
       .forEach(function (b) { if (b) { b.disabled = true; b.textContent = 'Starting…'; } });

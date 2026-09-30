@@ -169,7 +169,7 @@ class V2DiagnoseController extends Controller
     {
         $bySample = $samples->keyBy('id');
         return V2Diagnosis::whereIn('sample_id', $bySample->keys())->latest('id')
-            ->get(['id', 'sample_id', 'status', 'diagnosis', 'diagnosis_code', 'run_dir', 'created_at'])
+            ->get(['id', 'sample_id', 'status', 'diagnosis', 'diagnosis_code', 'confidence', 'run_dir', 'created_at'])
             ->each(fn ($r) => $r->setRelation('sample', $bySample[$r->sample_id]))
             ->groupBy('sample_id');
     }
@@ -263,6 +263,8 @@ class V2DiagnoseController extends Controller
                     'status'    => $r->status,
                     'diagnosis' => $r->diagnosis,
                     'verdict'   => $v['result'] ?? null,
+                    'truth'     => $v['truth'] ?? $r->recordedClass(),
+                    'confidence' => $r->confidence !== null ? (int) round($r->confidence * 100) : null,
                     'reason'    => $v['reason'] ?? null,
                     'when'      => $r->created_at?->format('Y-m-d'),
                     'url'       => route('admin.v2-diagnose.show', $r->id),
