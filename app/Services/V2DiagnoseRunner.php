@@ -108,7 +108,14 @@ class V2DiagnoseRunner
         // copied there: the prompt names one fixed relative path, and the run
         // keeps the exact version of the tool it was analysed with.
         File::ensureDirectoryExists("{$dir}/tools");
-        copy(base_path('scripts/v2_tools.py'), "{$dir}/tools/v2_tools.py");
+        $tools = "{$dir}/tools/v2_tools.py";
+        @unlink($tools);
+        copy(base_path('scripts/v2_tools.py'), $tools);
+        // The model runs this file and finalize runs it after the model: it
+        // is made read-only and its hash kept, so a changed copy is caught
+        // before anything executes it again (see integrityViolations()).
+        @chmod($tools, 0444);
+        file_put_contents("{$dir}/tools.sha256", hash_file('sha256', $tools));
         $this->mark($run, 'preparing', 'Building the view images the AI model will read');
 
         return $this->python(["{$dir}/tools/v2_tools.py", 'prepare', $dir], 3600);
@@ -143,9 +150,15 @@ class V2DiagnoseRunner
     /**
      * One headless Claude call in the run directory. Returns the CLI's JSON.
      *
-     * Tools are allow-listed: reading and writing files in the folder, and
-     * running the one helper script. Everything else is denied without a
+     * Tools are allow-listed: reading files in the folder, writing result.json,
+     * and running the read-only helpers. Everything else is denied without a
      * prompt, which is what -p does with a tool that is not on the list.
+     *
+     * The run directory sits inside the application (its .env, the database
+     * credentials, every other run's answer), so a bare Read or Write rule
+     * would reach all of it. The rules are path-scoped, the helper refuses
+     * other folders (V2_SANDBOX), and every tool call is recorded and checked
+     * independently of the CLI's own enforcement (tool_calls.jsonl).
      */
     public function claude(V2Diagnosis $run, string $prompt, ?string $resume = null): array
     {
@@ -168,15 +181,18 @@ class V2DiagnoseRunner
             '--restricted', '--strict-mcp-config',
             '--permission-mode', 'dontAsk',
             '--tools', 'Read,Write,Edit,Glob,Bash',
-            '--allowedTools', 'Read', 'Write', 'Edit', 'Glob',
-            "Bash({$py} tools/v2_tools.py:*)",
+            '--allowedTools', 'Read(./**)', 'Glob(./**)', 'Write(./result.json)', 'Edit(./result.json)',
+            "Bash({$py} tools/v2_tools.py show .:*)",
+            "Bash({$py} tools/v2_tools.py contours .:*)",
+            "Bash({$py} tools/v2_tools.py zoom .:*)",
+            "Bash({$py} tools/v2_tools.py validate .:*)",
             '--disallowedTools', 'WebFetch', 'WebSearch',
         ];
         if ($resume) {
             array_push($cmd, '--resume', $resume);
         }
 
-        $env = ['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC' => '1'];
+        $env = ['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC' => '1', 'V2_SANDBOX' => '1'];
         if (! empty($cfg['home'])) {
             $env['HOME'] = $cfg['home'];
         }
@@ -243,6 +259,7 @@ class V2DiagnoseRunner
             } elseif (($ev['type'] ?? null) === 'assistant') {
                 foreach ($ev['message']['content'] ?? [] as $c) {
                     if (($c['type'] ?? null) === 'tool_use') {
+                        $this->recordTool($run, (string) ($c['name'] ?? ''), (array) ($c['input'] ?? []));
                         $this->noteTool($run, (string) ($c['name'] ?? ''), (array) ($c['input'] ?? []), $watch);
                     }
                 }
@@ -273,7 +290,7 @@ class V2DiagnoseRunner
                 $this->mark($run, 'survey', 'Reading the slide overview and tile map', count($watch['sheets']), $n);
             }
         } elseif (($tool === 'Read' && preg_match('#view/(P\d+)\.jpg#', $path, $m))
-            || ($tool === 'Bash' && preg_match('#v2_tools\.py (?:show|contours) \S+ (P\d+)#', $cmd, $m))) {
+            || ($tool === 'Bash' && preg_match('#v2_tools\.py (?:show|contours|zoom) \S+ (P\d+)#', $cmd, $m))) {
             if ($watch['phase'] > 1) {
                 return;
             }
@@ -289,6 +306,155 @@ class V2DiagnoseRunner
             $watch['phase'] = 2;
             $this->mark($run, 'report', 'Checking the report against the required format', null, null, 0.7);
         }
+    }
+
+    /**
+     * Every tool call the model makes, appended to tool_calls.jsonl with the
+     * rule it broke, if any. Attempts count, not only what got through: the
+     * CLI denies a call after the stream has already shown it, and a run
+     * whose model went looking outside its folder is not a blind reading.
+     */
+    private function recordTool(V2Diagnosis $run, string $tool, array $in): void
+    {
+        $dir = $this->runDir($run);
+        $entry = json_encode([
+            'at' => time(), 'tool' => $tool,
+            'input' => array_intersect_key($in, array_flip(['file_path', 'path', 'pattern', 'command'])),
+            'violation' => $this->toolViolation($dir, $tool, $in),
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        @file_put_contents("{$dir}/tool_calls.jsonl", $entry . "\n", FILE_APPEND);
+    }
+
+    /** Why one tool call is outside what a run may do, or null when it is allowed. */
+    public function toolViolation(string $dir, string $tool, array $in): ?string
+    {
+        $roots = array_unique(array_filter([self::normalisePath($dir), ($r = realpath($dir)) ? self::normalisePath($r) : null]));
+        $resolve = function (string $p) use ($dir): string {
+            $p = str_replace('\\', '/', $p);
+            $absolute = str_starts_with($p, '/') || preg_match('#^[A-Za-z]:/#', $p);
+            return self::normalisePath($absolute ? $p : "{$dir}/{$p}");
+        };
+        $inside = function (string $p) use ($resolve, $roots): bool {
+            $p = $resolve($p);
+            foreach ($roots as $root) {
+                if ($p === $root || str_starts_with($p, $root . '/')) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        switch ($tool) {
+            case 'Read':
+                $p = (string) ($in['file_path'] ?? '');
+                return $p !== '' && $inside($p) ? null : "read outside the run folder: {$p}";
+            case 'Glob':
+                $base = (string) ($in['path'] ?? '.');
+                $pattern = str_replace('\\', '/', (string) ($in['pattern'] ?? ''));
+                if (! $inside($base) || str_contains($pattern, '..') || str_starts_with($pattern, '/')
+                    || preg_match('#^[A-Za-z]:/#', $pattern) || str_starts_with($pattern, '~')) {
+                    return "glob outside the run folder: {$base} {$pattern}";
+                }
+                return null;
+            case 'Write':
+            case 'Edit':
+                $p = (string) ($in['file_path'] ?? '');
+                return $p !== '' && $resolve($p) === $resolve('result.json') ? null : "wrote a file other than result.json: {$p}";
+            case 'Bash':
+                $c = trim((string) ($in['command'] ?? ''));
+                $py = preg_quote($this->pythonBin(), '#');
+                if (preg_match("#^{$py} tools/v2_tools\.py (show|contours|zoom|validate) \.(?: [A-Za-z0-9_.\- ]*)?(?: 2>&1)?$#", $c)) {
+                    return null;
+                }
+                // The CLI lets plain read-only commands on the folder through
+                // (runs #5-#24 used `cat manifest.json && ls sheets view`);
+                // they are fine as long as no argument leaves the folder.
+                $segs = preg_split('/\s*(?:&&|\|)\s*/', $c);
+                foreach ($segs as $seg) {
+                    if (! preg_match('#^(cat|ls|head|tail|wc)(?: [A-Za-z0-9_.\-*/ ]*)?$#', $seg)
+                        || preg_match('#(\.\.|(^|\s)/|~)#', $seg)) {
+                        return "ran a command other than the helpers: {$c}";
+                    }
+                }
+                return null;
+            default:
+                return "used a tool that is not allowed: {$tool}";
+        }
+    }
+
+    /** A path with . and .. resolved lexically, / separators, no trailing slash. */
+    private static function normalisePath(string $path): string
+    {
+        $parts = [];
+        foreach (explode('/', str_replace('\\', '/', $path)) as $seg) {
+            if ($seg === '' || $seg === '.') {
+                continue;
+            }
+            if ($seg === '..') {
+                array_pop($parts);
+                continue;
+            }
+            $parts[] = $seg;
+        }
+        return '/' . implode('/', $parts);
+    }
+
+    /**
+     * What makes a finished analysis untrustworthy: a helper script that no
+     * longer matches the copy made for the run, or any recorded tool call
+     * outside the run's limits. Empty when the run is clean. Checked before
+     * finalize, which executes the run's copy of the helper.
+     *
+     * @return string[]
+     */
+    public function integrityViolations(V2Diagnosis $run): array
+    {
+        $dir = $this->runDir($run);
+        $out = [];
+        $want = trim((string) @file_get_contents("{$dir}/tools.sha256"));
+        $tools = "{$dir}/tools/v2_tools.py";
+        if ($want === '' || ! is_file($tools) || ! hash_equals($want, (string) hash_file('sha256', $tools))) {
+            $out[] = 'the helper script tools/v2_tools.py changed during the analysis';
+        }
+        foreach (@file("{$dir}/tool_calls.jsonl", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+            $v = json_decode($line, true)['violation'] ?? null;
+            if ($v) {
+                $out[] = $v;
+            }
+        }
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * Terms in the case details the model is given that would tell it the
+     * answer or which archive the slide came from: the slide's own
+     * identifiers, its recorded diagnosis, and archive names. The model must
+     * read the tissue blind to all of them.
+     *
+     * @return string[]
+     */
+    public function blindingLeaks(V2Diagnosis $run): array
+    {
+        $text = implode("\n", array_filter([$run->organ, $run->stain, $run->race, $run->clinical_notes]));
+        if (trim($text) === '') {
+            return [];
+        }
+        $terms = ['TCGA', 'BRACS', 'CPTAC', 'CAMELYON', 'BACH', 'GDC'];
+        if ($s = $run->sample) {
+            $s->loadMissing('category:id,label_en', 'diseaseSubtype:id,name');
+            array_push($terms, $s->entity_submitter_id, pathinfo((string) $s->file_name, PATHINFO_FILENAME),
+                $s->category?->label_en, $s->diseaseSubtype?->name);
+        }
+        $found = [];
+        foreach (array_unique(array_filter(array_map(fn ($t) => trim((string) $t), $terms), fn ($t) => mb_strlen($t) >= 2)) as $t) {
+            if (preg_match('/(?<![\p{L}\p{N}])' . preg_quote($t, '/') . '(?![\p{L}\p{N}])/iu', $text)) {
+                $found[] = $t;
+            }
+        }
+        if (preg_match('/TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}/i', $text, $m)) {
+            $found[] = $m[0];
+        }
+        return array_values(array_unique($found));
     }
 
     /** The slide copied off the Drive mount in pieces, reporting as it goes. */

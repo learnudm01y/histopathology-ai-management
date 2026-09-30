@@ -55,7 +55,10 @@ class V2Diagnosis extends Model
     private const MALIGNANT = ['IDC', 'ILC', 'MIXED', 'DCIS', 'LCIS', 'MUC', 'TUB', 'MPC', 'MBC', 'MED'];
 
     /** Codes that name a benign lesion. */
-    private const BENIGN_LESION = ['BENIGN', 'FA', 'PHY', 'UDH', 'FCC', 'ADENOSIS', 'PASH', 'FIBROCYSTIC'];
+    private const BENIGN_LESION = ['BENIGN', 'FA', 'PHY', 'UDH', 'FCC', 'ADENOSIS', 'PASH', 'FIBROCYSTIC', 'SA', 'PAP'];
+
+    /** Atypia: not carcinoma, but more than a benign lesion. */
+    private const ATYPIA = ['ADH', 'ALH', 'FEA'];
 
     /**
      * The diagnosis recorded for the slide in the archive, as a class the
@@ -99,16 +102,19 @@ class V2Diagnosis extends Model
             'Normal' => match (true) {
                 in_array($code, ['NORMAL', 'BENIGN'], true) => ['correct', 'no disease called on normal tissue'],
                 $code === 'NONDX' => ['partial', 'no cancer called, but reported as non-diagnostic rather than normal'],
+                $code === 'SUSP' => ['partial', 'no cancer called, but flagged as suspicious on normal tissue'],
                 default => ['wrong', "{$code} called on normal tissue"],
             },
             'PB' => match (true) {
                 in_array($code, self::BENIGN_LESION, true) => ['correct', 'benign lesion called'],
                 $code === 'NORMAL' => ['partial', 'no cancer called, but the benign lesion was missed'],
+                in_array($code, [...self::ATYPIA, 'SUSP'], true) => ['partial', "no cancer called, but overcalled as {$code}"],
                 default => ['wrong', "{$code} called on a benign lesion"],
             },
             default => match (true) {
                 $code === $truth => ['correct', 'right type'],
                 $code === 'MIXED' && in_array($truth, ['IDC', 'ILC'], true) => ['partial', 'mixed ductal-lobular called'],
+                $code === 'SUSP' => ['partial', 'carcinoma suspected but not called'],
                 in_array($code, self::MALIGNANT, true) => ['wrong', "carcinoma found, but typed as {$code}"],
                 default => ['wrong', "the carcinoma was missed ({$code})"],
             },

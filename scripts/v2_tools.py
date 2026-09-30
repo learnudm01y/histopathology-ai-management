@@ -9,6 +9,8 @@ here, so that nothing numeric depends on a language model doing arithmetic:
     prepare  RUN              view images, contact sheets, nuclear-density grids, manifest
     density  RUN              rebuild density.json and masks/ for an existing run
     show     RUN P007         print one tile's density grid (0-9) — for the model
+                              (with V2_SANDBOX set, only show/contours/zoom/validate on RUN=.)
+    zoom     RUN P007 X Y     a full-resolution crop around view px (X, Y) -> RUN/zoom/ — for the model
     contours RUN P007 [--level 0.55]
                               density iso-contours of one tile in view px — for the model
     export   RUN              rebuild view.json/heat.json and the display check from final.json
@@ -619,6 +621,34 @@ def cmd_contours(a) -> None:
     up = cv2.resize(g, (VIEW_PX, VIEW_PX), interpolation=cv2.INTER_CUBIC)
     out({"tile": a.tile, "level": a.level, "space": "view_px",
          "polygons": contours_of(up >= a.level, 400, 4.0)})
+
+
+def cmd_zoom(a) -> None:
+    """A VIEW_PX crop of the full-resolution tile centred on (x, y) in view px.
+
+    view/ images are the tile shrunk ~1.9x (about 1 um/px, a 10x objective);
+    this is the tile's own resolution (0.5 um/px, about 20x), which is what
+    cytology needs: myoepithelial layers, cytoplasmic vacuoles, nuclear detail.
+    """
+    tiles = {t["id"]: t for t in load(os.path.join(a.run, "manifest.json"))["tiles"]}
+    t = tiles.get(a.tile)
+    if not t:
+        out({"error": f"unknown tile {a.tile}"}, 1)
+    src = os.path.join(a.run, "patches", t["file"])
+    if not os.path.isfile(src):
+        out({"error": "the full-resolution tile is no longer kept for this run"}, 1)
+    img = Image.open(src).convert("RGB")
+    k = img.width / VIEW_PX                                # full-res px per view px
+    half = min(VIEW_PX, img.width) // 2
+    cx = int(min(max(a.x * k, half), img.width - half))
+    cy = int(min(max(a.y * k, half), img.height - half))
+    crop = np.array(img.crop((cx - half, cy - half, cx + half, cy + half)))
+    os.makedirs(os.path.join(a.run, "zoom"), exist_ok=True)
+    name = f"zoom/{a.tile}_{int(a.x)}_{int(a.y)}.jpg"
+    Image.fromarray(crop).save(os.path.join(a.run, name), quality=90)
+    vb = [round((cx - half) / k), round((cy - half) / k), round((cx + half) / k), round((cy + half) / k)]
+    out({"ok": True, "image": name, "view_box": vb,
+         "note": f"covers view px {vb} of {a.tile}; coordinates you return stay in view px"})
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1278,6 +1308,8 @@ def main() -> None:
     p = sub.add_parser("show"); p.add_argument("run"); p.add_argument("tile")
     p = sub.add_parser("contours"); p.add_argument("run"); p.add_argument("tile")
     p.add_argument("--level", type=float, default=0.55)
+    p = sub.add_parser("zoom"); p.add_argument("run"); p.add_argument("tile")
+    p.add_argument("x", type=float); p.add_argument("y", type=float)
     p = sub.add_parser("validate"); p.add_argument("run")
     p = sub.add_parser("export"); p.add_argument("run")
     p = sub.add_parser("finalize"); p.add_argument("run")
@@ -1285,8 +1317,16 @@ def main() -> None:
     p.add_argument("--sam-device", default="cpu")
     p.add_argument("--legacy", action="store_true", help="skip the box-size rule (runs made before it)")
     a = ap.parse_args()
+    # Inside the model's session (V2_SANDBOX is set on its process) only the
+    # read-only helpers run, and only on the folder the session was started
+    # in: no other run's tiles or answer, no tiling or finalizing of its own.
+    if os.environ.get("V2_SANDBOX"):
+        if a.cmd not in ("show", "contours", "zoom", "validate"):
+            out({"error": f"'{a.cmd}' is not available in the analysis session"}, 1)
+        if os.path.realpath(a.run) != os.path.realpath(os.getcwd()):
+            out({"error": "the run folder must be '.'"}, 1)
     try:
-        {"estimate-mpp": cmd_estimate_mpp, "tile": cmd_tile, "prepare": cmd_prepare, "density": cmd_density, "show": cmd_show, "contours": cmd_contours,
+        {"estimate-mpp": cmd_estimate_mpp, "tile": cmd_tile, "prepare": cmd_prepare, "density": cmd_density, "show": cmd_show, "contours": cmd_contours, "zoom": cmd_zoom,
          "validate": cmd_validate, "export": cmd_export, "finalize": cmd_finalize}[a.cmd](a)
     except SystemExit:
         raise

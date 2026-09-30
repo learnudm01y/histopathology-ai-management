@@ -110,8 +110,26 @@ class V2DiagnoseTest extends TestCase
         $s = $this->sample();
         $this->actingAs($this->user)->post('/admin/v2-diagnose', [
             'source' => 'existing', 'sample_id' => $s->id, 'sex' => 'unknown',
-        ])->assertSessionHasErrors(['organ', 'sex']);
+        ])->assertSessionHasErrors(['sex']);
+        // An archive slide takes its organ from the database; a new slide must name one.
+        $this->post('/admin/v2-diagnose', ['source' => 'server_path', 'server_path' => '/var/www/HISTO_AI/x.svs'])
+            ->assertSessionHasErrors(['organ']);
         $this->assertSame(0, V2Diagnosis::count());
+    }
+
+    public function test_an_archive_slide_brings_its_own_clinical_context(): void
+    {
+        Queue::fake();
+        $organ = \App\Models\Organ::firstOrCreate(['name' => 'Breast']);
+        $s = $this->sample();
+        $s->update(['organ_id' => $organ->id]);
+
+        $this->actingAs($this->user)->post('/admin/v2-diagnose', ['source' => 'existing', 'sample_id' => $s->id])
+            ->assertSessionHasNoErrors();
+        $this->assertSame('Breast', V2Diagnosis::latest('id')->first()->organ);
+
+        $this->getJson("/admin/v2-diagnose/archive?organ_id={$organ->id}&stain=all")
+            ->assertOk()->assertJsonPath('samples.0.id', $s->id)->assertJsonPath('samples.0.runs.0.status', 'queued');
     }
 
     public function test_a_completed_run_serves_its_result_and_records(): void
@@ -186,6 +204,8 @@ class V2DiagnoseTest extends TestCase
             [$normal, null, 'NORMAL', 'correct'], [$normal, null, 'BENIGN', 'correct'],
             [$normal, null, 'NONDX', 'partial'], [$normal, null, 'IDC', 'wrong'],
             [$benign, $pb, 'FA', 'correct'], [$benign, $pb, 'NORMAL', 'partial'], [$benign, $pb, 'LCIS', 'wrong'],
+            [$benign, $pb, 'SA', 'correct'], [$benign, $pb, 'ALH', 'partial'], [$benign, $pb, 'SUSP', 'partial'],
+            [$tumour, $idc, 'SUSP', 'partial'], [$normal, null, 'SUSP', 'partial'],
         ];
         foreach ($expect as [$cat, $sub, $code, $result]) {
             $this->assertSame($result, $case($cat, $sub, $code)->fresh()->verdict()['result'], "{$code} on {$cat}/{$sub}");
@@ -195,8 +215,8 @@ class V2DiagnoseTest extends TestCase
         $this->assertNull($case($tumour, $idc, null, 'analysing')->fresh()->verdict());
 
         $page = $this->actingAs($this->user)->get('/admin/v2-diagnose')->assertOk();
-        $page->assertSee('Against the recorded diagnosis (12 runs)')->assertSee('5 correct')
-             ->assertSee('3 partial')->assertSee('4 wrong');
+        $page->assertSee('Against the recorded diagnosis (17 runs)')->assertSee('6 correct')
+             ->assertSee('7 partial')->assertSee('4 wrong');
     }
 
     public function test_rerun_copies_the_inputs_into_a_new_run(): void
@@ -233,5 +253,80 @@ class V2DiagnoseTest extends TestCase
             $this->assertStringContainsString($needle, $p);
         }
         $this->assertDoesNotMatchRegularExpression('/\{\{[A-Z_]+\}\}/', $p, 'a placeholder was left unfilled');
+    }
+
+    public function test_tool_calls_outside_the_run_folder_are_violations(): void
+    {
+        $runner = app(\App\Services\V2DiagnoseRunner::class);
+        $dir = $this->runs . '/7';
+        File::ensureDirectoryExists($dir);
+        $py = $runner->pythonBin();
+        $ok = [
+            ['Read', ['file_path' => 'view/P001.jpg']], ['Read', ['file_path' => "{$dir}/sheets/sheet_01.jpg"]],
+            ['Glob', ['pattern' => 'view/*.jpg']], ['Write', ['file_path' => 'result.json']],
+            ['Edit', ['file_path' => "{$dir}/result.json"]],
+            ['Bash', ['command' => "{$py} tools/v2_tools.py show . P007"]],
+            ['Bash', ['command' => "{$py} tools/v2_tools.py contours . P007 --level 0.4"]],
+            ['Bash', ['command' => "{$py} tools/v2_tools.py zoom . P007 420 610"]],
+            ['Bash', ['command' => "{$py} tools/v2_tools.py validate ."]],
+            ['Bash', ['command' => 'cat manifest.json && ls sheets view']],
+            ['Bash', ['command' => 'cat manifest.json | head -c 3000 && ls sheets view']],
+        ];
+        foreach ($ok as [$tool, $in]) {
+            $this->assertNull($runner->toolViolation($dir, $tool, $in), json_encode([$tool, $in]));
+        }
+        $bad = [
+            ['Read', ['file_path' => '../6/result.json']], ['Read', ['file_path' => "{$dir}/../../../../.env"]],
+            ['Read', ['file_path' => '/etc/passwd']], ['Glob', ['pattern' => '../**/result.json']],
+            ['Glob', ['pattern' => '*.json', 'path' => '/var/www']],
+            ['Write', ['file_path' => 'tools/v2_tools.py']], ['Edit', ['file_path' => 'manifest.json']],
+            ['Bash', ['command' => "{$py} tools/v2_tools.py show ../6 P007"]],
+            ['Bash', ['command' => "{$py} tools/v2_tools.py validate . ; cat /etc/passwd"]],
+            ['Bash', ['command' => "{$py} tools/v2_tools.py finalize ."]],
+            ['Bash', ['command' => 'ls ..']], ['Bash', ['command' => 'cat /var/www/html/app/.env']],
+            ['Bash', ['command' => 'cat manifest.json && python3 -c "print(1)"']], ['Bash', ['command' => 'cat ~/.claude/x']],
+            ['Grep', ['pattern' => 'IDC']], ['WebFetch', ['url' => 'x']],
+        ];
+        foreach ($bad as [$tool, $in]) {
+            $this->assertNotNull($runner->toolViolation($dir, $tool, $in), json_encode([$tool, $in]));
+        }
+    }
+
+    public function test_a_changed_helper_or_a_recorded_violation_fails_the_integrity_check(): void
+    {
+        $runner = app(\App\Services\V2DiagnoseRunner::class);
+        $run = V2Diagnosis::create(['organ' => 'Breast', 'status' => 'analysing']);
+        $dir = $runner->runDir($run);
+        File::ensureDirectoryExists("{$dir}/tools");
+        file_put_contents("{$dir}/tools/v2_tools.py", 'print(1)');
+        file_put_contents("{$dir}/tools.sha256", hash('sha256', 'print(1)'));
+        file_put_contents("{$dir}/tool_calls.jsonl", json_encode(['tool' => 'Read', 'violation' => null]) . "\n");
+        $this->assertSame([], $runner->integrityViolations($run));
+
+        file_put_contents("{$dir}/tool_calls.jsonl", json_encode(['tool' => 'Read', 'violation' => 'read outside']) . "\n", FILE_APPEND);
+        $this->assertSame(['read outside'], $runner->integrityViolations($run));
+
+        file_put_contents("{$dir}/tools/v2_tools.py", 'import os');
+        $this->assertCount(2, $runner->integrityViolations($run));
+    }
+
+    public function test_case_details_that_name_the_slide_or_its_diagnosis_are_refused(): void
+    {
+        $runner = app(\App\Services\V2DiagnoseRunner::class);
+        $cat = \Illuminate\Support\Facades\DB::table('categories')->insertGetId(['label_en' => 'tumor']);
+        $sub = \Illuminate\Support\Facades\DB::table('disease_subtypes')->insertGetId(['category_id' => $cat, 'name' => 'ILC']);
+        $s = Sample::forceCreate(['entity_submitter_id' => 'TCGA-AC-A2FO', 'file_name' => 'TCGA-AC-A2FO-01Z-00-DX1.svs',
+                                  'category_id' => $cat, 'disease_subtype_id' => $sub]);
+        $mk = fn (?string $notes) => V2Diagnosis::create(['sample_id' => $s->id, 'organ' => 'Breast',
+                                                          'clinical_notes' => $notes, 'status' => 'queued']);
+
+        $this->assertSame([], $runner->blindingLeaks($mk(null)));
+        $this->assertSame([], $runner->blindingLeaks($mk('mass 2.3 cm, core biopsy, oncology review')));
+        $this->assertContains('ILC', $runner->blindingLeaks($mk('known ILC, re-excision')));
+        $this->assertContains('BRACS', $runner->blindingLeaks($mk('from the BRACS set')));
+        $this->assertNotEmpty($runner->blindingLeaks($mk('slide TCGA-AC-A2FO-01Z')));
+
+        (new RunV2Diagnosis($mk('ILC')->id))->handle($runner);
+        $this->assertSame('failed', V2Diagnosis::latest('id')->first()->status);
     }
 }

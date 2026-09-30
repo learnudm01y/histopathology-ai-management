@@ -50,6 +50,13 @@ class RunV2Diagnosis implements ShouldQueue
         $run = V2Diagnosis::findOrFail($this->runId);
 
         try {
+            // A reading is only worth scoring if the model never saw the
+            // answer: refuse before any work is spent on the slide.
+            if ($leaks = $runner->blindingLeaks($run)) {
+                throw new \RuntimeException('Refused: the case details name the slide, its archive or its recorded '
+                    . 'diagnosis (' . implode(', ', $leaks) . '). Remove them so the slide is read blind.');
+            }
+
             $wsi = $runner->resolveWsi($run);
             if (! $wsi) {
                 $this->waitForSlide($run);
@@ -77,6 +84,7 @@ class RunV2Diagnosis implements ShouldQueue
 
             $out = $runner->claude($run, $prompt);
             $this->account($run, $out);
+            $this->guard($runner, $run);
             $session = $out['session_id'] ?? null;
 
             $run->stage('finalising', 'Checking the result and converting it to slide coordinates.');
@@ -89,6 +97,7 @@ class RunV2Diagnosis implements ShouldQueue
                 $runner->mark($run, 'report', "The report failed a check — the AI analysis model is correcting it (repair {$i} of {$attempts})", null, null, 0.5);
                 $out = $runner->claude($run, $this->repairPrompt($final['errors'] ?? []), $session);
                 $this->account($run, $out);
+                $this->guard($runner, $run);
                 $session = $out['session_id'] ?? $session;
                 $run->stage('finalising', 'Checking the repaired result.');
                 $runner->mark($run, 'finalising', 'Corrected diagnosis received — checking it again');
@@ -172,6 +181,19 @@ class RunV2Diagnosis implements ShouldQueue
     }
 
     private ?string $claudeEnding = null;
+
+    /**
+     * Stop a run whose model stepped outside its folder or whose helper
+     * script changed: its answer may not come from the tissue alone, and
+     * finalize would execute the changed script.
+     */
+    private function guard(V2DiagnoseRunner $runner, V2Diagnosis $run): void
+    {
+        if ($v = $runner->integrityViolations($run)) {
+            throw new \RuntimeException('Integrity check failed, result discarded: '
+                . implode(' | ', array_slice($v, 0, 8)));
+        }
+    }
 
     private function repairPrompt(array $errors): string
     {
