@@ -412,7 +412,9 @@ class V2DiagnoseRunner
                 return $this->toolViolation($dir, 'Read', $in) !== null;
             case 'Bash':
                 $c = (string) ($in['command'] ?? '');
-                if (preg_match('#\.\.|~|\$|`#', $c)) {
+                // ~ only as the home directory and $ only as a variable: "~0.95"
+                // in a note (runs #21, #48) is text, not a path.
+                if (preg_match('#\.\./|/\.\.|(?:^|[\s\'"=(,])~(?:/|[\s\'"]|$)|\$[A-Za-z_{(]|`#', $c)) {
                     return true;
                 }
                 preg_match_all('#(?:^|[\s\'"=(,])(/[^\s\'")<>;|&,]+)#', $c, $m);

@@ -445,6 +445,10 @@ class V2DiagnoseTest extends TestCase
         $inside = "ls && {$py} -c \"import json;m=json.load(open('manifest.json'))\"";
         $log($call('a', $inside), json_encode(['denied' => 'a']) . "\n");
         $this->assertSame([], $runner->integrityViolations($run));
+        // "~" and "..." inside text are not paths (runs #21, #48 second attempt).
+        $log($call('a', "cat > /dev/null <<'EOF'\nEOF\n{$py} - <<'EOF'\nnotes=\"carcinoma itself ~0.95; tissue ~1-9% of each tile...\"\nEOF"),
+            json_encode(['denied' => 'a']) . "\n");
+        $this->assertSame([], $runner->integrityViolations($run));
         // Output thrown into /dev/null is not reaching outside (runs #48, #50).
         $log($call('a', "cat > /dev/null <<'EOF'\nEOF\n{$py} - <<'EOF'\nimport json\nEOF"), json_encode(['denied' => 'a']) . "\n");
         $this->assertSame([], $runner->integrityViolations($run));
