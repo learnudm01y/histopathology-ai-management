@@ -478,19 +478,76 @@ class V2DiagnoseController extends Controller
             return back()->withErrors(['run' => "Run #{$run->id} is still {$run->status}. Wait for it to finish, then delete it."]);
         }
 
+        $removed = $this->purgeClaudeRecords($run);
+
         $root = realpath((string) config('v2_diagnose.runs_dir'));
         $dir = $run->run_dir ? realpath($run->run_dir) : false;
         if ($root && $dir && $dir !== $root && str_starts_with($dir, $root . DIRECTORY_SEPARATOR)) {
             File::deleteDirectory($dir);
+            $removed[] = $dir;
         } elseif ($run->run_dir && $dir) {
             Log::warning("[V2Diagnose] run #{$run->id}: folder {$run->run_dir} is outside the runs directory, left in place");
         }
 
+        // The slide itself, its sample row and its viewer registration are
+        // the archive's, shared with every other run: none of them is touched.
         $id = $run->id;
         $run->delete();
-        Log::info("[V2Diagnose] run #{$id} deleted by user #" . (auth()->id() ?? '?'));
+        Log::info("[V2Diagnose] run #{$id} deleted by user #" . (auth()->id() ?? '?') . '; removed: ' . implode(', ', $removed));
 
         return redirect()->route('admin.v2-diagnose')->with('success', "Run #{$id} deleted.");
+    }
+
+    /**
+     * What the Claude CLI kept of a run outside its folder, in the worker's
+     * HOME: the session transcript (~15 MB a run) under
+     * .claude/projects/<the run folder, every non-alphanumeric as "-">/, and
+     * one session-env/<session id> entry per session.
+     *
+     * @return list<string> the paths removed
+     */
+    private function purgeClaudeRecords(V2Diagnosis $run): array
+    {
+        $home = rtrim((string) (config('v2_diagnose.claude.home') ?: getenv('HOME')), '/\\');
+        if ($home === '' || ! is_dir("{$home}/.claude")) {
+            return [];
+        }
+        $removed = [];
+
+        // The CLI names the folder after its working directory: the run folder.
+        $folders = collect([$run->run_dir, $this->runner->runDir($run), $run->run_dir ? realpath($run->run_dir) : null])
+            ->filter()->map(fn ($d) => preg_replace('/[^a-zA-Z0-9]/', '-', rtrim($d, '/\\')))->unique();
+
+        $sessions = collect([$run->claude_session_id]);
+        foreach ($folders as $name) {
+            $project = "{$home}/.claude/projects/{$name}";
+            // Only letters, digits and "-" by construction; it must also name this run.
+            if (! str_ends_with($name, '-' . $run->id) || ! is_dir($project)) {
+                continue;
+            }
+            foreach (glob("{$project}/*.jsonl") ?: [] as $f) {
+                $sessions->push(basename($f, '.jsonl'));
+            }
+            File::deleteDirectory($project);
+            $removed[] = $project;
+        }
+
+        foreach ($sessions->filter()->unique() as $id) {
+            // Only a session id — never a name that could climb out of the folder.
+            if (! preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $id)) {
+                continue;
+            }
+            $env = "{$home}/.claude/session-env/{$id}";
+            if (is_dir($env)) {
+                File::deleteDirectory($env);
+                $removed[] = $env;
+            } elseif (is_file($env)) {
+                @unlink($env);
+                $removed[] = $env;
+            }
+        }
+
+        return $removed;
     }
 
     /** A fresh run with the same inputs. The old one stays as it was. */
