@@ -83,6 +83,10 @@
           color:#4b3a94;background:#f3f1f8;font-size:1.15rem;text-decoration:none;transition:background .15s,color .15s}
   .v2-eye:hover{background:#4b3a94;color:#fff;text-decoration:none}
   table.v2-runs td:last-child{vertical-align:middle;text-align:center}
+  .v2-rowbtns{display:flex;gap:.35rem;justify-content:center}
+  .v2-del{display:inline-flex;align-items:center;justify-content:center;width:2rem;height:2rem;border:0;border-radius:6px;
+          color:#b03d64;background:#fbe9f0;font-size:1.1rem;cursor:pointer;transition:background .15s,color .15s}
+  .v2-del:hover{background:#b03d64;color:#fff}
 
   /* Archive: organ → stain → Filter, then every slide in a table. */
   .v2-filter{display:grid;grid-template-columns:minmax(0,22rem);gap:.9rem;align-items:end}
@@ -347,8 +351,14 @@
             @endif
           </td>
           <td class="v2-hint">{{ $r->created_at->format('Y-m-d H:i') }}</td>
-          <td><a href="{{ route('admin.v2-diagnose.show', $r) }}" class="v2-eye" title="Open run #{{ $r->id }}: slide, regions, heatmap"
-                 aria-label="Open run #{{ $r->id }}"><i class="mdi mdi-eye-outline"></i></a></td>
+          <td><div class="v2-rowbtns">
+            <a href="{{ route('admin.v2-diagnose.show', $r) }}" class="v2-eye" title="Open run #{{ $r->id }}: slide, regions, heatmap"
+               aria-label="Open run #{{ $r->id }}"><i class="mdi mdi-eye-outline"></i></a>
+            <button type="button" class="v2-del" data-del="{{ route('admin.v2-diagnose.destroy', $r) }}" data-id="{{ $r->id }}"
+                    data-slide="{{ $r->sample?->entity_submitter_id ?: ($r->sample?->file_name ?: 'sample #'.$r->sample_id) }}"
+                    data-dx="{{ $r->diagnosis }}" data-running="{{ $r->isRunning() ? $r->status : '' }}"
+                    title="Delete run #{{ $r->id }}" aria-label="Delete run #{{ $r->id }}"><i class="mdi mdi-trash-can-outline"></i></button>
+          </div></td>
         </tr>
       @endforeach
       </tbody>
@@ -359,6 +369,8 @@
   </div>
 </div>
 </form>
+{{-- Its own form: the runs table sits inside the run form, and forms cannot nest. --}}
+<form method="POST" id="delForm" style="display:none">@csrf @method('DELETE')</form>
 
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
 <script>
@@ -788,6 +800,30 @@
       .then(function (s) { if (s) { choose(s, true); if (meta) render(); } });
   }
   onSource();
+  /* ── Delete a run, after asking ───────────────────────────────────────── */
+  document.querySelectorAll('.v2-del').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var d = b.dataset;
+      if (d.running) {
+        var msg = 'Run #' + d.id + ' is still ' + d.running + '. Wait for it to finish, then delete it.';
+        return window.Swal ? Swal.fire({ icon: 'info', title: 'Still running', text: msg, confirmButtonColor: '#6a55c2' }) : alert(msg);
+      }
+      function send() { var f = document.getElementById('delForm'); f.action = d.del; f.submit(); }
+      if (!window.Swal) { if (confirm('Delete run #' + d.id + '? This cannot be undone.')) send(); return; }
+      Swal.fire({
+        icon: 'warning', title: 'Delete run #' + d.id + '?',
+        html: '<div class="v2-sw"><div class="v2-sw-name">' + esc(d.slide) + '</div>'
+          + (d.dx ? '<div>AI answer: <b>' + esc(d.dx) + '</b></div>' : '')
+          + '<div class="v2-sw-note">The result, its regions, heatmap and every file the run wrote are removed. This cannot be undone.</div></div>',
+        showCancelButton: true, confirmButtonText: 'Yes, delete it', cancelButtonText: 'Cancel',
+        confirmButtonColor: '#b03d64', cancelButtonColor: '#8a83a0', focusCancel: true,
+      }).then(function (res) {
+        if (!res.isConfirmed) return;
+        b.disabled = true;
+        send();
+      });
+    });
+  });
 })();
 </script>
 @endsection

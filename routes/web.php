@@ -155,7 +155,8 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::get('v2-diagnose/{run}/heat',              [V2DiagnoseController::class, 'heat'])->whereNumber('run')->name('v2-diagnose.heat');
         Route::get('v2-diagnose/{run}/asset/{path}',      [V2DiagnoseController::class, 'asset'])->whereNumber('run')->where('path', '.+')->name('v2-diagnose.asset');
         Route::get('v2-diagnose/{run}/download/{kind}',   [V2DiagnoseController::class, 'download'])->whereNumber('run')->name('v2-diagnose.download');
-        Route::post('v2-diagnose/{run}/rerun',            [V2DiagnoseController::class, 'rerun'])->whereNumber('run')->name('v2-diagnose.rerun');
+        Route::delete('v2-diagnose/{run}',                [V2DiagnoseController::class, 'destroy'])->whereNumber('run')->name('v2-diagnose.destroy');
+        Route::post('v2-diagnose/{run}/rerun',           [V2DiagnoseController::class, 'rerun'])->whereNumber('run')->name('v2-diagnose.rerun');
 
         // Cases (patients) — clinical case browser
         Route::get('cases',          [CasesController::class, 'index'])->name('cases.index');

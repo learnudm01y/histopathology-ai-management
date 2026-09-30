@@ -126,6 +126,33 @@ class V2DiagnoseTest extends TestCase
         $this->assertSame(0, V2Diagnosis::count());
     }
 
+    public function test_a_run_can_be_deleted_with_its_files_but_not_while_running(): void
+    {
+        $s = $this->sample();
+        $done = V2Diagnosis::create(['sample_id' => $s->id, 'organ' => 'Breast', 'status' => 'completed']);
+        $dir = "{$this->runs}/{$done->id}";
+        File::ensureDirectoryExists($dir);
+        file_put_contents("{$dir}/final.json", '{}');
+        $done->update(['run_dir' => $dir]);
+
+        $this->actingAs($this->user)->delete("/admin/v2-diagnose/{$done->id}")
+            ->assertRedirect('/admin/v2-diagnose')->assertSessionHas('success');
+        $this->assertNull(V2Diagnosis::find($done->id));
+        $this->assertDirectoryDoesNotExist($dir);
+
+        $busy = V2Diagnosis::create(['sample_id' => $s->id, 'organ' => 'Breast', 'status' => 'analysing']);
+        $this->delete("/admin/v2-diagnose/{$busy->id}")->assertSessionHasErrors('run');
+        $this->assertNotNull(V2Diagnosis::find($busy->id));
+
+        // A folder outside the runs directory is never removed.
+        $outside = storage_path('framework/testing/v2_outside');
+        File::ensureDirectoryExists($outside);
+        $odd = V2Diagnosis::create(['sample_id' => $s->id, 'organ' => 'Breast', 'status' => 'failed', 'run_dir' => $outside]);
+        $this->delete("/admin/v2-diagnose/{$odd->id}")->assertSessionHas('success');
+        $this->assertDirectoryExists($outside);
+        File::deleteDirectory($outside);
+    }
+
     public function test_the_archive_is_paged_and_filtered_on_the_server(): void
     {
         $organ = \App\Models\Organ::firstOrCreate(['name' => 'Breast']);

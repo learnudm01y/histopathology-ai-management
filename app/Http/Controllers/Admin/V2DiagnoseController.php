@@ -13,6 +13,7 @@ use App\Services\V2DiagnoseRunner;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -464,6 +465,32 @@ class V2DiagnoseController extends Controller
         $file = $run->run_dir . '/' . $name;
         abort_unless($run->run_dir && is_file($file), 404);
         return response()->download($file, "v2_run{$run->id}_{$name}", ['Content-Type' => $type]);
+    }
+
+    /**
+     * Delete a run: the row and everything it wrote. A run still working is
+     * refused — its worker would go on writing into a folder that is gone.
+     * Only a folder inside the runs directory is ever removed.
+     */
+    public function destroy(V2Diagnosis $run): RedirectResponse
+    {
+        if ($run->isRunning()) {
+            return back()->withErrors(['run' => "Run #{$run->id} is still {$run->status}. Wait for it to finish, then delete it."]);
+        }
+
+        $root = realpath((string) config('v2_diagnose.runs_dir'));
+        $dir = $run->run_dir ? realpath($run->run_dir) : false;
+        if ($root && $dir && $dir !== $root && str_starts_with($dir, $root . DIRECTORY_SEPARATOR)) {
+            File::deleteDirectory($dir);
+        } elseif ($run->run_dir && $dir) {
+            Log::warning("[V2Diagnose] run #{$run->id}: folder {$run->run_dir} is outside the runs directory, left in place");
+        }
+
+        $id = $run->id;
+        $run->delete();
+        Log::info("[V2Diagnose] run #{$id} deleted by user #" . (auth()->id() ?? '?'));
+
+        return redirect()->route('admin.v2-diagnose')->with('success', "Run #{$id} deleted.");
     }
 
     /** A fresh run with the same inputs. The old one stays as it was. */
