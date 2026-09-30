@@ -83,6 +83,61 @@
           color:#4b3a94;background:#f3f1f8;font-size:1.15rem;text-decoration:none;transition:background .15s,color .15s}
   .v2-eye:hover{background:#4b3a94;color:#fff;text-decoration:none}
   table.v2-runs td:last-child{vertical-align:middle;text-align:center}
+
+  /* Archive: organ → stain → Filter, then every slide in a table. */
+  .v2-filter{display:grid;grid-template-columns:minmax(0,16rem) minmax(0,20rem) auto;gap:.9rem;align-items:end}
+  @media(max-width:720px){.v2-filter{grid-template-columns:1fr}}
+  .v2-filter .btn{height:2.6rem;padding:0 1.6rem}
+  .v2-card select.v2-in{appearance:auto;padding-right:.6rem}
+  .v2-card select.v2-in:disabled{background:#f7f6fa;color:#a39db3}
+  .v2-archbar{display:flex;flex-wrap:wrap;gap:.6rem 1.2rem;align-items:center;margin:1.1rem 0 .6rem}
+  .v2-archbar .v2-in{max-width:22rem}
+  .v2-archbar .v2-chk{display:flex;align-items:center;gap:.4rem;margin:0;font-weight:500;font-size:.84rem;color:#41394f;cursor:pointer}
+  .v2-archbar .v2-count{margin-left:auto;font-size:.82rem;color:#7a7390}
+  .v2-tablewrap{overflow:auto;max-height:34rem;border:1px solid #ebe8f1;border-radius:8px}
+  table.v2-arch{width:100%;border-collapse:collapse;font-size:.84rem}
+  table.v2-arch th{position:sticky;top:0;z-index:1;background:#f7f6fa;color:#57516a;font-weight:600;font-size:.76rem;
+          text-transform:uppercase;letter-spacing:.03em;padding:.55rem .6rem;text-align:left;border-bottom:1px solid #e6e2ee;white-space:nowrap}
+  table.v2-arch td{padding:.55rem .6rem;border-bottom:1px solid #f0eef4;vertical-align:top;color:#2d2540}
+  table.v2-arch tbody tr{cursor:pointer;transition:background .1s}
+  table.v2-arch tbody tr:hover{background:#faf9fd}
+  table.v2-arch tbody tr.used{background:#fffaf0}
+  table.v2-arch tbody tr.used:hover{background:#fdf4e2}
+  table.v2-arch tbody tr.sel{background:#efeafb;box-shadow:inset 3px 0 0 #6a55c2}
+  table.v2-arch td.v2-radio{width:1.8rem;padding-right:0}
+  table.v2-arch td.v2-radio input{margin-top:.2rem;accent-color:#6a55c2;pointer-events:none}
+  .v2-id{font-weight:600;word-break:break-all}
+  .v2-sub{font-size:.76rem;color:#7a7390;margin-top:.15rem;line-height:1.35}
+  .v2-dx{display:inline-block;padding:.08rem .5rem;border-radius:5px;background:#eef3fb;color:#2f5586;font-weight:600;font-size:.8rem}
+  .v2-dx.normal{background:#e4f1ec;color:#2c6b5b}
+  .v2-dx.none{background:#f3f1f8;color:#8a83a0;font-weight:500}
+  .v2-used{display:inline-flex;align-items:center;gap:.3rem;padding:.1rem .5rem;border-radius:99px;background:#faf0da;color:#8a6414;
+          font-weight:600;font-size:.76rem;white-space:nowrap}
+  .v2-fresh{font-size:.78rem;color:#2c6b5b;white-space:nowrap}
+  .v2-runlink{display:block;font-size:.76rem;margin-top:.2rem;white-space:nowrap}
+  .v2-missing{color:#b8b2c8}
+  .v2-empty{padding:1.4rem;text-align:center;color:#7a7390}
+
+  /* The slide picked, in full. */
+  .v2-picked{margin-top:1rem;border:1px solid #d9d0f2;background:#fbfaff;border-radius:8px;padding:1rem 1.1rem}
+  .v2-picked h4{margin:0 0 .7rem;font-size:.98rem;display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+  .v2-picked dl{display:grid;grid-template-columns:repeat(auto-fill,minmax(13rem,1fr));gap:.6rem 1.2rem;margin:0}
+  .v2-picked dt{font-size:.72rem;text-transform:uppercase;letter-spacing:.03em;color:#8a83a0;font-weight:600}
+  .v2-picked dd{margin:.1rem 0 0;font-size:.88rem;color:#2d2540}
+  .v2-prev{display:flex;flex-wrap:wrap;gap:.7rem;margin-top:.9rem}
+  .v2-prev a{display:flex;gap:.6rem;align-items:center;padding:.45rem .6rem;border:1px solid #eadfc4;background:#fffaf0;border-radius:7px;
+          font-size:.82rem;color:#41394f;text-decoration:none}
+  .v2-prev a:hover{border-color:#d9c38f}
+  .v2-prev img{width:3.4rem;height:2.6rem;object-fit:cover;border-radius:4px;background:#eee}
+
+  /* Context the archive already holds is shown, not asked for. */
+  .v2-known{display:none!important}
+  form.show-known .v2-known{display:block!important}
+  .v2-knownbox{background:#f0f7f4;border:1px solid #cfe5dc;border-radius:7px;padding:.7rem .85rem;font-size:.85rem;color:#2d4a40;margin-bottom:.4rem}
+  .v2-knownbox b{font-weight:600}
+  .v2-knownbox ul{margin:.35rem 0 0;padding-left:1.1rem}
+  .v2-knownbox button{border:0;background:none;padding:0;color:#4b3a94;font-weight:600;cursor:pointer;font-size:.82rem}
+  .v2-wait{background:#f7f6fa;border-radius:7px;padding:.7rem .85rem;font-size:.85rem;color:#7a7390}
 </style>
 
 <h2 style="margin-bottom:.35rem">V2 Diagnose</h2>
@@ -97,9 +152,9 @@
   <div class="alert alert-danger">@foreach($errors->all() as $e)<div>{{ $e }}</div>@endforeach</div>
 @endif
 
-<div class="v2-grid">
-  <form method="POST" action="{{ route('admin.v2-diagnose.store') }}" enctype="multipart/form-data" class="v2-card">
-    @csrf
+<form method="POST" action="{{ route('admin.v2-diagnose.store') }}" enctype="multipart/form-data" id="v2form">
+  @csrf
+  <div class="v2-card">
     <h3>1 · The slide</h3>
     <input type="hidden" name="source" id="source" value="{{ old('source', 'existing') }}">
     <div class="v2-tabs">
@@ -109,16 +164,39 @@
     </div>
 
     <div class="v2-pane" data-src="existing">
-      <label for="sample_search">Sample</label>
-      <input type="hidden" name="sample_id" id="sample_id" value="{{ old('sample_id', $picked) }}">
-      <div class="v2-combo" id="sampleCombo">
-        <input type="text" id="sample_search" class="v2-in" autocomplete="off"
-               placeholder="Search by case id, file name or #id">
-        <button type="button" class="v2-clear" tabindex="-1" aria-label="Clear">&times;</button>
-        <button type="button" class="v2-caret" tabindex="-1" aria-label="Show all"></button>
-        <div class="v2-menu" role="listbox"></div>
+      <input type="hidden" name="sample_id" id="sample_id" value="{{ $picked['id'] ?? '' }}">
+      <div class="v2-filter">
+        <div>
+          <label for="f_organ">Organ <span class="req">*</span></label>
+          <select id="f_organ" class="v2-in">
+            <option value="">Choose an organ</option>
+            @foreach($archive as $o)
+              <option value="{{ $o['id'] }}">{{ $o['name'] }} ({{ $o['n'] }})</option>
+            @endforeach
+          </select>
+        </div>
+        <div>
+          <label for="f_stain">Stain <span class="req">*</span></label>
+          <select id="f_stain" class="v2-in" disabled><option value="">Choose the organ first</option></select>
+        </div>
+        <div><button type="button" id="f_go" class="btn btn-primary" disabled>Filter</button></div>
       </div>
-      <div class="v2-hint">{{ $samples->count() }} slides whose image is on Drive. Picking one fills in what the database knows about the patient.</div>
+      <div class="v2-hint">{{ $archive->sum('n') }} slides whose image is on Drive. Slides already run through V2 Diagnose are marked.</div>
+
+      <div id="arch" hidden>
+        <div class="v2-archbar">
+          <input type="search" id="f_q" class="v2-in" placeholder="Search case id, file, diagnosis, site…" autocomplete="off">
+          <label class="v2-chk"><input type="checkbox" id="f_unused"> Only slides not run before</label>
+          <span class="v2-count" id="f_count"></span>
+        </div>
+        <div class="v2-tablewrap">
+          <table class="v2-arch">
+            <thead><tr><th></th><th>Slide</th><th>Recorded diagnosis</th><th>Patient</th><th>Presentation</th><th>Pathology</th><th>V2 runs</th></tr></thead>
+            <tbody id="f_rows"></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="picked" class="v2-picked" hidden></div>
     </div>
     <div class="v2-pane" data-src="server_path">
       <label for="server_path">Path</label>
@@ -135,10 +213,15 @@
       <label for="label">Label <span class="v2-hint">(optional)</span></label>
       <input name="label" id="label" class="v2-in" value="{{ old('label') }}" placeholder="e.g. TCGA-AN-A046">
     </div>
+  </div>
 
-    <h3 style="margin-top:1.5rem">2 · Clinical context</h3>
+<div class="v2-grid">
+  <div class="v2-card">
+    <h3>2 · Clinical context</h3>
+    <div class="v2-wait" id="ctxWait" hidden>Pick a slide above — whatever the archive holds about the patient is filled in here.</div>
+    <div class="v2-knownbox" id="knownBox" hidden></div>
     <div class="v2-row">
-      <div>
+      <div data-field="organ">
         <label for="organ">Organ <span class="req">*</span></label>
         <div class="v2-combo" id="organCombo">
           <input type="text" name="organ" id="organ" class="v2-in" required autocomplete="off"
@@ -148,21 +231,21 @@
           <div class="v2-menu" role="listbox"></div>
         </div>
       </div>
-      <div>
+      <div data-field="stain">
         <label for="stain">Stain</label>
         <div class="v2-combo" id="stainCombo">
           <input type="text" name="stain" id="stain" class="v2-in" autocomplete="off"
-                 value="{{ old('stain', 'H&E') }}" placeholder="Choose or type">
+                 value="{{ old('stain') }}" placeholder="e.g. H&E">
           <button type="button" class="v2-clear" tabindex="-1" aria-label="Clear">&times;</button>
           <button type="button" class="v2-caret" tabindex="-1" aria-label="Show all"></button>
           <div class="v2-menu" role="listbox"></div>
         </div>
       </div>
-      <div>
+      <div data-field="age">
         <label for="age">Age</label>
         <input type="number" name="age" id="age" min="0" max="120" class="v2-in" value="{{ old('age') }}" placeholder="years">
       </div>
-      <div>
+      <div data-field="sex">
         <label>Sex</label>
         <div class="v2-seg" id="sex">
           @foreach(['' => '—', 'female' => 'Female', 'male' => 'Male', 'other' => 'Other'] as $val => $text)
@@ -171,11 +254,11 @@
         </div>
       </div>
     </div>
-    <div class="v2-field">
+    <div class="v2-field" data-field="race">
       <label for="race">Race / ancestry <span class="v2-hint">(if known)</span></label>
       <input name="race" id="race" class="v2-in" value="{{ old('race') }}">
     </div>
-    <div class="v2-field">
+    <div class="v2-field" data-field="clinical_notes">
       <label for="clinical_notes">Notes <span class="v2-hint">(optional)</span></label>
       <textarea name="clinical_notes" id="clinical_notes" rows="3" class="v2-in"
                 maxlength="1000" placeholder="e.g. mass 2.3 cm, core biopsy">{{ old('clinical_notes') }}</textarea>
@@ -189,8 +272,8 @@
       output: ROI, heatmap, SAM prompts{{ config('v2_diagnose.sam.checkpoint') ? ' + SAM masks' : '' }}.
     </div>
 
-    <button class="btn btn-primary" style="margin-top:1rem;width:100%">Run V2 Diagnose</button>
-  </form>
+    <button class="btn btn-primary" id="runBtn" style="margin-top:1rem;width:100%">Run V2 Diagnose</button>
+  </div>
 
   <div class="v2-card">
     <h3>Every run</h3>
@@ -245,6 +328,7 @@
     @endif
   </div>
 </div>
+</form>
 
 <script>
 (function () {
@@ -376,38 +460,221 @@
   var organ = combo(document.getElementById('organCombo'), names(@json($organs)));
   var stain = combo(document.getElementById('stainCombo'), names(@json($stains)));
 
-  // Fill only the fields still empty: what the user typed wins over the database.
-  var base = @json(url('admin/v2-diagnose/sample'));
+  /* ── The archive: organ → stain → Filter → table ─────────────────────── */
+  var form = document.getElementById('v2form');
   var sid = document.getElementById('sample_id');
-  function prefill() {
-    var id = parseInt(sid.value, 10);
-    if (!id) return;
-    fetch(base + '/' + id + '/context', { headers: { 'Accept': 'application/json' } })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (c) {
-        if (!c) return;
-        if (c.organ && !document.getElementById('organ').value) organ.setValue(c.organ);
-        if (c.stain && !document.getElementById('stain').value) stain.setValue(c.stain);
-        ['age', 'race'].forEach(function (k) {
-          var el = document.getElementById(k);
-          if (c[k] != null && !el.value) el.value = c[k];
-        });
-        var none = document.querySelector('#sex input[value=""]');
-        var sex = c.sex && document.querySelector('#sex input[value="' + String(c.sex).toLowerCase() + '"]');
-        if (sex && none.checked) sex.checked = true;
-      });
+  var archive = @json($archive);
+  var picked = @json($picked);
+  var fOrgan = document.getElementById('f_organ'), fStain = document.getElementById('f_stain');
+  var fGo = document.getElementById('f_go'), fQ = document.getElementById('f_q'), fUnused = document.getElementById('f_unused');
+  var rowsEl = document.getElementById('f_rows'), countEl = document.getElementById('f_count');
+  var archEl = document.getElementById('arch'), pickedEl = document.getElementById('picked');
+  var rows = [], byId = {}, truncated = false;
+  var archiveUrl = @json(route('admin.v2-diagnose.archive'));
+  var VERDICT = { correct: '✓ correct', partial: '≈ partial', wrong: '✗ wrong' };
+
+  function fillStains() {
+    var o = archive.find(function (x) { return String(x.id) === fOrgan.value; });
+    fStain.innerHTML = o
+      ? '<option value="">Choose a stain</option>'
+        + o.stains.map(function (s) { return '<option value="' + s.id + '">' + esc(s.name) + ' (' + s.n + ')</option>'; }).join('')
+        + (o.stains.length > 1 ? '<option value="all">Any stain (' + o.n + ')</option>' : '')
+      : '<option value="">Choose the organ first</option>';
+    fStain.disabled = !o;
+    if (o && o.stains.length === 1) fStain.value = o.stains[0].id;
+    fGo.disabled = !fStain.value;
+  }
+  fOrgan.addEventListener('change', fillStains);
+  fStain.addEventListener('change', function () { fGo.disabled = !fStain.value; });
+
+  function load(thenPick) {
+    if (!fOrgan.value || !fStain.value) return;
+    fGo.disabled = true; fGo.textContent = 'Loading…';
+    fetch(archiveUrl + '?organ_id=' + encodeURIComponent(fOrgan.value) + '&stain=' + encodeURIComponent(fStain.value),
+          { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (d) {
+        rows = d.samples; truncated = d.truncated; byId = {};
+        rows.forEach(function (s) { byId[s.id] = s; });
+        archEl.hidden = false;
+        if (byId[sid.value]) choose(byId[sid.value], true);
+        else if (!thenPick) unpick();
+        render();
+      })
+      .catch(function (e) {
+        archEl.hidden = false; rows = []; render();
+        rowsEl.innerHTML = '<tr><td colspan="7" class="v2-empty">Could not load the slides (' + esc(e.message) + ').</td></tr>';
+      })
+      .finally(function () { fGo.disabled = false; fGo.textContent = 'Filter'; });
+  }
+  fGo.addEventListener('click', function () { load(false); });
+
+  function dash(v) { return v == null || v === '' ? '<span class="v2-missing">—</span>' : esc(v); }
+  function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+  function dxBadge(s) {
+    var name = s.disease || s.category;
+    if (!name) return '<span class="v2-dx none">not recorded</span>';
+    var normal = /normal/i.test(name);
+    return '<span class="v2-dx' + (normal ? ' normal' : '') + '">' + esc(name) + '</span>'
+      + (s.disease && s.category && s.category.toLowerCase() !== s.disease.toLowerCase() ? '<div class="v2-sub">' + esc(s.category) + '</div>' : '');
+  }
+  function patient(s) {
+    var p = [s.sex ? cap(s.sex) : null, s.age != null ? s.age + ' y' : null].filter(Boolean).join(' · ');
+    return (p ? '<span style="white-space:nowrap">' + esc(p) + '</span>' : dash(null)) + (s.race ? '<div class="v2-sub">' + esc(s.race) + '</div>' : '');
+  }
+  function haystack(s) {
+    return [s.id, s.label, s.file, s.case, s.project, s.disease, s.category, s.primary_dx, s.site, s.laterality,
+            s.method, s.stage, s.receptors, s.sex, s.race].filter(Boolean).join(' ').toLowerCase();
   }
 
-  @php
-    $sampleItems = $samples->map(fn ($s) => [
-        'value' => $s->id,
-        'label' => $s->entity_submitter_id ?: ($s->file_name ?: 'Sample #'.$s->id),
-        'sub'   => '#'.$s->id.($s->entity_submitter_id && $s->file_name ? ' · '.\Illuminate\Support\Str::limit($s->file_name, 28) : ''),
-    ])->values();
-  @endphp
-  var samples = @json($sampleItems);
-  combo(document.getElementById('sampleCombo'), samples, { hidden: sid, onPick: prefill });
-  if (sid.value) prefill();
+  function render() {
+    var words = fQ.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    var list = rows.filter(function (s) {
+      if (fUnused.checked && s.runs.length) return false;
+      var h = haystack(s);
+      return words.every(function (w) { return h.indexOf(w.replace(/^#/, '')) !== -1; });
+    });
+    var used = rows.filter(function (s) { return s.runs.length; }).length;
+    countEl.textContent = list.length + ' of ' + rows.length + ' slides · ' + used + ' already run'
+      + (truncated ? ' · only the newest ' + rows.length + ' shown' : '');
+    if (!list.length) {
+      rowsEl.innerHTML = '<tr><td colspan="7" class="v2-empty">' + (rows.length ? 'No slide matches.' : 'No slide in the archive for this organ and stain.') + '</td></tr>';
+      return;
+    }
+    rowsEl.innerHTML = list.map(function (s) {
+      var last = s.runs[0];
+      var runs = last
+        ? '<span class="v2-used" title="This slide has been through V2 Diagnose before">● Used ×' + s.runs.length + '</span>'
+          + '<a class="v2-runlink" href="' + last.url + '" target="_blank" onclick="event.stopPropagation()">#' + last.id + ' · '
+          + esc(last.verdict ? VERDICT[last.verdict] : last.status) + ' · ' + esc(last.when) + '</a>'
+        : '<span class="v2-fresh">Not run yet</span>';
+      var pres = [s.site, s.laterality && !(s.site || '').toLowerCase().includes(s.laterality.toLowerCase()) ? s.laterality : null].filter(Boolean).join(' · ');
+      var path = [s.stage, s.tnm].filter(Boolean).join(' · ');
+      return '<tr data-id="' + s.id + '" class="' + (s.runs.length ? 'used' : '') + (String(s.id) === sid.value ? ' sel' : '') + '">'
+        + '<td class="v2-radio"><input type="radio" tabindex="-1"' + (String(s.id) === sid.value ? ' checked' : '') + '></td>'
+        + '<td><div class="v2-id">' + esc(s.case || s.label) + '</div><div class="v2-sub">#' + s.id
+          + (s.file ? ' · ' + esc(s.file.length > 34 ? s.file.slice(0, 32) + '…' : s.file) : '') + (s.stain ? '<br>' + esc(s.stain) : '') + '</div></td>'
+        + '<td>' + dxBadge(s) + (s.primary_dx ? '<div class="v2-sub">' + esc(s.primary_dx) + '</div>' : '') + '</td>'
+        + '<td>' + patient(s) + '</td>'
+        + '<td>' + dash(pres) + (s.method ? '<div class="v2-sub">' + esc(s.method) + '</div>' : '') + '</td>'
+        + '<td>' + dash(path) + (s.receptors ? '<div class="v2-sub">' + esc(s.receptors) + '</div>' : '') + '</td>'
+        + '<td>' + runs + '</td></tr>';
+    }).join('');
+  }
+  fQ.addEventListener('input', render);
+  fUnused.addEventListener('change', render);
+  rowsEl.addEventListener('click', function (e) {
+    var tr = e.target.closest('tr[data-id]');
+    if (tr && byId[tr.dataset.id]) { choose(byId[tr.dataset.id]); render(); }
+  });
+
+  function choose(s, quiet) {
+    sid.value = s.id;
+    var item = function (k, v) { return v == null || v === '' ? '' : '<div><dt>' + k + '</dt><dd>' + esc(v) + '</dd></div>'; };
+    pickedEl.innerHTML = '<h4>Selected: ' + esc(s.case || s.label) + ' <span class="v2-hint">sample #' + s.id + '</span>'
+      + (s.runs.length ? '<span class="v2-used">● Already run ×' + s.runs.length + '</span>' : '<span class="v2-fresh">Not run yet</span>')
+      + ' <a href="' + s.url + '" target="_blank" class="v2-hint" style="margin-left:auto">Open sample page ↗</a></h4><dl>'
+      + item('Recorded diagnosis', [s.disease, s.category && s.category !== s.disease ? '(' + s.category + ')' : null].filter(Boolean).join(' '))
+      + item('Primary diagnosis (clinical record)', s.primary_dx)
+      + item('Sex', cap(s.sex)) + item('Age', s.age != null ? s.age + ' years' : null) + item('Race', s.race)
+      + item('Site', s.site) + item('Laterality', s.laterality) + item('Obtained by', s.method)
+      + item('Tumour', s.tumour) + item('Metastasis at diagnosis', s.metastasis)
+      + item('Stage', [s.stage, s.tnm].filter(Boolean).join(' · ')) + item('Lymph nodes', s.nodes) + item('Receptors', s.receptors)
+      + item('Organ', s.organ) + item('Stain', s.stain) + item('Project', s.project) + item('File', s.file)
+      + '</dl>'
+      + (s.has_clinical ? '' : '<div class="v2-hint" style="margin-top:.6rem">No clinical record is linked to this slide — the context below has to be entered by hand.</div>')
+      + (s.runs.length ? '<div class="v2-prev">' + s.runs.map(function (r) {
+          return '<a href="' + r.url + '" target="_blank">' + (r.overview ? '<img src="' + r.overview + '" alt="" loading="lazy">' : '')
+            + '<span><b>Run #' + r.id + '</b> · ' + esc(r.when) + '<br>' + esc(r.diagnosis || r.status)
+            + (r.verdict ? ' · ' + VERDICT[r.verdict] : '') + '</span></a>';
+        }).join('') + '</div>' : '');
+    pickedEl.hidden = false;
+    applyKnown(s.form, s);
+    if (!quiet) pickedEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+  function unpick() { sid.value = ''; pickedEl.hidden = true; applyKnown(null); }
+
+  /* ── Section 2: what the archive knows is filled and not asked for ───── */
+  var FIELDS = ['organ', 'stain', 'age', 'sex', 'race', 'clinical_notes'];
+  var LABEL = { organ: 'Organ', stain: 'Stain', age: 'Age', sex: 'Sex', race: 'Race', clinical_notes: 'Notes' };
+  var dirty = {}, auto = {};
+  function get(k) {
+    if (k === 'sex') { var c = document.querySelector('#sex input:checked'); return c ? c.value : ''; }
+    return document.getElementById(k).value;
+  }
+  function set(k, v) {
+    v = v == null ? '' : String(v);
+    if (k === 'sex') { var r = document.querySelector('#sex input[value="' + v + '"]'); if (r) r.checked = true; }
+    else if (k === 'organ') organ.setValue(v);
+    else if (k === 'stain') stain.setValue(v);
+    else document.getElementById(k).value = v;
+  }
+  FIELDS.forEach(function (k) {
+    var box = document.querySelector('[data-field="' + k + '"]');
+    box.addEventListener('input', function () { dirty[k] = true; });
+    box.addEventListener('change', function () { dirty[k] = true; });
+    // Coming back with errors: what was sent is the user's, not the archive's.
+    if (@json($errors->any()) && get(k)) dirty[k] = true;
+  });
+
+  function applyKnown(known, s) {
+    var shown = [];
+    FIELDS.forEach(function (k) {
+      var box = document.querySelector('[data-field="' + k + '"]');
+      var v = known && known[k] != null ? String(known[k]) : null;
+      if (v !== null && (!dirty[k] || get(k) === v)) {
+        set(k, v); auto[k] = v; dirty[k] = false;
+        box.classList.add('v2-known');
+        shown.push([k, k === 'sex' ? cap(v) : (k === 'age' ? v + ' years' : v)]);
+      } else {
+        if (auto[k] !== undefined && get(k) === auto[k]) set(k, '');
+        delete auto[k];
+        box.classList.remove('v2-known');
+      }
+    });
+    var kb = document.getElementById('knownBox');
+    var missing = known ? FIELDS.filter(function (k) { return !auto[k]; }).map(function (k) { return LABEL[k]; }) : [];
+    kb.innerHTML = shown.length
+      ? '<b>From the archive — not asked again:</b><ul>' + shown.map(function (p) { return '<li>' + LABEL[p[0]] + ': ' + esc(p[1]) + '</li>'; }).join('')
+        + '</ul><div style="margin-top:.4rem">' + (missing.length ? 'Not on record: ' + esc(missing.join(', ')) + ' — fill in below if known. ' : '')
+        + '<button type="button" id="editKnown">' + (form.classList.contains('show-known') ? 'Hide' : 'Edit') + ' these</button></div>'
+        + '<div class="v2-hint">The recorded diagnosis, stage and receptors are never sent: they are what the answer is checked against.</div>'
+      : '';
+    kb.hidden = !shown.length;
+    document.getElementById('ctxWait').hidden = !(src.value === 'existing' && !sid.value);
+  }
+  document.getElementById('knownBox').addEventListener('click', function (e) {
+    if (e.target.id !== 'editKnown') return;
+    form.classList.toggle('show-known');
+    e.target.textContent = (form.classList.contains('show-known') ? 'Hide' : 'Edit') + ' these';
+  });
+
+  // The slide's own context applies only while a slide from the archive is the input.
+  function onSource() {
+    var existing = src.value === 'existing';
+    document.getElementById('organ').required = !existing;
+    if (existing && byId[sid.value]) applyKnown(byId[sid.value].form);
+    else applyKnown(null);
+    if (!existing && !get('stain')) set('stain', 'H&E');
+  }
+  document.querySelectorAll('.v2-tab').forEach(function (t) { t.addEventListener('click', onSource); });
+
+  form.addEventListener('submit', function (e) {
+    if (src.value === 'existing' && !sid.value) {
+      e.preventDefault();
+      (archEl.hidden ? fOrgan : archEl).scrollIntoView({ behavior: 'smooth', block: 'center' });
+      alert('Choose a slide from the table first: organ, stain, Filter, then click a row.');
+    }
+  });
+
+  // A slide named in the URL, or the form coming back with errors: filter to it and pick it.
+  if (picked && archive.some(function (o) { return o.id === picked.organ; })) {
+    fOrgan.value = picked.organ; fillStains();
+    if ([].some.call(fStain.options, function (o) { return o.value === picked.stain; })) fStain.value = picked.stain;
+    fGo.disabled = !fStain.value;
+    load(true);
+  }
+  onSource();
 })();
 </script>
 @endsection

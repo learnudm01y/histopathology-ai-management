@@ -44,38 +44,205 @@ class V2DiagnoseController extends Controller
                 }
             });
 
-        $samples = Sample::where('storage_status', 'available')
-            ->whereNotNull('wsi_remote_path')
-            ->orderByDesc('id')->limit(1000)
-            ->get(['id', 'entity_submitter_id', 'file_name']);
+        // The archive, counted by organ and stain, so the two filters only
+        // offer what holds a slide — and say how many.
+        $counts = $this->archive()->selectRaw('organ_id, stain_id, count(*) as n')
+            ->groupBy('organ_id', 'stain_id')->get();
+        $organNames = Organ::whereIn('id', $counts->pluck('organ_id')->filter())->pluck('name', 'id');
+        $stainNames = Stain::whereIn('id', $counts->pluck('stain_id')->filter())->pluck('name', 'id');
+        $archive = $counts->groupBy(fn ($c) => (int) $c->organ_id)
+            ->map(fn ($rows, $organId) => [
+                'id'     => $organId,
+                'name'   => $organNames[$organId] ?? 'Organ not recorded',
+                'n'      => $rows->sum('n'),
+                'stains' => $rows->map(fn ($c) => [
+                    'id'   => $c->stain_id ? (string) $c->stain_id : 'none',
+                    'name' => $c->stain_id ? ($stainNames[$c->stain_id] ?? "Stain #{$c->stain_id}") : 'Stain not recorded',
+                    'n'    => (int) $c->n,
+                ])->sortBy(fn ($s) => [$s['id'] === 'none', $s['name']])->values(),
+            ])->sortBy('name')->values();
+
+        // A slide asked for by id (a link from elsewhere, or the form coming
+        // back with errors) opens with its organ and stain already filtered.
+        $pickedId = (int) old('sample_id', $request->integer('sample_id')) ?: null;
+        $picked = $pickedId ? Sample::find($pickedId, ['id', 'organ_id', 'stain_id']) : null;
 
         return view('admin.v2-diagnose.index', [
             'runs'    => $runs,
             'tally'   => $tally,
-            'samples' => $samples,
+            'archive' => $archive,
             'organs'  => Organ::orderBy('name')->pluck('name'),
             'stains'  => Stain::orderBy('name')->pluck('name'),
-            'picked'  => $request->integer('sample_id') ?: null,
+            'picked'  => $picked ? [
+                'id'    => $picked->id,
+                'organ' => (int) $picked->organ_id,
+                'stain' => $picked->stain_id ? (string) $picked->stain_id : 'none',
+            ] : null,
         ]);
     }
 
-    /** What the database already knows about a slide, to pre-fill the form. */
+    /**
+     * The archive slides of one organ and stain, each with what the database
+     * knows about it and every earlier V2 run on it.
+     */
+    public function archiveSamples(Request $request): JsonResponse
+    {
+        $v = $request->validate([
+            'organ_id' => ['required', 'integer'],
+            'stain'    => ['required', 'string', 'max:10'],
+        ]);
+
+        $q = $this->archive()->with(self::PROFILE_WITH);
+        $v['organ_id'] ? $q->where('organ_id', $v['organ_id']) : $q->whereNull('organ_id');
+        match ($v['stain']) {
+            'all'   => null,
+            'none'  => $q->whereNull('stain_id'),
+            default => $q->where('stain_id', (int) $v['stain']),
+        };
+        $samples = $q->orderByDesc('id')->limit(self::ARCHIVE_LIMIT + 1)->get();
+        $more = $samples->count() > self::ARCHIVE_LIMIT;
+        $samples = $samples->take(self::ARCHIVE_LIMIT);
+
+        $runs = $this->runsFor($samples);
+
+        return response()->json([
+            'samples'   => $samples->map(fn ($s) => $this->profile($s, $runs->get($s->id, collect())))->values(),
+            'truncated' => $more,
+        ]);
+    }
+
+    /** What the database already knows about one slide, to pre-fill the form. */
     public function sampleContext(Sample $sample): JsonResponse
     {
-        $sample->loadMissing(['organ:id,name', 'stain:id,name', 'patientCase.clinicalInfo']);
-        $c = $sample->patientCase?->clinicalInfo;
+        $sample->loadMissing(self::PROFILE_WITH);
+        return response()->json($this->profile($sample, $this->runsFor(collect([$sample]))->get($sample->id, collect())));
+    }
+
+    private const ARCHIVE_LIMIT = 2000;
+
+    /** Relations a profile reads — the clinical row without its large JSON copies. */
+    private const PROFILE_WITH = [
+        'organ:id,name', 'stain:id,name', 'category:id,label_en', 'diseaseSubtype:id,name',
+        'patientCase:id,case_id,submitter_id,project_id',
+        'patientCase.clinicalInfo:id,case_id,project_id,gender,race,age_at_index,days_to_birth,'
+            . 'primary_diagnosis,tissue_or_organ_of_origin,site_of_resection_or_biopsy,sites_of_involvement,'
+            . 'laterality,method_of_diagnosis,classification_of_tumor,metastasis_at_diagnosis,'
+            . 'ajcc_pathologic_stage,ajcc_pathologic_t,ajcc_pathologic_n,ajcc_pathologic_m,'
+            . 'lymph_nodes_positive,lymph_nodes_tested,molecular_tests,vital_status',
+    ];
+
+    /** Slides a run can read: the image is on Drive. */
+    private function archive()
+    {
+        return Sample::where('storage_status', 'available')->whereNotNull('wsi_remote_path');
+    }
+
+    /** Earlier V2 runs, by slide, newest first. */
+    private function runsFor($samples)
+    {
+        $bySample = $samples->keyBy('id');
+        return V2Diagnosis::whereIn('sample_id', $bySample->keys())->latest('id')
+            ->get(['id', 'sample_id', 'status', 'diagnosis', 'diagnosis_code', 'run_dir', 'created_at'])
+            ->each(fn ($r) => $r->setRelation('sample', $bySample[$r->sample_id]))
+            ->groupBy('sample_id');
+    }
+
+    /**
+     * One slide as the archive table shows it.
+     *
+     * `form` holds what is sent to the model with the run. The recorded
+     * diagnosis, stage and receptor status are shown to the user but never
+     * put there: they are the answer the run is judged against.
+     */
+    private function profile(Sample $s, $runs): array
+    {
+        $c = $s->patientCase?->clinicalInfo;
+        $known = fn ($x) => $x !== null && $x !== '' && ! in_array(strtolower((string) $x),
+            ['not reported', 'unknown', 'not allowed to collect', "'--", '--'], true) ? $x : null;
+
         $age = $c?->age_at_index;
         if ($age === null && $c?->days_to_birth) {
             $age = (int) floor(abs($c->days_to_birth) / 365.25);
         }
+        $sex = strtolower((string) $known($c?->gender));
+        $sex = in_array($sex, ['female', 'male'], true) ? $sex : null;
 
-        return response()->json([
-            'organ' => $sample->organ?->name,
-            'stain' => $sample->stain?->name,
-            'age'   => $age,
-            'sex'   => $c?->gender ?: $sample->patientCase?->gender,
-            'race'  => $c?->race && ! in_array(strtolower($c->race), ['not reported', 'unknown'], true) ? $c->race : null,
-        ]);
+        // "Breast, NOS" says nothing once a quadrant is named.
+        $sites = collect($c?->sites_of_involvement ?? [])->filter()->unique();
+        $specific = $sites->reject(fn ($x) => str_ends_with($x, ', NOS'));
+        $site = ($specific->isNotEmpty() ? $specific : $sites)->implode('; ')
+            ?: $known($c?->site_of_resection_or_biopsy) ?: $known($c?->tissue_or_organ_of_origin);
+        $laterality = $known($c?->laterality);
+        $method = $known($c?->method_of_diagnosis);
+
+        $receptors = collect($c?->molecular_tests ?? [])
+            ->filter(fn ($t) => in_array($t['gene_symbol'] ?? null, ['ESR1', 'PGR', 'ERBB2'], true)
+                && in_array($t['test_result'] ?? null, ['Positive', 'Negative', 'Equivocal'], true))
+            ->unique('gene_symbol')
+            ->map(fn ($t) => ['ESR1' => 'ER', 'PGR' => 'PR', 'ERBB2' => 'HER2'][$t['gene_symbol']]
+                . ['Positive' => '+', 'Negative' => '−', 'Equivocal' => '±'][$t['test_result']])
+            ->sortBy(fn ($r) => array_search(rtrim($r, '+−±'), ['ER', 'PR', 'HER2']))
+            ->implode(' ');
+        $tnm = collect([$c?->ajcc_pathologic_t, $c?->ajcc_pathologic_n, $c?->ajcc_pathologic_m])
+            ->map($known)->filter()->implode(' ');
+        $nodes = $c && $c->lymph_nodes_tested !== null
+            ? ($c->lymph_nodes_positive ?? '?') . '/' . $c->lymph_nodes_tested . ' nodes' : null;
+
+        $notes = collect([
+            $site ? 'Site: ' . $site . ($laterality && ! str_contains(strtolower($site), strtolower($laterality)) ? " ({$laterality})" : '') : null,
+            $method ? 'Obtained by ' . strtolower($method) : null,
+        ])->filter()->implode('. ');
+
+        return [
+            'id'         => $s->id,
+            'label'      => $s->entity_submitter_id ?: ($s->file_name ?: "Sample #{$s->id}"),
+            'file'       => $s->file_name,
+            'case'       => $s->patientCase?->submitter_id,
+            'project'    => $c?->project_id ?: $s->patientCase?->project_id,
+            'organ'      => $s->organ?->name,
+            'stain'      => $s->stain?->name,
+            'disease'    => $s->diseaseSubtype?->name,
+            'category'   => $s->category?->label_en,
+            'primary_dx' => $known($c?->primary_diagnosis),
+            'age'        => $age,
+            'sex'        => $sex,
+            'race'       => $known($c?->race),
+            'site'       => $site ?: null,
+            'laterality' => $laterality,
+            'method'     => $method,
+            'tumour'     => $known($c?->classification_of_tumor),
+            'metastasis' => $known($c?->metastasis_at_diagnosis),
+            'stage'      => $known($c?->ajcc_pathologic_stage),
+            'tnm'        => $tnm ?: null,
+            'nodes'      => $nodes,
+            'receptors'  => $receptors ?: null,
+            'vital'      => $known($c?->vital_status),
+            'has_clinical' => (bool) $c,
+            'url'        => route('admin.samples.show', $s->id),
+            'form'       => array_filter([
+                'organ' => $s->organ?->name,
+                'stain' => $s->stain?->name,
+                'age'   => $age,
+                'sex'   => $sex,
+                'race'  => $known($c?->race),
+                'clinical_notes' => $notes ?: null,
+            ], fn ($x) => $x !== null && $x !== ''),
+            'runs' => $runs->map(function ($r) {
+                $v = $r->verdict();
+                $overview = collect(['overview.jpg', 'overview.png'])
+                    ->first(fn ($f) => $r->run_dir && is_file("{$r->run_dir}/{$f}"));
+                return [
+                    'id'        => $r->id,
+                    'status'    => $r->status,
+                    'diagnosis' => $r->diagnosis,
+                    'verdict'   => $v['result'] ?? null,
+                    'reason'    => $v['reason'] ?? null,
+                    'when'      => $r->created_at?->format('Y-m-d'),
+                    'url'       => route('admin.v2-diagnose.show', $r->id),
+                    'overview'  => $overview ? route('admin.v2-diagnose.asset', [$r->id, $overview]) : null,
+                ];
+            })->values(),
+        ];
     }
 
     public function store(Request $request): RedirectResponse
@@ -86,7 +253,7 @@ class V2DiagnoseController extends Controller
             'server_path'    => ['required_if:source,server_path', 'nullable', 'string', 'max:1000'],
             'wsi'            => ['required_if:source,upload', 'nullable', 'file', 'mimes:svs,tiff,tif,ndpi,scn'],
             'label'          => ['nullable', 'string', 'max:150'],
-            'organ'          => ['required', 'string', 'max:100'],
+            'organ'          => ['required_unless:source,existing', 'nullable', 'string', 'max:100'],
             'stain'          => ['nullable', 'string', 'max:100'],
             'age'            => ['nullable', 'integer', 'min:0', 'max:120'],
             'sex'            => ['nullable', 'in:female,male,other'],
@@ -96,7 +263,17 @@ class V2DiagnoseController extends Controller
 
         $wsiPath = null;
         if ($v['source'] === 'existing') {
-            $sample = Sample::findOrFail($v['sample_id']);
+            $sample = Sample::with(self::PROFILE_WITH)->findOrFail($v['sample_id']);
+            // What the archive knows fills whatever the form left empty, so a
+            // field hidden as known still reaches the run.
+            foreach ($this->profile($sample, collect())['form'] as $k => $known) {
+                if (($v[$k] ?? null) === null || $v[$k] === '') {
+                    $v[$k] = $known;
+                }
+            }
+            if (empty($v['organ'])) {
+                return back()->withInput()->withErrors(['organ' => 'This slide has no organ on record — name one.']);
+            }
         } else {
             [$sample, $wsiPath, $error] = $this->intake($request, $v);
             if ($error) {
