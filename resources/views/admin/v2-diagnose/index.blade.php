@@ -138,19 +138,35 @@
   .v2-archbar .v2-in{max-width:22rem}
   .v2-archbar .v2-chk{display:flex;align-items:center;gap:.4rem;margin:0;font-weight:500;font-size:.84rem;color:#41394f;cursor:pointer}
   .v2-archbar .v2-count{margin-left:auto;font-size:.82rem;color:#7a7390}
-  .v2-tablewrap{overflow:auto;max-height:34rem;border:1px solid #ebe8f1;border-radius:8px}
-  table.v2-arch{width:100%;border-collapse:collapse;font-size:.84rem}
-  table.v2-arch th{position:sticky;top:0;z-index:1;background:#f7f6fa;color:#57516a;font-weight:600;font-size:.76rem;
-          text-transform:uppercase;letter-spacing:.03em;padding:.55rem .6rem;text-align:left;border-bottom:1px solid #e6e2ee;white-space:nowrap}
-  table.v2-arch td{padding:.55rem .6rem;border-bottom:1px solid #f0eef4;vertical-align:top;color:#2d2540}
+  .v2-tablewrap{overflow:auto;max-height:36rem;border:1px solid #ebe8f1;border-radius:8px}
+  table.v2-arch{width:100%;border-collapse:separate;border-spacing:0;font-size:.84rem;min-width:760px}
+  table.v2-arch th{position:sticky;top:0;z-index:1;background:#f7f6fa;color:#57516a;font-weight:600;font-size:.74rem;
+          text-transform:uppercase;letter-spacing:.04em;padding:.6rem .7rem;text-align:left;border-bottom:1px solid #e6e2ee;white-space:nowrap}
+  table.v2-arch td{padding:.65rem .7rem;border-bottom:1px solid #f0eef4;vertical-align:top;color:#2d2540}
   table.v2-arch tbody tr{cursor:pointer;transition:background .1s}
   table.v2-arch tbody tr:hover{background:#faf9fd}
-  table.v2-arch tbody tr.used{background:#fffaf0}
-  table.v2-arch tbody tr.used:hover{background:#fdf4e2}
-  table.v2-arch tbody tr.sel{background:#efeafb;box-shadow:inset 3px 0 0 #6a55c2}
+  table.v2-arch tbody tr:last-child td{border-bottom:0}
+  /* The row's left edge: amber once run before, purple when picked. */
+  table.v2-arch tbody tr td:first-child{box-shadow:inset 3px 0 0 transparent}
+  table.v2-arch tbody tr.used td:first-child{box-shadow:inset 3px 0 0 #d9a53a}
+  table.v2-arch tbody tr.sel{background:#f3effc}
+  table.v2-arch tbody tr.sel:hover{background:#ede7fa}
+  table.v2-arch tbody tr.sel td:first-child{box-shadow:inset 3px 0 0 #6a55c2}
+  table.v2-arch .v2-a-act{width:1%;white-space:nowrap;vertical-align:middle;padding-right:.3rem}
+  table.v2-arch .v2-a-slide{min-width:11rem;max-width:15rem}
+  table.v2-arch .v2-a-slide .v2-id{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;word-break:normal}
+  table.v2-arch .v2-a-dx{min-width:9rem;max-width:14rem}
+  table.v2-arch .v2-a-pres{min-width:10rem;max-width:16rem}
+  table.v2-arch .v2-a-path{min-width:8.5rem;white-space:nowrap}
+  table.v2-arch .v2-a-runs{width:1%;white-space:nowrap}
+  .v2-clamp{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .v2-who{font-size:.78rem;color:#41394f;margin-top:.2rem}
+  .v2-rcpt{display:inline-block;margin-top:.3rem;padding:.05rem .4rem;border-radius:4px;background:#f3f1f8;color:#57516a;
+          font-size:.74rem;font-weight:600;letter-spacing:.02em}
+  .v2-runlink .v2-match{font-size:.72rem;padding:.05rem .4rem}
+  .v2-runlink:hover{text-decoration:none}
+  .v2-runlink:hover .v2-sub{text-decoration:underline}
   /* Each row's own buttons: pick it, or run it straight away. */
-  table.v2-arch td.v2-act{width:1%;white-space:nowrap;vertical-align:middle}
-  .v2-act-wrap{display:flex;min-width:7.2rem}
   .v2-go{display:inline-flex;align-items:center;justify-content:center;gap:.35rem;height:2rem;padding:0 .75rem;
           border-radius:6px;font-size:.8rem;font-weight:600;cursor:pointer;transition:background .15s,color .15s,border-color .15s,box-shadow .15s}
   .v2-go{border:0;background:#2c7a5f;color:#fff;box-shadow:0 1px 2px rgba(20,60,45,.25)}
@@ -259,7 +275,7 @@
         </div>
         <div class="v2-tablewrap">
           <table class="v2-arch">
-            <thead><tr><th>Action</th><th>Slide</th><th>Recorded diagnosis</th><th>Patient</th><th>Presentation</th><th>Pathology</th><th>V2 runs</th></tr></thead>
+            <thead><tr><th class="v2-a-act"><span class="sr-only">Run</span></th><th>Slide &amp; patient</th><th>Recorded diagnosis</th><th>Presentation</th><th>Pathology</th><th>V2 runs</th></tr></thead>
             <tbody id="f_rows"></tbody>
           </table>
         </div>
@@ -629,7 +645,7 @@
     if (!fOrgan.value) { archEl.hidden = true; unpick(); return; }
     page = p || 1;
     archEl.hidden = false;
-    rowsEl.innerHTML = '<tr><td colspan="7" class="v2-empty">Loading the slides…</td></tr>';
+    rowsEl.innerHTML = '<tr><td colspan="6" class="v2-empty">Loading the slides…</td></tr>';
     var qs = new URLSearchParams({ organ_id: fOrgan.value, stain: fStain.value, q: fQ.value.trim(),
                                    unused: fUnused.checked ? 1 : 0, page: page, per_page: fPer.value });
     var mine = ++seq; // a slower earlier answer must not overwrite a newer one
@@ -644,7 +660,7 @@
       .catch(function (e) {
         if (mine !== seq) return;
         rows = []; byId = {}; meta = null; pagesEl.innerHTML = ''; countEl.textContent = '';
-        rowsEl.innerHTML = '<tr><td colspan="7" class="v2-empty">Could not load the slides (' + esc(e.message) + ').</td></tr>';
+        rowsEl.innerHTML = '<tr><td colspan="6" class="v2-empty">Could not load the slides (' + esc(e.message) + ').</td></tr>';
       });
   }
   fOrgan.addEventListener('change', function () { fillStains(); unpick(); load(1); });
@@ -660,10 +676,6 @@
     var normal = /normal/i.test(name);
     return '<span class="v2-dx' + (normal ? ' normal' : '') + '">' + esc(name) + '</span>'
       + (s.disease && s.category && s.category.toLowerCase() !== s.disease.toLowerCase() ? '<div class="v2-sub">' + esc(s.category) + '</div>' : '');
-  }
-  function patient(s) {
-    var p = [s.sex ? cap(s.sex) : null, s.age != null ? s.age + ' y' : null].filter(Boolean).join(' · ');
-    return (p ? '<span style="white-space:nowrap">' + esc(p) + '</span>' : dash(null)) + (s.race ? '<div class="v2-sub">' + esc(s.race) + '</div>' : '');
   }
   function renderPages() {
     if (!meta || meta.pages <= 1) { pagesEl.innerHTML = ''; return; }
@@ -692,29 +704,31 @@
       + meta.used_total + ' already run';
     renderPages();
     if (!rows.length) {
-      rowsEl.innerHTML = '<tr><td colspan="7" class="v2-empty">No slide matches.</td></tr>';
+      rowsEl.innerHTML = '<tr><td colspan="6" class="v2-empty">No slide matches.</td></tr>';
       return;
     }
     rowsEl.innerHTML = rows.map(function (s) {
-      var last = s.runs[0];
+      var last = s.runs[0], picked = String(s.id) === sid.value;
+      var WORD = { correct: '✓ Correct', partial: '≈ Partial', wrong: '✗ Wrong' };
       var runs = last
         ? '<span class="v2-used" title="This slide has been through V2 Diagnose before">● Used ×' + s.runs.length + '</span>'
-          + '<a class="v2-runlink" href="' + last.url + '" target="_blank" onclick="event.stopPropagation()">#' + last.id + ' · '
-          + esc(last.verdict ? VERDICT[last.verdict] : last.status) + ' · ' + esc(last.when) + '</a>'
-        : '<span class="v2-fresh">Not run yet</span>';
+          + '<a class="v2-runlink" href="' + last.url + '" target="_blank" onclick="event.stopPropagation()" title="Open run #' + last.id + '">'
+          + (last.verdict ? '<span class="v2-match ' + last.verdict + '">' + WORD[last.verdict] + '</span>' : esc(last.status))
+          + '<span class="v2-sub" style="display:block">#' + last.id + ' · ' + esc(last.when) + '</span></a>'
+        : '<span class="v2-fresh">○ Not run yet</span>';
       var pres = [s.site, s.laterality && !(s.site || '').toLowerCase().includes(s.laterality.toLowerCase()) ? s.laterality : null].filter(Boolean).join(' · ');
-      var path = [s.stage, s.tnm].filter(Boolean).join(' · ');
-      return '<tr data-id="' + s.id + '" class="' + (s.runs.length ? 'used' : '') + (String(s.id) === sid.value ? ' sel' : '') + '">'
-        + '<td class="v2-act"><div class="v2-act-wrap">'
-          + '<button type="button" class="v2-go" data-act="run" title="Run V2 Diagnose on this slide now">▶ Run analysis</button>'
-        + '</div></td>'
-        + '<td><div class="v2-id">' + esc(s.case || s.label) + '</div><div class="v2-sub">#' + s.id
-          + (s.file ? ' · ' + esc(s.file.length > 34 ? s.file.slice(0, 32) + '…' : s.file) : '') + (s.stain ? '<br>' + esc(s.stain) : '') + '</div></td>'
-        + '<td>' + dxBadge(s) + (s.primary_dx ? '<div class="v2-sub">' + esc(s.primary_dx) + '</div>' : '') + '</td>'
-        + '<td>' + patient(s) + '</td>'
-        + '<td>' + dash(pres) + (s.method ? '<div class="v2-sub">' + esc(s.method) + '</div>' : '') + '</td>'
-        + '<td>' + dash(path) + (s.receptors ? '<div class="v2-sub">' + esc(s.receptors) + '</div>' : '') + '</td>'
-        + '<td>' + runs + '</td></tr>';
+      var who = [s.sex ? cap(s.sex) : null, s.age != null ? s.age + ' y' : null, s.race].filter(Boolean).join(' · ');
+      return '<tr data-id="' + s.id + '" class="' + (s.runs.length ? 'used' : '') + (picked ? ' sel' : '') + '">'
+        + '<td class="v2-a-act"><button type="button" class="v2-go" data-act="run" title="Run V2 Diagnose on this slide now">▶ Run</button></td>'
+        + '<td class="v2-a-slide"><div class="v2-id" title="' + esc(s.label) + '">' + esc(s.case || s.label) + '</div>'
+          + '<div class="v2-sub">#' + s.id + (s.stain ? ' · ' + esc(s.stain) : '') + '</div>'
+          + (who ? '<div class="v2-who">' + esc(who) + '</div>' : '') + '</td>'
+        + '<td class="v2-a-dx">' + dxBadge(s) + (s.primary_dx ? '<div class="v2-sub v2-clamp" title="' + esc(s.primary_dx) + '">' + esc(s.primary_dx) + '</div>' : '') + '</td>'
+        + '<td class="v2-a-pres">' + (pres ? '<div class="v2-clamp" title="' + esc(pres) + '">' + esc(pres) + '</div>' : dash(null))
+          + (s.method ? '<div class="v2-sub">' + esc(s.method) + '</div>' : '') + '</td>'
+        + '<td class="v2-a-path">' + (s.stage ? '<div>' + esc(s.stage) + '</div>' : '') + (s.tnm ? '<div class="v2-sub">' + esc(s.tnm) + '</div>' : '')
+          + (s.stage || s.tnm ? '' : dash(null)) + (s.receptors ? '<span class="v2-rcpt">' + esc(s.receptors) + '</span>' : '') + '</td>'
+        + '<td class="v2-a-runs">' + runs + '</td></tr>';
     }).join('');
   }
   rowsEl.addEventListener('click', function (e) {
