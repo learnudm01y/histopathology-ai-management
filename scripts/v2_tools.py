@@ -9,8 +9,9 @@ here, so that nothing numeric depends on a language model doing arithmetic:
     prepare  RUN              view images, contact sheets, nuclear-density grids, manifest
     density  RUN              rebuild density.json and masks/ for an existing run
     show     RUN P007         print one tile's density grid (0-9) — for the model
-                              (with V2_SANDBOX set, only show/contours/zoom/validate on RUN=.)
+                              (with V2_SANDBOX set, only show/contours/zoom/survey/validate on RUN=.)
     zoom     RUN P007 X Y     a full-resolution crop around view px (X, Y) -> RUN/zoom/ — for the model
+    survey   RUN [N]          N crops spread over the dense parts of the whole slide -> RUN/zoom/ — for the model
     contours RUN P007 [--level 0.55]
                               density iso-contours of one tile in view px — for the model
     export   RUN              rebuild view.json/heat.json and the display check from final.json
@@ -623,32 +624,93 @@ def cmd_contours(a) -> None:
          "polygons": contours_of(up >= a.level, 400, 4.0)})
 
 
-def cmd_zoom(a) -> None:
+def zoom_crop(run: str, tiles: dict, pid: str, x: float, y: float) -> dict:
     """A VIEW_PX crop of the full-resolution tile centred on (x, y) in view px.
 
     view/ images are the tile shrunk ~1.9x (about 1 um/px, a 10x objective);
     this is the tile's own resolution (0.5 um/px, about 20x), which is what
     cytology needs: myoepithelial layers, cytoplasmic vacuoles, nuclear detail.
     """
-    tiles = {t["id"]: t for t in load(os.path.join(a.run, "manifest.json"))["tiles"]}
-    t = tiles.get(a.tile)
+    t = tiles.get(pid)
     if not t:
-        out({"error": f"unknown tile {a.tile}"}, 1)
-    src = os.path.join(a.run, "patches", t["file"])
+        out({"error": f"unknown tile {pid}"}, 1)
+    src = os.path.join(run, "patches", t["file"])
     if not os.path.isfile(src):
         out({"error": "the full-resolution tile is no longer kept for this run"}, 1)
     img = Image.open(src).convert("RGB")
     k = img.width / VIEW_PX                                # full-res px per view px
     half = min(VIEW_PX, img.width) // 2
-    cx = int(min(max(a.x * k, half), img.width - half))
-    cy = int(min(max(a.y * k, half), img.height - half))
+    cx = int(min(max(x * k, half), img.width - half))
+    cy = int(min(max(y * k, half), img.height - half))
     crop = np.array(img.crop((cx - half, cy - half, cx + half, cy + half)))
-    os.makedirs(os.path.join(a.run, "zoom"), exist_ok=True)
-    name = f"zoom/{a.tile}_{int(a.x)}_{int(a.y)}.jpg"
-    Image.fromarray(crop).save(os.path.join(a.run, name), quality=90)
+    os.makedirs(os.path.join(run, "zoom"), exist_ok=True)
+    name = f"zoom/{pid}_{int(x)}_{int(y)}.jpg"
+    Image.fromarray(crop).save(os.path.join(run, name), quality=90)
     vb = [round((cx - half) / k), round((cy - half) / k), round((cx + half) / k), round((cy + half) / k)]
-    out({"ok": True, "image": name, "view_box": vb,
-         "note": f"covers view px {vb} of {a.tile}; coordinates you return stay in view px"})
+    return {"tile": pid, "image": name, "view_box": vb}
+
+
+def cmd_zoom(a) -> None:
+    tiles = {t["id"]: t for t in load(os.path.join(a.run, "manifest.json"))["tiles"]}
+    z = zoom_crop(a.run, tiles, a.tile, a.x, a.y)
+    out({"ok": True, **z, "note": f"covers view px {z['view_box']} of {a.tile}; coordinates you return stay in view px"})
+
+
+def survey_points(tiles: dict, density: dict, n: int, level: float = 0.5) -> list:
+    """n places spread over the dense (lesional-looking) parts of the whole
+    slide: the density cells at or above *level* are split into n regions
+    (k-means on slide position, seeded far apart), and each region gives its
+    densest cell. The places are the tool's choice, not the reader's, so a
+    focal finding away from the first impression is still looked at, and
+    each region of the lesion is represented, not only its edges.
+    Returns [(tile id, view x, view y)]."""
+    cells = []
+    for pid, grid in density.items():
+        t = tiles.get(pid)
+        if not t:
+            continue
+        g = np.asarray(grid, np.float32)
+        step = t["size_l0"] / GRID
+        for r, c in zip(*np.nonzero(g >= level)):
+            cells.append((pid, (c + 0.5) * VIEW_PX / GRID, (r + 0.5) * VIEW_PX / GRID,
+                          t["x"] + (c + 0.5) * step, t["y"] + (r + 0.5) * step, float(g[r, c])))
+    if not cells:
+        return []
+    xy = np.array([[c[3], c[4]] for c in cells], np.float64)
+    val = np.array([c[5] for c in cells])
+    k = min(n, len(cells))
+    seeds = [int(np.argmax(val))]
+    dist = np.hypot(*(xy - xy[seeds[0]]).T)
+    while len(seeds) < k:
+        seeds.append(int(np.argmax(dist)))
+        dist = np.minimum(dist, np.hypot(*(xy - xy[seeds[-1]]).T))
+    centres = xy[seeds].copy()
+    for _ in range(25):
+        lab = np.argmin(((xy[:, None, :] - centres[None]) ** 2).sum(-1), axis=1)
+        for j in range(k):
+            if (lab == j).any():
+                centres[j] = xy[lab == j].mean(0)
+    picks = []
+    for j in range(k):
+        idx = np.nonzero(lab == j)[0]
+        if idx.size:
+            i = idx[np.argmax(val[idx])]
+            picks.append((val[i], cells[i]))
+    picks.sort(key=lambda p: -p[0])
+    return [(c[0], round(c[1]), round(c[2])) for _, c in picks]
+
+
+def cmd_survey(a) -> None:
+    tiles = {t["id"]: t for t in load(os.path.join(a.run, "manifest.json"))["tiles"]}
+    density = load(os.path.join(a.run, "density.json"))["tiles"]
+    n = max(1, min(24, a.n))
+    points = survey_points(tiles, density, n)
+    if not points:
+        out({"ok": True, "crops": [], "note": "no dense tissue on this slide to survey"})
+    crops = [zoom_crop(a.run, tiles, pid, x, y) for pid, x, y in points]
+    out({"ok": True, "crops": crops,
+         "note": f"{len(crops)} full-resolution crops spread over the densest parts of the whole slide, "
+                 "chosen by the tool; Read every one of them"})
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1310,6 +1372,7 @@ def main() -> None:
     p.add_argument("--level", type=float, default=0.55)
     p = sub.add_parser("zoom"); p.add_argument("run"); p.add_argument("tile")
     p.add_argument("x", type=float); p.add_argument("y", type=float)
+    p = sub.add_parser("survey"); p.add_argument("run"); p.add_argument("n", type=int, nargs="?", default=12)
     p = sub.add_parser("validate"); p.add_argument("run")
     p = sub.add_parser("export"); p.add_argument("run")
     p = sub.add_parser("finalize"); p.add_argument("run")
@@ -1321,12 +1384,12 @@ def main() -> None:
     # read-only helpers run, and only on the folder the session was started
     # in: no other run's tiles or answer, no tiling or finalizing of its own.
     if os.environ.get("V2_SANDBOX"):
-        if a.cmd not in ("show", "contours", "zoom", "validate"):
+        if a.cmd not in ("show", "contours", "zoom", "survey", "validate"):
             out({"error": f"'{a.cmd}' is not available in the analysis session"}, 1)
         if os.path.realpath(a.run) != os.path.realpath(os.getcwd()):
             out({"error": "the run folder must be '.'"}, 1)
     try:
-        {"estimate-mpp": cmd_estimate_mpp, "tile": cmd_tile, "prepare": cmd_prepare, "density": cmd_density, "show": cmd_show, "contours": cmd_contours, "zoom": cmd_zoom,
+        {"estimate-mpp": cmd_estimate_mpp, "tile": cmd_tile, "prepare": cmd_prepare, "density": cmd_density, "show": cmd_show, "contours": cmd_contours, "zoom": cmd_zoom, "survey": cmd_survey,
          "validate": cmd_validate, "export": cmd_export, "finalize": cmd_finalize}[a.cmd](a)
     except SystemExit:
         raise

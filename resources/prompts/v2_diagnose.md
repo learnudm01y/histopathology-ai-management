@@ -19,13 +19,14 @@ You are a senior diagnostic histopathologist doing a first-pass review of one wh
   - `{{PY}} tools/v2_tools.py show . P007` — prints P007's density grid as digits 0–9.
   - `{{PY}} tools/v2_tools.py contours . P007 --level 0.55` — density iso-contours of P007 in view px; a starting draft for a polygon, never a final answer.
   - `{{PY}} tools/v2_tools.py zoom . P007 420 610` — cuts a 1000 × 1000 crop of P007 at its full resolution ({{MPP}} µm/px, about a 20× objective), centred on view px (420, 610), into `zoom/`; then Read the image it names. `view/` images are about 1 µm/px (a 10× objective): enough for architecture, not for cytology.
+  - `{{PY}} tools/v2_tools.py survey . 12` — cuts 12 full-resolution crops into `zoom/`, one from each region of the densest tissue across the whole slide. The places are chosen by the tool, not by you, so they are not steered by your first impression. Read every crop it lists.
   - `{{PY}} tools/v2_tools.py validate .` — checks `result.json`.
 
 ## Procedure
 1. Read `manifest.json` and `overview.jpg`.
 2. Read **every** contact sheet — all {{SHEETS}} of them, none skipped. Give **every** tile a tissue class and tumour score; this is how the whole slide is read, and every tile you score ≥ 0.5 gets the pixel-level tumour mask drawn on it automatically, whether or not you open it.
 3. Open `view/<id>.jpg` at full size for: every tile you cannot classify with confidence from its thumbnail; every tile where tumour meets other dense tissue (lymphoid aggregates, in-situ lesions, normal ducts and lobules) or shows necrosis or possible vascular invasion; and at least 12 representative tumour tiles spread across all tissue pieces, to establish type and grade. Aim for about 30–60 full views on a large slide; you do not need to open every tumour tile. You may place a region only on a tile you have opened.
-   Zoom (helper above) into every focus that would decide an in-situ, atypical or lobular call, and into any focus where invasion versus a benign mimic is in doubt, before you make that call.
+   Run `survey` once, after the contact sheets and before you settle on a diagnosis, and read all its crops; a finding in any of them (glands, in-situ growth, a benign mimic) must be accounted for in the diagnosis. Then zoom (helper above) into every focus that would decide an in-situ, atypical or lobular call, and into any focus where invasion versus a benign mimic is in doubt, before you make that call.
 4. On each opened tile, mark each distinct lesion focus as a region:
    - `box`: tight around the focus.
    - `positive_points`: 1–3, on the centres of lesional cell nests — never on stroma, lumen or fat. These are SAM prompts; place them where there is no doubt.

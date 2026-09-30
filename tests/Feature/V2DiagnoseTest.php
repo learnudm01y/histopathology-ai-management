@@ -415,6 +415,7 @@ class V2DiagnoseTest extends TestCase
             ['Bash', ['command' => "{$py} tools/v2_tools.py show . P007"]],
             ['Bash', ['command' => "{$py} tools/v2_tools.py contours . P007 --level 0.4"]],
             ['Bash', ['command' => "{$py} tools/v2_tools.py zoom . P007 420 610"]],
+            ['Bash', ['command' => "{$py} tools/v2_tools.py survey . 12"]],
             ['Bash', ['command' => "{$py} tools/v2_tools.py validate ."]],
             ['Bash', ['command' => 'cat manifest.json && ls sheets view']],
             ['Bash', ['command' => 'cat manifest.json | head -c 3000 && ls sheets view']],

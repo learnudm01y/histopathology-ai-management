@@ -76,6 +76,20 @@ model got it wrong, and the change it produced. Read this before changing
   looking for lumens; true glands make pure ILC unlikely; solid sheets of large
   plasmacytoid cells occur in high-grade IDC and are not lobular on their own.
 
+- **Re-run with the lumen rule: still ILC (0.72).** The model zoomed ten areas
+  as told, including P075, but at its top (500, 400); the glands sit at its
+  bottom (480, 860). The rule was right, but the model chose where to look,
+  and it looked where its first impression pointed.
+- **Tried and rejected: an automatic gland-lumen detector** (round empty
+  spaces ringed by nuclei). On ILC tiles it found up to 160 "lumens" per tile
+  (pale cytoplasm and intracytoplasmic vacuoles), against about 50 on the IDC
+  tile, so it would have pushed ILC towards IDC. It was not shipped.
+- **Changes:** `survey` — the tool, not the model, picks 12 places, one per
+  region of the dense tissue across the whole slide (k-means over density
+  cells, the densest cell of each region), and cuts full-resolution crops of
+  them. The model must read all of them before settling the diagnosis. The
+  pick favours no type.
+
 ### Run #7 — TCGA-GM-A2D9, recorded Normal, answered IDC (0.45), before the rules
 
 - **Tissue at 40×:** a frozen section (TCGA `-TS`), fragmented and crushed,

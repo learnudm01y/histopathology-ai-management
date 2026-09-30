@@ -231,6 +231,7 @@ class V2DiagnoseRunner
             "Bash({$py} tools/v2_tools.py show .:*)",
             "Bash({$py} tools/v2_tools.py contours .:*)",
             "Bash({$py} tools/v2_tools.py zoom .:*)",
+            "Bash({$py} tools/v2_tools.py survey .:*)",
             "Bash({$py} tools/v2_tools.py validate .:*)",
             '--disallowedTools', 'WebFetch', 'WebSearch',
         ];
@@ -469,7 +470,7 @@ class V2DiagnoseRunner
             case 'Bash':
                 $c = trim((string) ($in['command'] ?? ''));
                 $py = preg_quote($this->pythonBin(), '#');
-                $helper = "#^{$py} tools/v2_tools\.py (show|contours|zoom|validate) \.(?: [A-Za-z0-9_.\- ]*)?(?: 2>&1)?$#";
+                $helper = "#^{$py} tools/v2_tools\.py (show|contours|zoom|survey|validate) \.(?: [A-Za-z0-9_.\- ]*)?(?: 2>&1)?$#";
                 // One helper, or several chained with && (run #29 zoomed three tiles in one call).
                 $calls = preg_split('/\s*&&\s*/', $c);
                 if (count(array_filter($calls, fn ($x) => preg_match($helper, $x))) === count($calls)) {
