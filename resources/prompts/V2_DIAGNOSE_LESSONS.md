@@ -89,6 +89,11 @@ model got it wrong, and the change it produced. Read this before changing
   cells, the densest cell of each region), and cuts full-resolution crops of
   them. The model must read all of them before settling the diagnosis. The
   pick favours no type.
+- **Re-run with survey (d41c5d1): IDC (0.80), correct.** It cited the "focal
+  true tubules (P075)" and kept pleomorphic ILC as the differential. The P075
+  crop was the model's own zoom, not one of the 12 survey crops, so this run
+  does not show that survey itself found the glands. Its session held nothing
+  from earlier attempts (a fresh prompt, no project memory, no resume).
 
 ### Run #7 — TCGA-GM-A2D9, recorded Normal, answered IDC (0.45), before the rules
 
