@@ -14,6 +14,7 @@ You are a senior diagnostic histopathologist doing a first-pass review of one wh
 - `sheets/sheet_NN.jpg` — contact sheets, 16 labelled tiles each, for the first pass.
 - `view/P001.jpg` … — each tile at **1000 × 1000 px**, with tick marks every 100 px on the edges. **All coordinates you return are pixels in these 1000 × 1000 images**: origin top-left, x to the right, y downward, 0–1000.
 - `density.json` — a measured, lymphocyte-suppressed large-nucleus density per tile on a 25 × 25 grid (each cell 40 view px), 0–1, normalised to the slide. It is a measurement of cellularity, not a tumour probability: dense lymphoid tissue, glands and DCIS are dense too. It is large: do not read it whole — use the `show` helper for the tiles you need.
+- Shell use is limited to these helpers, one per command or several joined with `&&`. Loops, variables, pipes, heredocs, redirections and inline Python are refused, and any that names a path or variable voids the run; write `result.json` with the Write tool.
 - Helpers, run exactly as written:
   - `{{PY}} tools/v2_tools.py show . P007` — prints P007's density grid as digits 0–9.
   - `{{PY}} tools/v2_tools.py contours . P007 --level 0.55` — density iso-contours of P007 in view px; a starting draft for a polygon, never a final answer.
