@@ -85,4 +85,14 @@ return [
     // and a queue of its own, so it never blocks patch extraction.
     'queue_connection' => env('V2_QUEUE_CONNECTION', 'database_long'),
     'queue'            => env('V2_QUEUE', 'v2'),
+
+    // ── Evaluation (php artisan v2:evaluate) ─────────────────────────────
+    // Slides whose errors were studied to write the rules in the prompt
+    // (resources/prompts/V2_DIAGNOSE_LESSONS.md). A correct answer on them is expected,
+    // not evidence, so the report counts them apart from unseen slides.
+    // Add a slide here whenever a rule is written from it.
+    'tuning_samples' => [
+        1062,   // BRACS_1408 (PB): LCIS called on clear-cell adenosis, run #25
+        1138,   // TCGA-AC-A2FO (ILC): called IDC, run #21
+    ],
 ];

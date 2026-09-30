@@ -67,7 +67,12 @@ class V2Diagnosis extends Model
      */
     public function recordedClass(): ?string
     {
-        $s = $this->sample;
+        return self::classOf($this->sample);
+    }
+
+    /** The recorded class of any archive slide (see recordedClass). */
+    public static function classOf(?Sample $s): ?string
+    {
         if (! $s) {
             return null;
         }

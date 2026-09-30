@@ -153,6 +153,42 @@ class V2DiagnoseTest extends TestCase
         File::deleteDirectory($outside);
     }
 
+    public function test_deleting_a_run_removes_its_claude_records_and_keeps_the_slide(): void
+    {
+        $home = storage_path('framework/testing/v2_home');
+        config(['v2_diagnose.claude.home' => $home]);
+        $s = $this->sample();
+        $run = V2Diagnosis::create(['sample_id' => $s->id, 'organ' => 'Breast', 'status' => 'completed',
+                                    'claude_session_id' => '11111111-2222-3333-4444-555555555555']);
+        $other = V2Diagnosis::create(['sample_id' => $s->id, 'organ' => 'Breast', 'status' => 'completed']);
+        $project = fn ($r) => "{$home}/.claude/projects/" . preg_replace('/[^a-zA-Z0-9]/', '-', "{$this->runs}/{$r->id}");
+        foreach ([$run, $other] as $r) {
+            File::ensureDirectoryExists("{$this->runs}/{$r->id}");
+            $r->update(['run_dir' => "{$this->runs}/{$r->id}"]);
+            File::ensureDirectoryExists($project($r));
+        }
+        // Two sessions for the run (a repair resumes into a new one), one for the other run.
+        file_put_contents($project($run) . '/aaaaaaaa-0000-0000-0000-000000000001.jsonl', '{}');
+        file_put_contents($project($other) . '/bbbbbbbb-0000-0000-0000-000000000002.jsonl', '{}');
+        foreach (['11111111-2222-3333-4444-555555555555', 'aaaaaaaa-0000-0000-0000-000000000001',
+                  'bbbbbbbb-0000-0000-0000-000000000002'] as $id) {
+            File::ensureDirectoryExists("{$home}/.claude/session-env/{$id}");
+        }
+
+        $this->actingAs($this->user)->delete("/admin/v2-diagnose/{$run->id}")->assertSessionHas('success');
+
+        $this->assertDirectoryDoesNotExist($project($run));
+        $this->assertDirectoryDoesNotExist("{$home}/.claude/session-env/11111111-2222-3333-4444-555555555555");
+        $this->assertDirectoryDoesNotExist("{$home}/.claude/session-env/aaaaaaaa-0000-0000-0000-000000000001");
+        // Another run's records, and the slide, stay.
+        $this->assertDirectoryExists($project($other));
+        $this->assertDirectoryExists("{$home}/.claude/session-env/bbbbbbbb-0000-0000-0000-000000000002");
+        $this->assertDirectoryExists("{$this->runs}/{$other->id}");
+        $this->assertNotNull(Sample::find($s->id));
+        $this->assertNotNull(V2Diagnosis::find($other->id));
+        File::deleteDirectory($home);
+    }
+
     public function test_the_archive_is_paged_and_filtered_on_the_server(): void
     {
         $organ = \App\Models\Organ::firstOrCreate(['name' => 'Breast']);
@@ -422,5 +458,69 @@ class V2DiagnoseTest extends TestCase
 
         (new RunV2Diagnosis($mk('ILC')->id))->handle($runner);
         $this->assertSame('failed', V2Diagnosis::latest('id')->first()->status);
+    }
+
+    public function test_the_evaluation_batch_takes_only_unseen_slides_and_runs_them_blind(): void
+    {
+        Queue::fake();
+        $db = \Illuminate\Support\Facades\DB::table(...);
+        $breast = $db('organs')->insertGetId(['name' => 'Breast']);
+        $he = $db('stains')->insertGetId(['name' => 'H&E']);
+        $tumour = $db('categories')->insertGetId(['label_en' => 'tumor']);
+        $ilc = $db('disease_subtypes')->insertGetId(['category_id' => $tumour, 'name' => 'ILC']);
+        $mk = fn (string $id, int $organ = 0) => Sample::forceCreate(['entity_submitter_id' => $id,
+            'organ_id' => $organ ?: $breast, 'stain_id' => $he, 'category_id' => $tumour, 'disease_subtype_id' => $ilc,
+            'storage_status' => 'available', 'wsi_remote_path' => "s/{$id}.svs"]);
+        $seen = $mk('SEEN');
+        V2Diagnosis::create(['sample_id' => $seen->id, 'organ' => 'Breast', 'status' => 'completed']);
+        $tuning = $mk('TUNING');
+        config(['v2_diagnose.tuning_samples' => [$tuning->id]]);
+        $fresh = [$mk('NEW1'), $mk('NEW2'), $mk('NEW3')];
+        $mk('LUNG', $db('organs')->insertGetId(['name' => 'Lung']));
+
+        $this->artisan('v2:evaluate', ['--queue' => true, '--per-class' => 2, '--classes' => 'ILC', '--seed' => 7])
+             ->assertSuccessful();
+
+        $runs = V2Diagnosis::where('status', 'queued')->get();
+        $this->assertCount(2, $runs);
+        $this->assertEmpty(array_diff($runs->pluck('sample_id')->all(), array_map(fn ($s) => $s->id, $fresh)),
+            'only unseen, non-tuning breast slides are picked');
+        foreach ($runs as $r) {
+            $this->assertSame(['Breast', 'H&E', null, null, null, null],
+                [$r->organ, $r->stain, $r->age, $r->sex, $r->race, $r->clinical_notes], 'run blind: organ and stain only');
+        }
+        Queue::assertPushed(RunV2Diagnosis::class, 2);
+
+        // The same seed picks the same slides.
+        V2Diagnosis::where('status', 'queued')->delete();
+        $this->artisan('v2:evaluate', ['--queue' => true, '--per-class' => 2, '--classes' => 'ILC', '--seed' => 7]);
+        $this->assertEqualsCanonicalizing($runs->pluck('sample_id')->all(),
+            V2Diagnosis::where('status', 'queued')->pluck('sample_id')->all());
+    }
+
+    public function test_the_report_counts_tuning_slides_and_void_runs_apart(): void
+    {
+        $runner = app(\App\Services\V2DiagnoseRunner::class);
+        $db = \Illuminate\Support\Facades\DB::table(...);
+        $tumour = $db('categories')->insertGetId(['label_en' => 'tumor']);
+        $ilc = $db('disease_subtypes')->insertGetId(['category_id' => $tumour, 'name' => 'ILC']);
+        $run = function (string $code = null, string $error = null) use ($tumour, $ilc, $runner) {
+            $s = Sample::forceCreate(['entity_submitter_id' => 'S', 'category_id' => $tumour, 'disease_subtype_id' => $ilc]);
+            $r = V2Diagnosis::create(['sample_id' => $s->id, 'organ' => 'Breast', 'diagnosis_code' => $code,
+                'status' => $error ? 'failed' : 'completed', 'error' => $error]);
+            File::ensureDirectoryExists($runner->runDir($r));
+            file_put_contents($runner->runDir($r) . '/prompt_version', $runner->promptVersion());
+            return $r;
+        };
+        $run('ILC');
+        $run('IDC');
+        $run(null, 'Integrity check failed, result discarded: read outside the run folder');
+        config(['v2_diagnose.tuning_samples' => [$run('ILC')->sample_id]]);
+
+        $this->artisan('v2:evaluate')
+             ->expectsOutputToContain('held-out ILC     correct 1, wrong 1, VOID 1')
+             ->expectsOutputToContain('held-out ALL     correct 1, wrong 1, VOID 1 — 50% correct of 2 scored')
+             ->expectsOutputToContain('tuning   ILC     correct 1')
+             ->assertSuccessful();
     }
 }

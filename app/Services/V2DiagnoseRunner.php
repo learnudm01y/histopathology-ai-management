@@ -121,6 +121,17 @@ class V2DiagnoseRunner
         return $this->python(["{$dir}/tools/v2_tools.py", 'prepare', $dir], 3600);
     }
 
+    /**
+     * Which version of the instructions a run was given: the first 10 hex of
+     * the template's sha1. Written into each run folder (prompt_version), so
+     * accuracy can be counted per version and a rule change is measured on
+     * the runs made after it.
+     */
+    public function promptVersion(): string
+    {
+        return substr((string) sha1_file(resource_path('prompts/v2_diagnose.md')), 0, 10);
+    }
+
     public function buildPrompt(V2Diagnosis $run): string
     {
         $tpl = (string) file_get_contents(resource_path('prompts/v2_diagnose.md'));

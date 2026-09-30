@@ -77,6 +77,7 @@ class RunV2Diagnosis implements ShouldQueue
 
             $prompt = $runner->buildPrompt($run);
             file_put_contents($runner->runDir($run) . '/prompt.md', $prompt);
+            file_put_contents($runner->runDir($run) . '/prompt_version', $runner->promptVersion());
             $run->update(['prompt' => $prompt, 'claude_model' => config('v2_diagnose.claude.model')]);
             $run->stage('analysing', "Sending {$run->patches} tiles to the AI analysis model.");
             $sheets = (int) ceil($run->patches / 16);
