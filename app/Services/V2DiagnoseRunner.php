@@ -247,7 +247,16 @@ class V2DiagnoseRunner
             $line = trim(substr($buf, 0, $nl));
             $buf = substr($buf, $nl + 1);
             // Tool results, with the images in them, are never needed.
-            if ($line === '' || str_starts_with($line, '{"type":"user"')) {
+            if ($line === '') {
+                continue;
+            }
+            if (str_starts_with($line, '{"type":"user"')) {
+                // Tool results carry the images and are otherwise skipped; a
+                // permission denial is noted, so the audit knows the call
+                // had no effect.
+                if (str_contains($line, 'has been denied')) {
+                    $this->recordDenials($run, (array) json_decode($line, true));
+                }
                 continue;
             }
             $ev = json_decode($line, true);
@@ -259,7 +268,7 @@ class V2DiagnoseRunner
             } elseif (($ev['type'] ?? null) === 'assistant') {
                 foreach ($ev['message']['content'] ?? [] as $c) {
                     if (($c['type'] ?? null) === 'tool_use') {
-                        $this->recordTool($run, (string) ($c['name'] ?? ''), (array) ($c['input'] ?? []));
+                        $this->recordTool($run, (string) ($c['name'] ?? ''), (array) ($c['input'] ?? []), (string) ($c['id'] ?? ''));
                         $this->noteTool($run, (string) ($c['name'] ?? ''), (array) ($c['input'] ?? []), $watch);
                     }
                 }
@@ -314,15 +323,63 @@ class V2DiagnoseRunner
      * CLI denies a call after the stream has already shown it, and a run
      * whose model went looking outside its folder is not a blind reading.
      */
-    private function recordTool(V2Diagnosis $run, string $tool, array $in): void
+    private function recordTool(V2Diagnosis $run, string $tool, array $in, string $id = ''): void
     {
         $dir = $this->runDir($run);
+        $violation = $this->toolViolation($dir, $tool, $in);
         $entry = json_encode([
-            'at' => time(), 'tool' => $tool,
+            'at' => time(), 'id' => $id, 'tool' => $tool,
             'input' => array_intersect_key($in, array_flip(['file_path', 'path', 'pattern', 'command'])),
-            'violation' => $this->toolViolation($dir, $tool, $in),
+            'violation' => $violation,
+            'outside' => $violation !== null && $this->reachesOutside($dir, $tool, $in),
         ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         @file_put_contents("{$dir}/tool_calls.jsonl", $entry . "\n", FILE_APPEND);
+    }
+
+    /** The tool calls the CLI refused, from one tool-result line of the stream. */
+    private function recordDenials(V2Diagnosis $run, array $ev): void
+    {
+        foreach ($ev['message']['content'] ?? [] as $c) {
+            $text = is_string($c['content'] ?? null) ? $c['content'] : json_encode($c['content'] ?? '');
+            if (($c['type'] ?? null) === 'tool_result' && ! empty($c['is_error']) && ! empty($c['tool_use_id'])
+                && str_contains((string) $text, 'has been denied')) {
+                @file_put_contents($this->runDir($run) . '/tool_calls.jsonl',
+                    json_encode(['at' => time(), 'denied' => $c['tool_use_id']]) . "\n", FILE_APPEND);
+            }
+        }
+    }
+
+    /**
+     * Whether a call names anything outside the run folder: another path, a
+     * parent directory, the home directory, a variable, or a tool that
+     * reaches off the machine. Such an attempt voids a run even when the CLI
+     * refused it; a refused call that stays inside the folder had no effect.
+     */
+    public function reachesOutside(string $dir, string $tool, array $in): bool
+    {
+        switch ($tool) {
+            case 'Read':
+            case 'Glob':
+                return $this->toolViolation($dir, $tool, $in) !== null;
+            case 'Write':
+            case 'Edit':
+                return $this->toolViolation($dir, 'Read', $in) !== null;
+            case 'Bash':
+                $c = (string) ($in['command'] ?? '');
+                if (preg_match('#\.\.|~|\$|`#', $c)) {
+                    return true;
+                }
+                preg_match_all('#(?:^|[\s\'"=(,])(/[^\s\'")<>;|&,]+)#', $c, $m);
+                foreach ($m[1] as $path) {
+                    if ($path !== $this->pythonBin()
+                        && $this->toolViolation($dir, 'Read', ['file_path' => $path]) !== null) {
+                        return true;
+                    }
+                }
+                return false;
+            default:
+                return true;
+        }
     }
 
     /** Why one tool call is outside what a run may do, or null when it is allowed. */
@@ -363,7 +420,10 @@ class V2DiagnoseRunner
             case 'Bash':
                 $c = trim((string) ($in['command'] ?? ''));
                 $py = preg_quote($this->pythonBin(), '#');
-                if (preg_match("#^{$py} tools/v2_tools\.py (show|contours|zoom|validate) \.(?: [A-Za-z0-9_.\- ]*)?(?: 2>&1)?$#", $c)) {
+                $helper = "#^{$py} tools/v2_tools\.py (show|contours|zoom|validate) \.(?: [A-Za-z0-9_.\- ]*)?(?: 2>&1)?$#";
+                // One helper, or several chained with && (run #29 zoomed three tiles in one call).
+                $calls = preg_split('/\s*&&\s*/', $c);
+                if (count(array_filter($calls, fn ($x) => preg_match($helper, $x))) === count($calls)) {
                     return null;
                 }
                 // The CLI lets plain read-only commands on the folder through
@@ -416,10 +476,14 @@ class V2DiagnoseRunner
         if ($want === '' || ! is_file($tools) || ! hash_equals($want, (string) hash_file('sha256', $tools))) {
             $out[] = 'the helper script tools/v2_tools.py changed during the analysis';
         }
-        foreach (@file("{$dir}/tool_calls.jsonl", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
-            $v = json_decode($line, true)['violation'] ?? null;
-            if ($v) {
-                $out[] = $v;
+        $calls = array_map(fn ($l) => (array) json_decode($l, true),
+            @file("{$dir}/tool_calls.jsonl", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: []);
+        $denied = array_flip(array_filter(array_column($calls, 'denied')));
+        foreach ($calls as $e) {
+            // A refused call that stayed inside the folder changed nothing;
+            // anything that reached outside counts, refused or not.
+            if (! empty($e['violation']) && (! empty($e['outside']) || ! isset($denied[$e['id'] ?? '']))) {
+                $out[] = $e['violation'];
             }
         }
         return array_values(array_unique($out));
