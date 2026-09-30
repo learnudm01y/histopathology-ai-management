@@ -4,8 +4,13 @@
 
 @section('content')
 <style>
-  .v2-grid{display:block}
-  .v2-grid > .v2-card:first-child{max-width:46rem}
+  .v2-top{display:grid;gap:1.25rem;align-items:start;margin-bottom:1.1rem}
+  .v2-top > .v2-card{margin-bottom:0;min-width:0}
+  @media(min-width:1100px){
+    .v2-top{grid-template-columns:minmax(0,30rem) minmax(0,1fr)}
+    .v2-top > .v2-card-ctx{order:1}
+    .v2-top > .v2-card-slide{order:2}
+  }
   .v2-card{background:#fff;border:1px solid #e3e0ea;border-radius:8px;padding:1.1rem 1.25rem;margin-bottom:1.1rem}
   .v2-card h3{margin:0 0 .85rem;font-size:1.02rem;font-weight:600}
   .v2-tabs{display:flex;padding:3px;margin-bottom:1rem;background:#f3f1f8;border-radius:8px}
@@ -20,7 +25,7 @@
   .v2-card label{display:block;font-size:.8rem;font-weight:600;color:#41394f;margin-bottom:.35rem}
   .v2-card label .req{color:#b03d64}
   .v2-card label .v2-hint{font-weight:400}
-  .v2-card .v2-in{display:block;width:100%;height:2.6rem;padding:.55rem .8rem;font-size:.92rem;line-height:1.4;color:#2d2540;
+  .v2-card .v2-in{display:block;width:100%;box-sizing:border-box;height:2.6rem;padding:.55rem .8rem;font-size:.92rem;line-height:1.4;color:#2d2540;
           background:#fff;border:1px solid #d9d4e5;border-radius:7px;outline:none;box-shadow:none;
           transition:border-color .15s,box-shadow .15s}
   .v2-card textarea.v2-in{height:auto;min-height:4.6rem;resize:vertical}
@@ -219,7 +224,9 @@
 
 <form method="POST" action="{{ route('admin.v2-diagnose.store') }}" enctype="multipart/form-data" id="v2form">
   @csrf
-  <div class="v2-card">
+  {{-- Wide screens: the context on the left, the slide on its right. Narrow: the slide first. --}}
+  <div class="v2-top">
+  <div class="v2-card v2-card-slide">
     <h3>1 · The slide</h3>
     <input type="hidden" name="source" id="source" value="{{ old('source', 'existing') }}">
     <div class="v2-tabs">
@@ -284,10 +291,9 @@
     </div>
   </div>
 
-<div class="v2-grid">
-  <div class="v2-card">
+  <div class="v2-card v2-card-ctx">
     <h3>2 · Clinical context</h3>
-    <div class="v2-wait" id="ctxWait" hidden>Pick a slide above — whatever the archive holds about the patient is filled in here.</div>
+    <div class="v2-wait" id="ctxWait" hidden>Pick a slide on the right — whatever the archive holds about the patient is filled in here.</div>
     <div class="v2-knownbox" id="knownBox" hidden></div>
     <div class="v2-row">
       <div data-field="organ">
@@ -342,6 +348,7 @@
     </div>
 
     <button class="btn btn-primary" id="runBtn" style="margin-top:1rem;width:100%">Run V2 Diagnose</button>
+  </div>
   </div>
 
   <div class="v2-card" id="results">
@@ -460,7 +467,6 @@
     {{ $runs->links() }}
     @endif
   </div>
-</div>
 </form>
 {{-- Its own form: the runs table sits inside the run form, and forms cannot nest. --}}
 <form method="POST" id="delForm" style="display:none">@csrf @method('DELETE')</form>
