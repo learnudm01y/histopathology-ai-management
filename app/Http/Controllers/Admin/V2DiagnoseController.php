@@ -82,32 +82,61 @@ class V2DiagnoseController extends Controller
     }
 
     /**
-     * The archive slides of one organ and stain, each with what the database
-     * knows about it and every earlier V2 run on it.
+     * One page of an organ's archive slides, each with what the database
+     * knows about it and every earlier V2 run on it. Stain, search and
+     * "not run yet" are applied here, so they reach every slide, not only
+     * the page on screen.
      */
     public function archiveSamples(Request $request): JsonResponse
     {
         $v = $request->validate([
             'organ_id' => ['required', 'integer'],
-            'stain'    => ['required', 'string', 'max:10'],
+            'stain'    => ['nullable', 'string', 'max:10'],
+            'q'        => ['nullable', 'string', 'max:100'],
+            'unused'   => ['nullable', 'boolean'],
+            'page'     => ['nullable', 'integer', 'min:1'],
+            'per_page' => ['nullable', 'integer', 'in:25,50,100'],
         ]);
 
-        $q = $this->archive()->with(self::PROFILE_WITH);
+        $q = $this->archive();
         $v['organ_id'] ? $q->where('organ_id', $v['organ_id']) : $q->whereNull('organ_id');
-        match ($v['stain']) {
-            'all'   => null,
-            'none'  => $q->whereNull('stain_id'),
-            default => $q->where('stain_id', (int) $v['stain']),
+        match ($v['stain'] ?? '') {
+            '', 'all' => null,
+            'none'    => $q->whereNull('stain_id'),
+            default   => $q->where('stain_id', (int) $v['stain']),
         };
-        $samples = $q->orderByDesc('id')->limit(self::ARCHIVE_LIMIT + 1)->get();
-        $more = $samples->count() > self::ARCHIVE_LIMIT;
-        $samples = $samples->take(self::ARCHIVE_LIMIT);
+        if ($term = trim((string) ($v['q'] ?? ''))) {
+            $like = '%' . addcslashes($term, '%_\\') . '%';
+            $q->where(function ($w) use ($term, $like) {
+                $w->where('entity_submitter_id', 'like', $like)
+                  ->orWhere('file_name', 'like', $like)
+                  ->orWhereHas('patientCase', fn ($c) => $c->where('submitter_id', 'like', $like))
+                  ->orWhereHas('diseaseSubtype', fn ($d) => $d->where('name', 'like', $like))
+                  ->orWhereHas('category', fn ($d) => $d->where('label_en', 'like', $like))
+                  ->orWhereHas('patientCase.clinicalInfo', fn ($c) => $c->where('primary_diagnosis', 'like', $like)
+                      ->orWhere('site_of_resection_or_biopsy', 'like', $like));
+                if (ctype_digit(ltrim($term, '#'))) {
+                    $w->orWhere('id', (int) ltrim($term, '#'));
+                }
+            });
+        }
+        $ran = V2Diagnosis::whereNotNull('sample_id')->select('sample_id');
+        $usedTotal = (clone $q)->whereIn('id', $ran)->count();
+        if (! empty($v['unused'])) {
+            $q->whereNotIn('id', $ran);
+        }
 
-        $runs = $this->runsFor($samples);
+        $page = $q->with(self::PROFILE_WITH)->orderByDesc('id')
+            ->paginate($v['per_page'] ?? 25, ['*'], 'page', $v['page'] ?? 1);
+        $runs = $this->runsFor($page->getCollection());
 
         return response()->json([
-            'samples'   => $samples->map(fn ($s) => $this->profile($s, $runs->get($s->id, collect())))->values(),
-            'truncated' => $more,
+            'samples'    => $page->getCollection()->map(fn ($s) => $this->profile($s, $runs->get($s->id, collect())))->values(),
+            'total'      => $page->total(),
+            'page'       => $page->currentPage(),
+            'pages'      => $page->lastPage(),
+            'per_page'   => $page->perPage(),
+            'used_total' => $usedTotal,
         ]);
     }
 
@@ -117,8 +146,6 @@ class V2DiagnoseController extends Controller
         $sample->loadMissing(self::PROFILE_WITH);
         return response()->json($this->profile($sample, $this->runsFor(collect([$sample]))->get($sample->id, collect())));
     }
-
-    private const ARCHIVE_LIMIT = 2000;
 
     /** Relations a profile reads — the clinical row without its large JSON copies. */
     private const PROFILE_WITH = [

@@ -53,6 +53,15 @@ class V2DiagnoseTest extends TestCase
         Schema::create('disease_subtypes', function (Blueprint $t) {
             $t->id(); $t->unsignedBigInteger('category_id')->nullable(); $t->string('name'); $t->timestamps();
         });
+        // The archive search reaches the case and its clinical record.
+        Schema::create('cases', function (Blueprint $t) {
+            $t->id(); $t->string('case_id')->nullable(); $t->string('submitter_id')->nullable();
+            $t->string('project_id')->nullable(); $t->timestamps();
+        });
+        Schema::create('clinical_slide_case_information', function (Blueprint $t) {
+            $t->id(); $t->string('case_id'); $t->string('primary_diagnosis')->nullable();
+            $t->string('site_of_resection_or_biopsy')->nullable(); $t->timestamps();
+        });
         foreach (['2026_09_27_000001_create_v2_diagnoses_table', '2026_09_27_000002_add_usage_to_v2_diagnoses_table',
                   '2026_09_28_000001_add_diagnosis_code_to_v2_diagnoses_table'] as $m) {
             (require database_path("migrations/{$m}.php"))->up();
@@ -115,6 +124,24 @@ class V2DiagnoseTest extends TestCase
         $this->post('/admin/v2-diagnose', ['source' => 'server_path', 'server_path' => '/var/www/HISTO_AI/x.svs'])
             ->assertSessionHasErrors(['organ']);
         $this->assertSame(0, V2Diagnosis::count());
+    }
+
+    public function test_the_archive_is_paged_and_filtered_on_the_server(): void
+    {
+        $organ = \App\Models\Organ::firstOrCreate(['name' => 'Breast']);
+        $ids = collect(range(1, 30))->map(fn ($i) => Sample::forceCreate([
+            'entity_submitter_id' => sprintf('TCGA-XX-%04d', $i), 'organ_id' => $organ->id,
+            'storage_status' => 'available', 'wsi_remote_path' => "slides/{$i}.svs",
+        ])->id);
+        V2Diagnosis::create(['sample_id' => $ids[0], 'organ' => 'Breast', 'status' => 'completed']);
+        $url = "/admin/v2-diagnose/archive?organ_id={$organ->id}";
+
+        $this->actingAs($this->user)->getJson("{$url}&page=2&per_page=25")->assertOk()
+            ->assertJsonPath('total', 30)->assertJsonPath('pages', 2)->assertJsonPath('used_total', 1)
+            ->assertJsonCount(5, 'samples');
+        $this->getJson("{$url}&unused=1")->assertJsonPath('total', 29);
+        $this->getJson("{$url}&q=XX-0007")->assertJsonPath('total', 1)
+            ->assertJsonPath('samples.0.id', $ids[6]);
     }
 
     public function test_an_archive_slide_brings_its_own_clinical_context(): void
@@ -308,6 +335,46 @@ class V2DiagnoseTest extends TestCase
 
         file_put_contents("{$dir}/tools/v2_tools.py", 'import os');
         $this->assertCount(2, $runner->integrityViolations($run));
+    }
+
+    public function test_a_refused_call_voids_the_run_only_when_it_reached_outside_the_folder(): void
+    {
+        $runner = app(\App\Services\V2DiagnoseRunner::class);
+        $run = V2Diagnosis::create(['organ' => 'Breast', 'status' => 'analysing']);
+        $dir = $runner->runDir($run);
+        File::ensureDirectoryExists("{$dir}/tools");
+        file_put_contents("{$dir}/tools/v2_tools.py", 'x');
+        file_put_contents("{$dir}/tools.sha256", hash('sha256', 'x'));
+        $py = $runner->pythonBin();
+        $call = function (string $id, string $cmd) use ($runner, $dir) {
+            $in = ['command' => $cmd];
+            $v = $runner->toolViolation($dir, 'Bash', $in);
+            return json_encode(['id' => $id, 'tool' => 'Bash', 'input' => $in, 'violation' => $v,
+                                'outside' => $v !== null && $runner->reachesOutside($dir, 'Bash', $in)]) . "\n";
+        };
+        $log = fn (string ...$lines) => file_put_contents("{$dir}/tool_calls.jsonl", implode('', $lines));
+
+        // Helpers chained with && are allowed (run #29).
+        $this->assertNull($runner->toolViolation($dir, 'Bash',
+            ['command' => "{$py} tools/v2_tools.py zoom . P030 350 300 && {$py} tools/v2_tools.py zoom . P016 450 550"]));
+        $this->assertNotNull($runner->toolViolation($dir, 'Bash',
+            ['command' => "{$py} tools/v2_tools.py zoom . P030 350 300 && cat /etc/passwd"]));
+
+        // Refused, inside the folder (run #30's `ls && python -c` on manifest.json): no effect, run stands.
+        $inside = "ls && {$py} -c \"import json;m=json.load(open('manifest.json'))\"";
+        $log($call('a', $inside), json_encode(['denied' => 'a']) . "\n");
+        $this->assertSame([], $runner->integrityViolations($run));
+
+        // The same command, not refused: it ran, the run is void.
+        $log($call('a', $inside));
+        $this->assertCount(1, $runner->integrityViolations($run));
+
+        // Refused, but aimed outside the folder: void all the same.
+        foreach (['cat ../../../../.env', 'cat /etc/passwd', 'ls ~', 'cat $HOME/x',
+                  "{$py} -c \"open('/var/www/html/app/.env')\""] as $cmd) {
+            $log($call('b', $cmd), json_encode(['denied' => 'b']) . "\n");
+            $this->assertCount(1, $runner->integrityViolations($run), $cmd);
+        }
     }
 
     public function test_case_details_that_name_the_slide_or_its_diagnosis_are_refused(): void

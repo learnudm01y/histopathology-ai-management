@@ -104,8 +104,28 @@
   table.v2-arch tbody tr.used{background:#fffaf0}
   table.v2-arch tbody tr.used:hover{background:#fdf4e2}
   table.v2-arch tbody tr.sel{background:#efeafb;box-shadow:inset 3px 0 0 #6a55c2}
-  table.v2-arch td.v2-radio{width:1.8rem;padding-right:0}
-  table.v2-arch td.v2-radio input{margin-top:.2rem;accent-color:#6a55c2;pointer-events:none}
+  /* Each row's own buttons: pick it, or run it straight away. */
+  table.v2-arch td.v2-act{width:1%;white-space:nowrap;vertical-align:middle}
+  .v2-act-wrap{display:flex;flex-direction:column;gap:.35rem;min-width:7.2rem}
+  .v2-pick,.v2-go{display:inline-flex;align-items:center;justify-content:center;gap:.35rem;height:2rem;padding:0 .75rem;
+          border-radius:6px;font-size:.8rem;font-weight:600;cursor:pointer;transition:background .15s,color .15s,border-color .15s,box-shadow .15s}
+  .v2-pick{border:1px solid #cfc6ea;background:#fff;color:#4b3a94}
+  .v2-pick:hover{border-color:#6a55c2;background:#f5f2fd}
+  .v2-pick .dot{width:.8rem;height:.8rem;border-radius:50%;border:2px solid currentColor;flex:none}
+  tr.sel .v2-pick{background:#6a55c2;border-color:#6a55c2;color:#fff}
+  tr.sel .v2-pick .dot{background:#fff;border-color:#fff;box-shadow:inset 0 0 0 2px #6a55c2}
+  .v2-go{border:0;background:#2c7a5f;color:#fff;box-shadow:0 1px 2px rgba(20,60,45,.25)}
+  .v2-go:hover{background:#23654e}
+  .v2-go:disabled{opacity:.6;cursor:wait}
+  .v2-pager{display:flex;flex-wrap:wrap;gap:.6rem 1rem;align-items:center;justify-content:space-between;margin-top:.7rem}
+  .v2-pages{display:flex;flex-wrap:wrap;gap:.3rem;align-items:center}
+  .v2-pages button{min-width:2.1rem;height:2.1rem;padding:0 .55rem;border:1px solid #e0dbea;border-radius:6px;background:#fff;
+          color:#41394f;font-size:.84rem;cursor:pointer}
+  .v2-pages button:hover:not(:disabled){border-color:#6a55c2;color:#4b3a94}
+  .v2-pages button.on{background:#6a55c2;border-color:#6a55c2;color:#fff;font-weight:600}
+  .v2-pages button:disabled{opacity:.45;cursor:default}
+  .v2-pages span{color:#8a83a0;padding:0 .2rem}
+  .v2-run-picked{margin-top:1rem;width:100%;height:2.7rem;font-size:.95rem}
   .v2-id{font-weight:600;word-break:break-all}
   .v2-sub{font-size:.76rem;color:#7a7390;margin-top:.15rem;line-height:1.35}
   .v2-dx{display:inline-block;padding:.08rem .5rem;border-radius:5px;background:#eef3fb;color:#2f5586;font-weight:600;font-size:.8rem}
@@ -187,9 +207,17 @@
         </div>
         <div class="v2-tablewrap">
           <table class="v2-arch">
-            <thead><tr><th></th><th>Slide</th><th>Recorded diagnosis</th><th>Patient</th><th>Presentation</th><th>Pathology</th><th>V2 runs</th></tr></thead>
+            <thead><tr><th>Action</th><th>Slide</th><th>Recorded diagnosis</th><th>Patient</th><th>Presentation</th><th>Pathology</th><th>V2 runs</th></tr></thead>
             <tbody id="f_rows"></tbody>
           </table>
+        </div>
+        <div class="v2-pager">
+          <label class="v2-chk">Rows per page
+            <select id="f_per" class="v2-in" style="width:auto;height:2.1rem;padding:.2rem .5rem">
+              <option>25</option><option>50</option><option>100</option>
+            </select>
+          </label>
+          <div class="v2-pages" id="f_pages"></div>
         </div>
       </div>
       <div id="picked" class="v2-picked" hidden></div>
@@ -465,39 +493,45 @@
   var fQ = document.getElementById('f_q'), fUnused = document.getElementById('f_unused');
   var rowsEl = document.getElementById('f_rows'), countEl = document.getElementById('f_count');
   var archEl = document.getElementById('arch'), pickedEl = document.getElementById('picked');
-  var rows = [], byId = {}, truncated = false;
+  var fPer = document.getElementById('f_per'), pagesEl = document.getElementById('f_pages');
+  var rows = [], byId = {}, page = 1, meta = null, seq = 0, current = null;
   var archiveUrl = @json(route('admin.v2-diagnose.archive'));
+  var contextUrl = @json(url('admin/v2-diagnose/sample'));
   var VERDICT = { correct: '✓ correct', partial: '≈ partial', wrong: '✗ wrong' };
 
-  // The organ alone lists its slides; the stain narrows the table afterwards.
+  // The organ alone lists its slides; stain, search and "not run" narrow them on the server.
   function fillStains() {
     var o = archive.find(function (x) { return String(x.id) === fOrgan.value; });
     fStain.innerHTML = '<option value="">Every stain' + (o ? ' (' + o.n + ')' : '') + '</option>'
-      + (o ? o.stains.map(function (s) { return '<option value="' + esc(s.name) + '">' + esc(s.name) + ' (' + s.n + ')</option>'; }).join('') : '');
+      + (o ? o.stains.map(function (s) { return '<option value="' + esc(s.id) + '">' + esc(s.name) + ' (' + s.n + ')</option>'; }).join('') : '');
   }
 
-  function load() {
-    fillStains();
+  function load(p) {
     if (!fOrgan.value) { archEl.hidden = true; unpick(); return; }
+    page = p || 1;
     archEl.hidden = false;
     rowsEl.innerHTML = '<tr><td colspan="7" class="v2-empty">Loading the slides…</td></tr>';
-    countEl.textContent = '';
-    fetch(archiveUrl + '?organ_id=' + encodeURIComponent(fOrgan.value) + '&stain=all',
-          { headers: { 'Accept': 'application/json' } })
+    var qs = new URLSearchParams({ organ_id: fOrgan.value, stain: fStain.value, q: fQ.value.trim(),
+                                   unused: fUnused.checked ? 1 : 0, page: page, per_page: fPer.value });
+    var mine = ++seq; // a slower earlier answer must not overwrite a newer one
+    fetch(archiveUrl + '?' + qs, { headers: { 'Accept': 'application/json' } })
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function (d) {
-        rows = d.samples; truncated = d.truncated; byId = {};
+        if (mine !== seq) return;
+        rows = d.samples; meta = d; byId = {};
         rows.forEach(function (s) { byId[s.id] = s; });
-        if (byId[sid.value]) choose(byId[sid.value], true);
-        else unpick();
         render();
       })
       .catch(function (e) {
-        rows = []; byId = {}; unpick();
+        if (mine !== seq) return;
+        rows = []; byId = {}; meta = null; pagesEl.innerHTML = ''; countEl.textContent = '';
         rowsEl.innerHTML = '<tr><td colspan="7" class="v2-empty">Could not load the slides (' + esc(e.message) + ').</td></tr>';
       });
   }
-  fOrgan.addEventListener('change', load);
+  fOrgan.addEventListener('change', function () { fillStains(); unpick(); load(1); });
+  var typing;
+  fQ.addEventListener('input', function () { clearTimeout(typing); typing = setTimeout(function () { load(1); }, 300); });
+  [fStain, fUnused, fPer].forEach(function (el) { el.addEventListener('change', function () { load(1); }); });
 
   function dash(v) { return v == null || v === '' ? '<span class="v2-missing">—</span>' : esc(v); }
   function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
@@ -512,27 +546,37 @@
     var p = [s.sex ? cap(s.sex) : null, s.age != null ? s.age + ' y' : null].filter(Boolean).join(' · ');
     return (p ? '<span style="white-space:nowrap">' + esc(p) + '</span>' : dash(null)) + (s.race ? '<div class="v2-sub">' + esc(s.race) + '</div>' : '');
   }
-  function haystack(s) {
-    return [s.id, s.label, s.file, s.case, s.project, s.disease, s.category, s.primary_dx, s.site, s.laterality,
-            s.method, s.stage, s.receptors, s.sex, s.race].filter(Boolean).join(' ').toLowerCase();
+  function renderPages() {
+    if (!meta || meta.pages <= 1) { pagesEl.innerHTML = ''; return; }
+    var n = meta.pages, p = meta.page, out = [];
+    function btn(label, to, on, off) {
+      return '<button type="button" data-page="' + to + '"' + (on ? ' class="on"' : '') + (off ? ' disabled' : '') + '>' + label + '</button>';
+    }
+    out.push(btn('‹ Prev', p - 1, false, p === 1));
+    var near = [1, n, p - 2, p - 1, p, p + 1, p + 2].filter(function (x, i, a) { return x >= 1 && x <= n && a.indexOf(x) === i; })
+      .sort(function (a, b) { return a - b; });
+    near.forEach(function (x, i) {
+      if (i && x - near[i - 1] > 1) out.push('<span>…</span>');
+      out.push(btn(x, x, x === p, false));
+    });
+    out.push(btn('Next ›', p + 1, false, p === n));
+    pagesEl.innerHTML = out.join('');
   }
+  pagesEl.addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-page]');
+    if (b && !b.disabled) { load(+b.dataset.page); archEl.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  });
 
   function render() {
-    var words = fQ.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    var list = rows.filter(function (s) {
-      if (fUnused.checked && s.runs.length) return false;
-      if (fStain.value && (s.stain || 'Stain not recorded') !== fStain.value) return false;
-      var h = haystack(s);
-      return words.every(function (w) { return h.indexOf(w.replace(/^#/, '')) !== -1; });
-    });
-    var used = rows.filter(function (s) { return s.runs.length; }).length;
-    countEl.textContent = list.length + ' of ' + rows.length + ' slides · ' + used + ' already run'
-      + (truncated ? ' · only the newest ' + rows.length + ' shown' : '');
-    if (!list.length) {
-      rowsEl.innerHTML = '<tr><td colspan="7" class="v2-empty">' + (rows.length ? 'No slide matches.' : 'No slide in the archive for this organ and stain.') + '</td></tr>';
+    var from = meta.total ? (meta.page - 1) * meta.per_page + 1 : 0;
+    countEl.textContent = (meta.total ? from + '–' + (from + rows.length - 1) + ' of ' + meta.total : '0') + ' slides · '
+      + meta.used_total + ' already run';
+    renderPages();
+    if (!rows.length) {
+      rowsEl.innerHTML = '<tr><td colspan="7" class="v2-empty">No slide matches.</td></tr>';
       return;
     }
-    rowsEl.innerHTML = list.map(function (s) {
+    rowsEl.innerHTML = rows.map(function (s) {
       var last = s.runs[0];
       var runs = last
         ? '<span class="v2-used" title="This slide has been through V2 Diagnose before">● Used ×' + s.runs.length + '</span>'
@@ -542,7 +586,10 @@
       var pres = [s.site, s.laterality && !(s.site || '').toLowerCase().includes(s.laterality.toLowerCase()) ? s.laterality : null].filter(Boolean).join(' · ');
       var path = [s.stage, s.tnm].filter(Boolean).join(' · ');
       return '<tr data-id="' + s.id + '" class="' + (s.runs.length ? 'used' : '') + (String(s.id) === sid.value ? ' sel' : '') + '">'
-        + '<td class="v2-radio"><input type="radio" tabindex="-1"' + (String(s.id) === sid.value ? ' checked' : '') + '></td>'
+        + '<td class="v2-act"><div class="v2-act-wrap">'
+          + '<button type="button" class="v2-pick" data-act="pick"><span class="dot"></span>' + (String(s.id) === sid.value ? 'Selected' : 'Select') + '</button>'
+          + '<button type="button" class="v2-go" data-act="run" title="Run V2 Diagnose on this slide now">▶ Run analysis</button>'
+        + '</div></td>'
         + '<td><div class="v2-id">' + esc(s.case || s.label) + '</div><div class="v2-sub">#' + s.id
           + (s.file ? ' · ' + esc(s.file.length > 34 ? s.file.slice(0, 32) + '…' : s.file) : '') + (s.stain ? '<br>' + esc(s.stain) : '') + '</div></td>'
         + '<td>' + dxBadge(s) + (s.primary_dx ? '<div class="v2-sub">' + esc(s.primary_dx) + '</div>' : '') + '</td>'
@@ -552,16 +599,27 @@
         + '<td>' + runs + '</td></tr>';
     }).join('');
   }
-  fQ.addEventListener('input', render);
-  fUnused.addEventListener('change', render);
-  fStain.addEventListener('change', render);
   rowsEl.addEventListener('click', function (e) {
     var tr = e.target.closest('tr[data-id]');
-    if (tr && byId[tr.dataset.id]) { choose(byId[tr.dataset.id]); render(); }
+    var s = tr && byId[tr.dataset.id];
+    if (!s) return;
+    var go = e.target.closest('[data-act="run"]');
+    if (go) return runNow(s, go);
+    choose(s); render();
   });
+
+  // Straight from the row: the slide's own context goes with it, nothing to fill in.
+  function runNow(s, btn) {
+    if (s.runs.length && !confirm('This slide has already been run ' + s.runs.length + ' time(s). Run it again?')) return;
+    choose(s, true); render();
+    [btn, rowsEl.querySelector('tr[data-id="' + s.id + '"] [data-act="run"]'), document.getElementById('runPicked')]
+      .forEach(function (b) { if (b) { b.disabled = true; b.textContent = 'Starting…'; } });
+    form.requestSubmit ? form.requestSubmit() : form.submit();
+  }
 
   function choose(s, quiet) {
     sid.value = s.id;
+    current = s;
     var item = function (k, v) { return v == null || v === '' ? '' : '<div><dt>' + k + '</dt><dd>' + esc(v) + '</dd></div>'; };
     pickedEl.innerHTML = '<h4>Selected: ' + esc(s.case || s.label) + ' <span class="v2-hint">sample #' + s.id + '</span>'
       + (s.runs.length ? '<span class="v2-used">● Already run ×' + s.runs.length + '</span>' : '<span class="v2-fresh">Not run yet</span>')
@@ -579,12 +637,16 @@
           return '<a href="' + r.url + '" target="_blank">' + (r.overview ? '<img src="' + r.overview + '" alt="" loading="lazy">' : '')
             + '<span><b>Run #' + r.id + '</b> · ' + esc(r.when) + '<br>' + esc(r.diagnosis || r.status)
             + (r.verdict ? ' · ' + VERDICT[r.verdict] : '') + '</span></a>';
-        }).join('') + '</div>' : '');
+        }).join('') + '</div>' : '')
+      + '<button type="button" class="v2-go v2-run-picked" id="runPicked">▶ Run V2 Diagnose on this slide</button>';
     pickedEl.hidden = false;
     applyKnown(s.form, s);
     if (!quiet) pickedEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
-  function unpick() { sid.value = ''; pickedEl.hidden = true; applyKnown(null); }
+  function unpick() { sid.value = ''; current = null; pickedEl.hidden = true; applyKnown(null); }
+  pickedEl.addEventListener('click', function (e) {
+    if (e.target.id === 'runPicked' && current) runNow(current, e.target);
+  });
 
   /* ── Section 2: what the archive knows is filled and not asked for ───── */
   var FIELDS = ['organ', 'stain', 'age', 'sex', 'race', 'clinical_notes'];
@@ -645,7 +707,7 @@
   function onSource() {
     var existing = src.value === 'existing';
     document.getElementById('organ').required = !existing;
-    if (existing && byId[sid.value]) applyKnown(byId[sid.value].form);
+    if (existing && current) applyKnown(current.form);
     else applyKnown(null);
     if (!existing && !get('stain')) set('stain', 'H&E');
   }
@@ -661,8 +723,12 @@
 
   // A slide named in the URL, or the form coming back with errors: filter to it and pick it.
   if (picked && archive.some(function (o) { return o.id === picked.organ; })) {
-    fOrgan.value = picked.organ;
-    load();
+    fOrgan.value = picked.organ; fillStains();
+    load(1);
+    // It may sit on any page: its record comes on its own.
+    fetch(contextUrl + '/' + picked.id + '/context', { headers: { 'Accept': 'application/json' } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (s) { if (s) { choose(s, true); if (meta) render(); } });
   }
   onSource();
 })();
