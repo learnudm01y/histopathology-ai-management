@@ -152,6 +152,7 @@ class V2DiagnoseController extends Controller
             // The small drawing file only: final.json runs to megabytes and is
             // never needed to render the page.
             'final'  => $done ? $run->viewData() : null,
+            'progress' => $run->status === 'completed' ? null : $this->runner->progress($run),
         ]);
     }
 
@@ -159,8 +160,8 @@ class V2DiagnoseController extends Controller
     {
         return response()->json($run->only([
             'id', 'status', 'stage_message', 'events', 'summary', 'diagnosis', 'confidence',
-            'regions_count', 'error', 'cost_usd', 'num_turns',
-        ]));
+            'regions_count', 'error',
+        ]) + ['progress' => $this->runner->progress($run)]);
     }
 
     /**

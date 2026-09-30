@@ -71,22 +71,27 @@ class RunV2Diagnosis implements ShouldQueue
             $prompt = $runner->buildPrompt($run);
             file_put_contents($runner->runDir($run) . '/prompt.md', $prompt);
             $run->update(['prompt' => $prompt, 'claude_model' => config('v2_diagnose.claude.model')]);
-            $run->stage('analysing', "Analysing {$run->patches} tiles.");
+            $run->stage('analysing', "Sending {$run->patches} tiles to the AI analysis model.");
+            $sheets = (int) ceil($run->patches / 16);
+            $runner->mark($run, 'survey', 'Sending the tiles to the AI analysis model', 0, $sheets);
 
             $out = $runner->claude($run, $prompt);
             $this->account($run, $out);
             $session = $out['session_id'] ?? null;
 
             $run->stage('finalising', 'Checking the result and converting it to slide coordinates.');
+            $runner->mark($run, 'finalising', 'Diagnosis received — checking it and converting it to slide coordinates');
             $final = $runner->finalize($run);
 
             $attempts = (int) config('v2_diagnose.claude.repair_attempts', 2);
             for ($i = 1; empty($final['ok']) && $i <= $attempts && $session; $i++) {
-                $run->stage('analysing', "The result failed validation; sent back for correction (repair {$i}/{$attempts}).");
+                $run->stage('analysing', "The result failed validation; sent back to the AI analysis model for correction (repair {$i}/{$attempts}).");
+                $runner->mark($run, 'report', "The report failed a check — the AI analysis model is correcting it (repair {$i} of {$attempts})", null, null, 0.5);
                 $out = $runner->claude($run, $this->repairPrompt($final['errors'] ?? []), $session);
                 $this->account($run, $out);
                 $session = $out['session_id'] ?? $session;
                 $run->stage('finalising', 'Checking the repaired result.');
+                $runner->mark($run, 'finalising', 'Corrected diagnosis received — checking it again');
                 $final = $runner->finalize($run);
             }
 
@@ -136,6 +141,8 @@ class RunV2Diagnosis implements ShouldQueue
         }
         $run->stage('waiting_slide', 'Waiting for the slide to finish arriving (storage: '
             . ($run->sample?->storage_status ?? 'unknown') . ').');
+        app(V2DiagnoseRunner::class)->mark($run, 'fetching', 'Waiting for the slide to finish arriving in storage'
+            . ' (checked ' . ($this->wait + 1) . ' ' . ($this->wait ? 'times' : 'time') . ')');
         self::dispatch($this->runId, $this->wait + 1)->delay(now()->addMinutes(2));
     }
 

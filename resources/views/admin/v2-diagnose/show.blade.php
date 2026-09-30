@@ -50,6 +50,38 @@
   .v2-vs.wrong{background:#fbe9f0;border-color:#f0c2d3;color:#8c2a4d}
   .v2-vs.none{background:#f5f3fa;border-color:#e3e0ea;color:#6b6480}
   .v2-code{display:inline-block;background:#4b3a94;color:#fff;border-radius:6px;padding:.05rem .55rem;margin-right:.35rem;letter-spacing:.03em}
+  /* Live progress of a run */
+  .pg-head{display:flex;justify-content:space-between;align-items:baseline;gap:1rem}
+  .pg-head h3{margin:0}
+  .pg-pct{font-size:1.9rem;font-weight:700;color:#4b3a94;font-variant-numeric:tabular-nums;line-height:1}
+  .pg-bar{height:12px;background:#eeebf5;border-radius:6px;overflow:hidden;margin:.7rem 0 .9rem}
+  .pg-fill{height:100%;background:linear-gradient(90deg,#6c5bc4,#4b3a94);border-radius:6px;transition:width .8s ease;position:relative;overflow:hidden}
+  .pg-fill::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.35),transparent);
+                  animation:pg-shine 1.8s linear infinite;transform:translateX(-100%)}
+  .pg-failed .pg-fill{background:#b03d64}.pg-failed .pg-fill::after{display:none}
+  @keyframes pg-shine{to{transform:translateX(100%)}}
+  .pg-now{background:#f5f3fa;border-radius:6px;padding:.65rem .85rem;display:flex;gap:.7rem;align-items:flex-start}
+  .pg-now b{display:block;font-size:.98rem;color:#2c2540}
+  .pg-now .pg-det{font-size:.87rem;color:#57516a;margin-top:.15rem}
+  .pg-meta{font-size:.8rem;color:#8a83a0;margin:.45rem 0 .2rem;font-variant-numeric:tabular-nums}
+  .pg-spin{flex:none;width:18px;height:18px;margin-top:2px;border:2.5px solid #d9d3ea;border-top-color:#4b3a94;border-radius:50%;animation:pg-rot .9s linear infinite}
+  @keyframes pg-rot{to{transform:rotate(360deg)}}
+  .pg-steps{list-style:none;margin:.8rem 0 0;padding:0}
+  .pg-steps li{display:flex;align-items:center;gap:.6rem;padding:.38rem 0;font-size:.88rem;border-bottom:1px solid #f3f1f7}
+  .pg-steps li:last-child{border-bottom:0}
+  .pg-steps .ic{flex:none;width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:700}
+  .pg-steps .done .ic{background:#e4f1ec;color:#1f7a5a}
+  .pg-steps .done{color:#57516a}
+  .pg-steps .active{color:#2c2540;font-weight:600}
+  .pg-steps .active .ic{border:2.5px solid #d9d3ea;border-top-color:#4b3a94;animation:pg-rot .9s linear infinite;width:16px;height:16px;margin:0 2px}
+  .pg-steps .pending{color:#aaa3bd}
+  .pg-steps .pending .ic{border:2px solid #e3e0ea}
+  .pg-steps .failed{color:#b03d64;font-weight:600}
+  .pg-steps .failed .ic{background:#fbe9f0;color:#b03d64}
+  .pg-steps .lbl{flex:1}
+  .pg-steps time{font-size:.78rem;color:#9a93ad;font-weight:400;font-variant-numeric:tabular-nums}
+  .pg-mini{height:4px;background:#eeebf5;border-radius:2px;width:5rem;overflow:hidden}
+  .pg-mini i{display:block;height:100%;background:#6c5bc4;transition:width .8s ease}
 </style>
 @endpush
 
@@ -94,13 +126,29 @@
       @endif
       <p style="font-size:.8rem;color:#8a83a0;margin:.7rem 0 0">
         An automated first-pass reading by an AI model, for research. Not a diagnosis; a pathologist decides.</p>
-    @elseif($run->status === 'failed')
-      <h3>The run failed</h3>
-      <div class="v2-err">{{ $run->error }}</div>
     @else
-      <h3>Running — <span id="stNow">{{ $run->status }}</span></h3>
-      <p id="stMsg" style="margin:0;color:#41394f">{{ $run->stage_message }}</p>
-      <p style="font-size:.82rem;color:#8a83a0;margin:.5rem 0 0">This page follows along and reloads when the run ends.</p>
+      @if($run->status === 'failed')
+        <h3>The run failed</h3>
+        <div class="v2-err">{{ $run->error }}</div>
+      @endif
+      <div id="pg" class="{{ $run->status === 'failed' ? 'pg-failed' : '' }}">
+        <div class="pg-head">
+          <h3>{{ $run->status === 'failed' ? 'Where it stopped' : 'Analysis in progress' }}</h3>
+          <span class="pg-pct" id="pgPct">{{ $progress['percent'] }}%</span>
+        </div>
+        <div class="pg-bar"><div class="pg-fill" id="pgFill" style="width:{{ $progress['percent'] }}%"></div></div>
+        @unless($run->status === 'failed')
+        <div class="pg-now">
+          <span class="pg-spin"></span>
+          <div><b id="pgLabel">{{ $progress['label'] }}</b><div class="pg-det" id="pgDetail"></div></div>
+        </div>
+        <div class="pg-meta" id="pgMeta"></div>
+        @endunless
+        <ol class="pg-steps" id="pgSteps"></ol>
+        @unless($run->status === 'failed')
+        <p style="font-size:.8rem;color:#8a83a0;margin:.6rem 0 0">Updates live; the page shows the result by itself when the run ends.</p>
+        @endunless
+      </div>
     @endif
   </div>
 
@@ -221,19 +269,71 @@ document.getElementById('tilesCard').addEventListener('toggle', function () {
 </script>
 @endif
 
-@if($run->isRunning())
+@if($progress)
 <script>
-(function poll() {
-  setTimeout(function () {
-    fetch(@json(route('admin.v2-diagnose.status', $run)), { headers: { 'Accept': 'application/json' } })
-      .then(function (r) { return r.json(); })
-      .then(function (s) {
-        if (s.status === 'completed' || s.status === 'failed') { location.reload(); return; }
-        document.getElementById('stNow').textContent = s.status;
-        document.getElementById('stMsg').textContent = s.stage_message || '';
-        poll();
-      }).catch(poll);
-  }, 8000);
+(function () {
+  var running = @json($run->isRunning());
+  var P = @json($progress), msg = @json($run->stage_message);
+  var shown = 0, skew = 0;               // the bar never moves back; server clock minus ours
+  var $ = function (id) { return document.getElementById(id); };
+
+  function dur(s) {
+    s = Math.max(0, Math.round(s));
+    var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+    return (h ? h + ':' + (m < 10 ? '0' : '') : '') + m + ':' + (x < 10 ? '0' : '') + x;
+  }
+  function esc(t) { var d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+
+  function render() {
+    shown = running ? Math.max(shown, P.percent) : P.percent;
+    $('pgPct').textContent = shown + '%';
+    $('pgFill').style.width = shown + '%';
+    if (running) {
+      $('pgLabel').textContent = P.label;
+      $('pgDetail').textContent = P.detail || msg || '';
+    }
+    var icon = { done: '✓', failed: '!', active: '', pending: '' };
+    $('pgSteps').innerHTML = P.steps.map(function (s) {
+      var right = '';
+      if (s.state === 'done' && s.seconds !== null) right = '<time>' + dur(s.seconds) + '</time>';
+      if (s.state === 'active' && P.frac !== null) right = '<span class="pg-mini"><i style="width:' + Math.round(P.frac * 100) + '%"></i></span>';
+      if (s.state === 'active' && P.since) right += ' <time data-since>' + dur(Date.now() / 1000 + skew - P.since) + '</time>';
+      return '<li class="' + s.state + '"><span class="ic">' + icon[s.state] + '</span><span class="lbl">' + esc(s.label) + '</span>' + right + '</li>';
+    }).join('');
+    tick();
+  }
+
+  // Clocks run every second between polls.
+  function tick() {
+    if (!running) return;
+    var now = Date.now() / 1000 + skew;
+    $('pgMeta').textContent = 'Elapsed ' + dur(now - P.began) + (P.since ? ' · this step ' + dur(now - P.since) : '');
+    var t = document.querySelector('#pgSteps time[data-since]');
+    if (t && P.since) t.textContent = dur(now - P.since);
+  }
+
+  function poll() {
+    setTimeout(function () {
+      fetch(@json(route('admin.v2-diagnose.status', $run)), { headers: { 'Accept': 'application/json' } })
+        .then(function (r) { return r.json(); })
+        .then(function (s) {
+          if (s.status === 'completed' || s.status === 'failed') {
+            P = s.progress; render(); setTimeout(function () { location.reload(); }, 900); return;
+          }
+          P = s.progress; msg = s.stage_message; skew = P.now - Date.now() / 1000;
+          render();
+          var log = $('evLog');
+          if (log && s.events) log.innerHTML = s.events.map(function (e) {
+            return '<div class="v2-ev"><time>' + esc(e.at.substr(11)) + '</time>' + esc(e.message) + '</div>';
+          }).join('');
+          poll();
+        }).catch(poll);
+    }, 3000);
+  }
+
+  skew = P.now - Date.now() / 1000;
+  render();
+  if (running) { setInterval(tick, 1000); poll(); }
 })();
 </script>
 @endif

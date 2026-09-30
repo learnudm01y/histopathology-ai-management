@@ -35,6 +35,7 @@ import math
 import os
 import re
 import sys
+import time
 
 import cv2
 import numpy as np
@@ -73,6 +74,22 @@ def save(path: str, obj) -> None:
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(obj, fh, ensure_ascii=False, separators=(",", ":"))
     os.replace(tmp, path)
+
+
+_last_progress = [0.0]
+
+
+def progress(run: str, phase: str, done: int, total: int, detail: str, force: bool = False) -> None:
+    """How far tiling or preparation has got, for the run page (at most once a second)."""
+    now = time.time()
+    if not force and done < total and now - _last_progress[0] < 1.0:
+        return
+    _last_progress[0] = now
+    try:
+        save(os.path.join(run, "progress_py.json"),
+             {"phase": phase, "done": done, "total": total, "detail": detail, "at": int(now)})
+    except OSError:
+        pass                                  # progress is only ever informative
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -370,7 +387,9 @@ def cmd_tile(a) -> None:
     W0, H0 = slide.dimensions
     mpp0, mpp_source = declared_mpp(slide)
     mpp_measured = None
+    progress(run, "tile", 0, 0, "Finding the tissue on the slide", force=True)
     if not mpp0:
+        progress(run, "tile", 0, 0, "The slide declares no scale — measuring it from nuclear size", force=True)
         # No scale in the file at all: measure it from the nuclei rather than
         # refuse the slide, and say so on the result.
         mask0, ds0, _ = slide_tissue_mask(slide, 0.5)
@@ -406,9 +425,10 @@ def cmd_tile(a) -> None:
     if not jobs:
         out({"error": "No tissue was found on the slide."}, 1)
 
+    progress(run, "tile", 0, len(jobs), f"{len(jobs)} tiles with tissue found — cutting them", force=True)
     with Pool(max(1, a.workers), initializer=_open_slide, initargs=(a.slide,)) as pool:
-        for _ in pool.imap_unordered(_read_tile, jobs, chunksize=4):
-            pass
+        for i, _ in enumerate(pool.imap_unordered(_read_tile, jobs, chunksize=4), 1):
+            progress(run, "tile", i, len(jobs), f"{i} of {len(jobs)} tiles cut")
 
     with open(os.path.join(pdir, "patch_coords.csv"), "w", newline="") as fh:
         w = csv.writer(fh)
@@ -416,6 +436,7 @@ def cmd_tile(a) -> None:
         for name, x0, y0 in coords:
             w.writerow([name, x0, y0, size_l0, size_l0, level])
 
+    progress(run, "tile", len(jobs), len(jobs), "Measuring coverage and drawing the coverage map", force=True)
     tissue_px = int(mask.sum())
     coverage = float(covered.sum()) / tissue_px if tissue_px else 1.0
 
@@ -482,6 +503,9 @@ def cmd_prepare(a) -> None:
     for d in ("view", "sheets"):
         os.makedirs(os.path.join(run, d), exist_ok=True)
 
+    n = len(rows)
+    n_sheets = math.ceil(n / 16)
+    steps = 2 * n + n_sheets + 1                           # view images, density, sheets, overview
     mpp_tile = float(tiling.get("target_mpp") or 0.5)
     work_px = 952                                          # analysis resolution (~1 um/px at 0.5 mpp tiles)
     mpp_work = mpp_tile * int(tiling["patch_size"]) / work_px
@@ -496,6 +520,7 @@ def cmd_prepare(a) -> None:
     for i, r in enumerate(rows):
         pid = f"P{i + 1:0{pad}d}"
         ids[r["file"]] = pid
+        progress(run, "prepare", i, steps, f"Building the view image of tile {i + 1} of {n}")
         rgb = np.array(Image.open(os.path.join(pdir, r["file"])).convert("RGB"))
         small = cv2.resize(rgb, (work_px, work_px), interpolation=cv2.INTER_AREA)
         view = cv2.resize(rgb, (VIEW_PX, VIEW_PX), interpolation=cv2.INTER_AREA)
@@ -510,7 +535,8 @@ def cmd_prepare(a) -> None:
 
     # Pass 2: the density maps, from the tiles again rather than from memory.
     def smalls():
-        for r in rows:
+        for k, r in enumerate(rows):
+            progress(run, "prepare", n + k, steps, f"Measuring nuclear density, tile {k + 1} of {n}")
             rgb = np.array(Image.open(os.path.join(pdir, r["file"])).convert("RGB"))
             yield ids[r["file"]], cv2.resize(rgb, (work_px, work_px), interpolation=cv2.INTER_AREA)
 
@@ -523,6 +549,7 @@ def cmd_prepare(a) -> None:
 
     # Contact sheets: 16 tiles per sheet, labelled, for the first look.
     for s in range(0, len(manifest), per):
+        progress(run, "prepare", 2 * n + s // per, steps, f"Building contact sheet {s // per + 1} of {n_sheets}")
         sheet = np.full((4 * cell + 20, 4 * cell + 20, 3), 255, np.uint8)
         for k, m in enumerate(manifest[s:s + per]):
             y0, x0 = 10 + (k // 4) * cell, 10 + (k % 4) * cell
@@ -533,6 +560,7 @@ def cmd_prepare(a) -> None:
 
     # The overview: the slide with every tile outlined and labelled, so a tile
     # id can be placed on the slide at a glance.
+    progress(run, "prepare", steps - 1, steps, "Drawing the slide overview", force=True)
     tfile = tiling.get("thumb_file")
     if tfile and os.path.isfile(tfile):
         ov = np.array(Image.open(tfile).convert("RGB"))

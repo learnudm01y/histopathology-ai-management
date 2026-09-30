@@ -61,11 +61,10 @@ class V2DiagnoseRunner
         $mount = rtrim((string) config('services.gdrive_mount', '/mnt/gdrive'), '/');
         if (str_starts_with($wsi, $mount . '/')) {
             $local = "{$dir}/slide." . pathinfo($wsi, PATHINFO_EXTENSION);
-            if (! @copy($wsi, $local)) {
-                throw new \RuntimeException('Could not copy the slide from Drive for tiling.');
-            }
+            $this->copyWithProgress($run, $wsi, $local);
             $source = $local;
         }
+        $this->mark($run, 'tiling', 'Finding the tissue on the slide');
 
         // The whole slide, every tile that holds tissue — not patch_extract.py,
         // which samples for training: a 100-tile random cap and a half-tissue
@@ -110,6 +109,7 @@ class V2DiagnoseRunner
         // keeps the exact version of the tool it was analysed with.
         File::ensureDirectoryExists("{$dir}/tools");
         copy(base_path('scripts/v2_tools.py'), "{$dir}/tools/v2_tools.py");
+        $this->mark($run, 'preparing', 'Building the view images the AI model will read');
 
         return $this->python(["{$dir}/tools/v2_tools.py", 'prepare', $dir], 3600);
     }
@@ -159,7 +159,10 @@ class V2DiagnoseRunner
         // every call that is not on the allow-list below.
         $cmd = [
             $cfg['binary'], '-p',
-            '--output-format', 'json',
+            // stream-json reports each step as it happens, which is what the
+            // page's progress is read from; its last line is the same result
+            // object that plain json output returns.
+            '--output-format', 'stream-json', '--verbose',
             '--model', $cfg['model'],
             '--max-budget-usd', (string) $cfg['max_budget_usd'],
             '--restricted', '--strict-mcp-config',
@@ -180,8 +183,25 @@ class V2DiagnoseRunner
 
         $process = new Process($cmd, $dir, $env, $prompt, (float) $cfg['timeout']);
         $started = microtime(true);
-        $process->run();
-        $stdout = trim($process->getOutput());
+        $watch = ['phase' => $resume ? 2 : 0, 'sheets' => [], 'views' => [],
+                  'sheets_total' => (int) ceil(((int) $run->patches) / 16)];
+        $resultLine = null;
+        $buf = '';
+
+        // Read the stream as it arrives rather than at the end: the lines that
+        // carry the images the model looked at run to megabytes, and only the
+        // tool calls and the final result are wanted.
+        $process->start();
+        while ($process->isRunning()) {
+            usleep(300_000);
+            $process->checkTimeout();
+            $buf .= $process->getIncrementalOutput();
+            $process->clearOutput();
+            $buf = $this->consumeStream($run, $buf, $watch, $resultLine);
+        }
+        $this->consumeStream($run, $buf . $process->getIncrementalOutput() . "\n", $watch, $resultLine);
+
+        $stdout = trim((string) $resultLine);
         $stderr = trim($process->getErrorOutput());
 
         // Kept whatever happens: this is the record of what Claude said.
@@ -199,6 +219,246 @@ class V2DiagnoseRunner
                 . $process->getExitCode() . '): ' . mb_substr($stderr ?: $stdout, 0, 800));
         }
         return $json;
+    }
+
+    /**
+     * Complete lines of the stream: tool calls move the progress on, the
+     * result line is kept. Returns the unfinished tail.
+     */
+    private function consumeStream(V2Diagnosis $run, string $buf, array &$watch, ?string &$resultLine): string
+    {
+        while (($nl = strpos($buf, "\n")) !== false) {
+            $line = trim(substr($buf, 0, $nl));
+            $buf = substr($buf, $nl + 1);
+            // Tool results, with the images in them, are never needed.
+            if ($line === '' || str_starts_with($line, '{"type":"user"')) {
+                continue;
+            }
+            $ev = json_decode($line, true);
+            if (! is_array($ev)) {
+                continue;
+            }
+            if (($ev['type'] ?? null) === 'result') {
+                $resultLine = $line;
+            } elseif (($ev['type'] ?? null) === 'assistant') {
+                foreach ($ev['message']['content'] ?? [] as $c) {
+                    if (($c['type'] ?? null) === 'tool_use') {
+                        $this->noteTool($run, (string) ($c['name'] ?? ''), (array) ($c['input'] ?? []), $watch);
+                    }
+                }
+            }
+        }
+        return $buf;
+    }
+
+    /**
+     * What one tool call says about how far the reading has got. The model
+     * surveys the contact sheets, then opens tiles at full size, then writes
+     * and validates its report; the phase only ever moves forward.
+     */
+    private function noteTool(V2Diagnosis $run, string $tool, array $in, array &$watch): void
+    {
+        $path = str_replace('\\', '/', (string) ($in['file_path'] ?? ''));
+        $cmd = (string) ($in['command'] ?? '');
+        $n = $watch['sheets_total'];
+
+        if ($tool === 'Read' && preg_match('#sheets/sheet_(\d+)#', $path, $m)) {
+            $watch['sheets'][(int) $m[1]] = true;
+            if ($watch['phase'] === 0) {
+                $k = count($watch['sheets']);
+                $this->mark($run, 'survey', "Contact sheet {$k} of {$n} read", $k, $n);
+            }
+        } elseif ($tool === 'Read' && preg_match('#(overview|manifest)\.#', $path)) {
+            if ($watch['phase'] === 0) {
+                $this->mark($run, 'survey', 'Reading the slide overview and tile map', count($watch['sheets']), $n);
+            }
+        } elseif (($tool === 'Read' && preg_match('#view/(P\d+)\.jpg#', $path, $m))
+            || ($tool === 'Bash' && preg_match('#v2_tools\.py (?:show|contours) \S+ (P\d+)#', $cmd, $m))) {
+            if ($watch['phase'] > 1) {
+                return;
+            }
+            $watch['phase'] = 1;
+            $watch['views'][$m[1]] = true;
+            $k = count($watch['views']);
+            $what = $tool === 'Read' ? "Examining tile {$m[1]} at full resolution" : "Measuring nuclear density on tile {$m[1]}";
+            $this->mark($run, 'detail', "{$what} — {$k} " . ($k === 1 ? 'tile' : 'tiles') . ' opened so far', $k);
+        } elseif (in_array($tool, ['Write', 'Edit'], true) && str_ends_with($path, 'result.json')) {
+            $watch['phase'] = 2;
+            $this->mark($run, 'report', 'Writing the diagnosis report', null, null, 0.35);
+        } elseif ($tool === 'Bash' && str_contains($cmd, 'v2_tools.py validate')) {
+            $watch['phase'] = 2;
+            $this->mark($run, 'report', 'Checking the report against the required format', null, null, 0.7);
+        }
+    }
+
+    /** The slide copied off the Drive mount in pieces, reporting as it goes. */
+    private function copyWithProgress(V2Diagnosis $run, string $from, string $to): void
+    {
+        $size = (int) @filesize($from);
+        $mb = fn (int $b) => number_format($b / 1048576);
+        $in = @fopen($from, 'rb');
+        $out = $in ? @fopen($to, 'wb') : false;
+        if (! $in || ! $out) {
+            throw new \RuntimeException('Could not copy the slide from Drive for tiling.');
+        }
+        $this->mark($run, 'fetching', 'Copying the slide from storage', 0, $size ?: null);
+        $copied = 0;
+        $last = microtime(true);
+        try {
+            while (! feof($in)) {
+                $chunk = fread($in, 8 << 20);
+                if ($chunk === false || ($chunk !== '' && fwrite($out, $chunk) !== strlen($chunk))) {
+                    throw new \RuntimeException('Could not copy the slide from Drive for tiling.');
+                }
+                $copied += strlen($chunk);
+                if (microtime(true) - $last >= 2) {
+                    $last = microtime(true);
+                    $this->mark($run, 'fetching', "Copying the slide from storage — {$mb($copied)} of {$mb($size)} MB",
+                        $copied, $size ?: null);
+                }
+            }
+        } finally {
+            fclose($in);
+            fclose($out);
+        }
+    }
+
+    /**
+     * Record where a run is, for the page: the step, how far through it, and
+     * when each step began. One small file beside the run's other records;
+     * tiling and preparation write their own counts to progress_py.json.
+     */
+    public function mark(V2Diagnosis $run, string $step, ?string $detail = null,
+                         ?int $done = null, ?int $total = null, ?float $frac = null): void
+    {
+        $dir = $this->runDir($run);
+        File::ensureDirectoryExists($dir);
+        $file = "{$dir}/progress.json";
+        $started = $this->readJson($file)['started'] ?? [];
+        $started[$step] ??= time();
+        $p = ['step' => $step, 'detail' => $detail, 'done' => $done, 'total' => $total,
+              'frac' => $frac, 'updated' => time(), 'started' => $started];
+        @file_put_contents("{$file}.tmp", json_encode($p, JSON_UNESCAPED_UNICODE));
+        @rename("{$file}.tmp", $file);
+    }
+
+    private function readJson(string $file): array
+    {
+        return is_file($file) ? (json_decode((string) @file_get_contents($file), true) ?: []) : [];
+    }
+
+    /** The steps of a run as the page shows them: label, and its share of the whole in percent. */
+    public const STEPS = [
+        'queued'     => ['Waiting in the analysis queue', 0, 2],
+        'fetching'   => ['Fetching the slide from storage', 2, 8],
+        'tiling'     => ['Cutting the whole slide into tiles', 8, 25],
+        'preparing'  => ['Preparing the tiles for the AI model', 25, 35],
+        'survey'     => ['AI model surveying the whole slide', 35, 62],
+        'detail'     => ['AI model examining key tiles at full resolution', 62, 82],
+        'report'     => ['Receiving the diagnosis from the AI analysis model', 82, 90],
+        'finalising' => ['Checking the result and mapping it onto the slide', 90, 99],
+    ];
+
+    /** The step a run status stands for, refined by the step last marked. */
+    private function stepOf(string $status, ?string $marked): ?string
+    {
+        return match ($status) {
+            'queued'        => 'queued',
+            'waiting_slide' => 'fetching',
+            'tiling'        => in_array($marked, ['fetching', 'tiling'], true) ? $marked : 'tiling',
+            'preparing'     => 'preparing',
+            'analysing'     => in_array($marked, ['survey', 'detail', 'report'], true) ? $marked : 'survey',
+            'finalising'    => 'finalising',
+            default         => null,
+        };
+    }
+
+    /**
+     * A run's progress for the page: the overall percentage, the step being
+     * worked on and what exactly is happening in it, and every step with its
+     * state and how long it took.
+     */
+    public function progress(V2Diagnosis $run): array
+    {
+        $dir = $this->runDir($run);
+        $p = $this->readJson("{$dir}/progress.json");
+        $marked = $p['step'] ?? null;
+        $status = $run->status;
+
+        // When each step began: from the progress file where it has it,
+        // otherwise from the stage log (runs begun before the file existed).
+        $started = array_map('intval', $p['started'] ?? []);
+        $started['queued'] ??= $run->created_at?->timestamp;
+        $lastRunning = null;
+        foreach ($run->events ?? [] as $e) {
+            if ($k = $this->stepOf((string) ($e['status'] ?? ''), null)) {
+                $started[$k] ??= strtotime((string) $e['at']) ?: null;
+                $lastRunning = (string) $e['status'];
+            }
+        }
+
+        $current = match ($status) {
+            'completed' => 'finalising',
+            'failed'    => isset(self::STEPS[$marked]) ? $marked : $this->stepOf((string) $lastRunning, null),
+            default     => $this->stepOf((string) $status, $marked),
+        } ?? 'queued';
+
+        $detail = $done = $total = $frac = null;
+        if ($marked === $current) {
+            [$detail, $done, $total, $frac] = [$p['detail'] ?? null, $p['done'] ?? null, $p['total'] ?? null, $p['frac'] ?? null];
+        }
+        if (in_array($current, ['tiling', 'preparing'], true)) {
+            $py = $this->readJson("{$dir}/progress_py.json");
+            if (($py['phase'] ?? null) === ($current === 'tiling' ? 'tile' : 'prepare')) {
+                [$detail, $done, $total, $frac] = [$py['detail'] ?? $detail, $py['done'] ?? null, $py['total'] ?? null, null];
+            }
+        }
+        if ($frac === null && $total) {
+            $frac = min(1, $done / $total);
+        } elseif ($frac === null && $current === 'detail' && $done) {
+            $frac = min(0.95, $done / 45);       // a large slide opens about 30-60 tiles
+        }
+
+        [, $lo, $hi] = self::STEPS[$current];
+        $percent = $status === 'completed' ? 100 : (int) floor($lo + ($hi - $lo) * max(0, min(1, (float) $frac)));
+
+        $keys = array_keys(self::STEPS);
+        $at = array_search($current, $keys, true);
+        $steps = [];
+        foreach ($keys as $i => $k) {
+            $state = match (true) {
+                $status === 'completed' || $i < $at => 'done',
+                $i === $at => $status === 'failed' ? 'failed' : 'active',
+                default => 'pending',
+            };
+            // A finished step lasted until the next step that has a start time.
+            $until = null;
+            foreach (array_slice($keys, $i + 1) as $next) {
+                if (isset($started[$next])) {
+                    $until = $started[$next];
+                    break;
+                }
+            }
+            $until ??= $status === 'completed' ? $run->finished_at?->timestamp : null;
+            $steps[] = [
+                'key' => $k, 'label' => self::STEPS[$k][0], 'state' => $state,
+                'seconds' => $state === 'done' && isset($started[$k]) && $until ? max(0, $until - $started[$k]) : null,
+            ];
+        }
+
+        return [
+            'percent' => $percent,
+            'step'    => $current,
+            'label'   => self::STEPS[$current][0],
+            'detail'  => $detail,
+            'done'    => $done,
+            'total'   => $total,
+            'frac'    => $frac,
+            'since'   => $started[$current] ?? null,
+            'began'   => $run->started_at?->timestamp ?? $run->created_at?->timestamp,
+            'now'     => time(),
+            'steps'   => $steps,
+        ];
     }
 
     public function finalize(V2Diagnosis $run): array
