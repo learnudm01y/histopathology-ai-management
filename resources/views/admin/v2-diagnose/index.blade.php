@@ -85,7 +85,7 @@
   table.v2-runs td:last-child{vertical-align:middle;text-align:center}
 
   /* Archive: organ → stain → Filter, then every slide in a table. */
-  .v2-filter{display:grid;grid-template-columns:minmax(0,16rem) minmax(0,20rem) auto;gap:.9rem;align-items:end}
+  .v2-filter{display:grid;grid-template-columns:minmax(0,22rem);gap:.9rem;align-items:end}
   @media(max-width:720px){.v2-filter{grid-template-columns:1fr}}
   .v2-filter .btn{height:2.6rem;padding:0 1.6rem}
   .v2-card select.v2-in{appearance:auto;padding-right:.6rem}
@@ -175,17 +175,13 @@
             @endforeach
           </select>
         </div>
-        <div>
-          <label for="f_stain">Stain <span class="req">*</span></label>
-          <select id="f_stain" class="v2-in" disabled><option value="">Choose the organ first</option></select>
-        </div>
-        <div><button type="button" id="f_go" class="btn btn-primary" disabled>Filter</button></div>
       </div>
-      <div class="v2-hint">{{ $archive->sum('n') }} slides whose image is on Drive. Slides already run through V2 Diagnose are marked.</div>
+      <div class="v2-hint">{{ $archive->sum('n') }} slides whose image is on Drive. Choose an organ to list its slides; those already run through V2 Diagnose are marked.</div>
 
       <div id="arch" hidden>
         <div class="v2-archbar">
           <input type="search" id="f_q" class="v2-in" placeholder="Search case id, file, diagnosis, site…" autocomplete="off">
+          <select id="f_stain" class="v2-in" style="max-width:15rem"><option value="">Every stain</option></select>
           <label class="v2-chk"><input type="checkbox" id="f_unused"> Only slides not run before</label>
           <span class="v2-count" id="f_count"></span>
         </div>
@@ -466,48 +462,42 @@
   var archive = @json($archive);
   var picked = @json($picked);
   var fOrgan = document.getElementById('f_organ'), fStain = document.getElementById('f_stain');
-  var fGo = document.getElementById('f_go'), fQ = document.getElementById('f_q'), fUnused = document.getElementById('f_unused');
+  var fQ = document.getElementById('f_q'), fUnused = document.getElementById('f_unused');
   var rowsEl = document.getElementById('f_rows'), countEl = document.getElementById('f_count');
   var archEl = document.getElementById('arch'), pickedEl = document.getElementById('picked');
   var rows = [], byId = {}, truncated = false;
   var archiveUrl = @json(route('admin.v2-diagnose.archive'));
   var VERDICT = { correct: '✓ correct', partial: '≈ partial', wrong: '✗ wrong' };
 
+  // The organ alone lists its slides; the stain narrows the table afterwards.
   function fillStains() {
     var o = archive.find(function (x) { return String(x.id) === fOrgan.value; });
-    fStain.innerHTML = o
-      ? '<option value="">Choose a stain</option>'
-        + o.stains.map(function (s) { return '<option value="' + s.id + '">' + esc(s.name) + ' (' + s.n + ')</option>'; }).join('')
-        + (o.stains.length > 1 ? '<option value="all">Any stain (' + o.n + ')</option>' : '')
-      : '<option value="">Choose the organ first</option>';
-    fStain.disabled = !o;
-    if (o && o.stains.length === 1) fStain.value = o.stains[0].id;
-    fGo.disabled = !fStain.value;
+    fStain.innerHTML = '<option value="">Every stain' + (o ? ' (' + o.n + ')' : '') + '</option>'
+      + (o ? o.stains.map(function (s) { return '<option value="' + esc(s.name) + '">' + esc(s.name) + ' (' + s.n + ')</option>'; }).join('') : '');
   }
-  fOrgan.addEventListener('change', fillStains);
-  fStain.addEventListener('change', function () { fGo.disabled = !fStain.value; });
 
-  function load(thenPick) {
-    if (!fOrgan.value || !fStain.value) return;
-    fGo.disabled = true; fGo.textContent = 'Loading…';
-    fetch(archiveUrl + '?organ_id=' + encodeURIComponent(fOrgan.value) + '&stain=' + encodeURIComponent(fStain.value),
+  function load() {
+    fillStains();
+    if (!fOrgan.value) { archEl.hidden = true; unpick(); return; }
+    archEl.hidden = false;
+    rowsEl.innerHTML = '<tr><td colspan="7" class="v2-empty">Loading the slides…</td></tr>';
+    countEl.textContent = '';
+    fetch(archiveUrl + '?organ_id=' + encodeURIComponent(fOrgan.value) + '&stain=all',
           { headers: { 'Accept': 'application/json' } })
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function (d) {
         rows = d.samples; truncated = d.truncated; byId = {};
         rows.forEach(function (s) { byId[s.id] = s; });
-        archEl.hidden = false;
         if (byId[sid.value]) choose(byId[sid.value], true);
-        else if (!thenPick) unpick();
+        else unpick();
         render();
       })
       .catch(function (e) {
-        archEl.hidden = false; rows = []; render();
+        rows = []; byId = {}; unpick();
         rowsEl.innerHTML = '<tr><td colspan="7" class="v2-empty">Could not load the slides (' + esc(e.message) + ').</td></tr>';
-      })
-      .finally(function () { fGo.disabled = false; fGo.textContent = 'Filter'; });
+      });
   }
-  fGo.addEventListener('click', function () { load(false); });
+  fOrgan.addEventListener('change', load);
 
   function dash(v) { return v == null || v === '' ? '<span class="v2-missing">—</span>' : esc(v); }
   function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
@@ -531,6 +521,7 @@
     var words = fQ.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
     var list = rows.filter(function (s) {
       if (fUnused.checked && s.runs.length) return false;
+      if (fStain.value && (s.stain || 'Stain not recorded') !== fStain.value) return false;
       var h = haystack(s);
       return words.every(function (w) { return h.indexOf(w.replace(/^#/, '')) !== -1; });
     });
@@ -563,6 +554,7 @@
   }
   fQ.addEventListener('input', render);
   fUnused.addEventListener('change', render);
+  fStain.addEventListener('change', render);
   rowsEl.addEventListener('click', function (e) {
     var tr = e.target.closest('tr[data-id]');
     if (tr && byId[tr.dataset.id]) { choose(byId[tr.dataset.id]); render(); }
@@ -663,16 +655,14 @@
     if (src.value === 'existing' && !sid.value) {
       e.preventDefault();
       (archEl.hidden ? fOrgan : archEl).scrollIntoView({ behavior: 'smooth', block: 'center' });
-      alert('Choose a slide from the table first: organ, stain, Filter, then click a row.');
+      alert('Choose a slide from the table first: choose the organ, then click a row.');
     }
   });
 
   // A slide named in the URL, or the form coming back with errors: filter to it and pick it.
   if (picked && archive.some(function (o) { return o.id === picked.organ; })) {
-    fOrgan.value = picked.organ; fillStains();
-    if ([].some.call(fStain.options, function (o) { return o.value === picked.stain; })) fStain.value = picked.stain;
-    fGo.disabled = !fStain.value;
-    load(true);
+    fOrgan.value = picked.organ;
+    load();
   }
   onSource();
 })();
