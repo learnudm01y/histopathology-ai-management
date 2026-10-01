@@ -142,7 +142,10 @@ class GdcCaseImporter
 
             // Demographic
             'demographic_id'                     => $demographic['demographic_id'] ?? null,
-            'gender'                             => $demographic['gender'] ?? null,
+            // GDC stopped sending `gender` and now sends only `sex_at_birth`;
+            // everything downstream (verification, filters, exports) reads
+            // `gender`, so fill it from the newer field rather than leave it null.
+            'gender'                             => $demographic['gender'] ?? $demographic['sex_at_birth'] ?? null,
             'sex_at_birth'                       => $demographic['sex_at_birth'] ?? null,
             'race'                               => $demographic['race'] ?? null,
             'ethnicity'                          => $demographic['ethnicity'] ?? null,
