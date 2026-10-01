@@ -489,6 +489,17 @@ class V2DiagnoseTest extends TestCase
         $log($call('a', "cat > /dev/null <<'EOF'\nEOF\n{$py} - <<'EOF'\nnotes=\"carcinoma itself ~0.95; tissue ~1-9% of each tile...\"\nEOF"),
             json_encode(['denied' => 'a']) . "\n");
         $this->assertSame([], $runner->integrityViolations($run));
+        // A refused Grep of its own manifest (run #70) changed nothing; a Grep of the app voids the run.
+        $grep = fn (string $path) => json_encode(['id' => 'g', 'tool' => 'Grep', 'input' => ['path' => $path],
+            'violation' => $runner->toolViolation($dir, 'Grep', ['path' => $path]),
+            'outside' => $runner->reachesOutside($dir, 'Grep', ['path' => $path])]) . "
+";
+        $log($grep("{$dir}/manifest.json"), json_encode(['denied' => 'g']) . "
+");
+        $this->assertSame([], $runner->integrityViolations($run));
+        $log($grep("{$dir}/../../.."), json_encode(['denied' => 'g']) . "
+");
+        $this->assertCount(1, $runner->integrityViolations($run));
         // Output thrown into /dev/null is not reaching outside (runs #48, #50).
         $log($call('a', "cat > /dev/null <<'EOF'\nEOF\n{$py} - <<'EOF'\nimport json\nEOF"), json_encode(['denied' => 'a']) . "\n");
         $this->assertSame([], $runner->integrityViolations($run));

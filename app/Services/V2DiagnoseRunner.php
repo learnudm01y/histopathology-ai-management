@@ -301,7 +301,7 @@ class V2DiagnoseRunner
                 // Tool results carry the images and are otherwise skipped; a
                 // permission denial is noted, so the audit knows the call
                 // had no effect.
-                if (str_contains($line, 'has been denied')) {
+                if (str_contains($line, 'has been denied') || str_contains($line, 'No such tool available')) {
                     $this->recordDenials($run, (array) json_decode($line, true));
                 }
                 continue;
@@ -389,7 +389,7 @@ class V2DiagnoseRunner
         foreach ($ev['message']['content'] ?? [] as $c) {
             $text = is_string($c['content'] ?? null) ? $c['content'] : json_encode($c['content'] ?? '');
             if (($c['type'] ?? null) === 'tool_result' && ! empty($c['is_error']) && ! empty($c['tool_use_id'])
-                && str_contains((string) $text, 'has been denied')) {
+                && (str_contains((string) $text, 'has been denied') || str_contains((string) $text, 'No such tool available'))) {
                 @file_put_contents($this->runDir($run) . '/tool_calls.jsonl',
                     json_encode(['at' => time(), 'denied' => $c['tool_use_id']]) . "\n", FILE_APPEND);
             }
@@ -408,6 +408,10 @@ class V2DiagnoseRunner
             case 'Read':
             case 'Glob':
                 return $this->toolViolation($dir, $tool, $in) !== null;
+            case 'Grep':
+            case 'LS':
+                // Not allowed, but a search of the run folder reaches nothing outside it (run #70).
+                return $this->toolViolation($dir, 'Glob', ['path' => $in['path'] ?? '.', 'pattern' => $in['glob'] ?? '']) !== null;
             case 'Write':
             case 'Edit':
                 return $this->toolViolation($dir, 'Read', $in) !== null;
