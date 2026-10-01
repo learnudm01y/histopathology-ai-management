@@ -588,4 +588,26 @@ class V2DiagnoseTest extends TestCase
              ->expectsOutputToContain('tuning   ILC     correct 1')
              ->assertSuccessful();
     }
+
+    public function test_brain_lung_and_prostate_answers_are_judged_with_their_synonyms(): void
+    {
+        $db = \Illuminate\Support\Facades\DB::table(...);
+        $tumour = $db('categories')->insertGetId(['label_en' => 'tumor']);
+        $sub = fn (string $name) => $db('disease_subtypes')->insertGetId(['category_id' => $tumour, 'name' => $name]);
+        $ids = ['GBM' => $sub('GBM'), 'LGG' => $sub('LGG'), 'LUAD' => $sub('LUAD'), 'LUSC' => $sub('LUSC'), 'PRAD' => $sub('PRAD')];
+        $verdict = function (string $truth, string $code) use ($tumour, $ids) {
+            $s = Sample::forceCreate(['entity_submitter_id' => 'S', 'category_id' => $tumour, 'disease_subtype_id' => $ids[$truth]]);
+            return V2Diagnosis::create(['sample_id' => $s->id, 'organ' => 'X', 'status' => 'completed',
+                'diagnosis_code' => $code])->fresh()->verdict()['result'];
+        };
+        foreach ([
+            ['GBM', 'GBM', 'correct'], ['GBM', 'LGG', 'partial'], ['GBM', 'MET', 'wrong'], ['GBM', 'NORMAL', 'wrong'],
+            ['LGG', 'LGG', 'correct'], ['LGG', 'ASTRO', 'correct'], ['LGG', 'OLIGO', 'correct'], ['LGG', 'GBM', 'partial'],
+            ['LUAD', 'LUAD', 'correct'], ['LUAD', 'NSCLC', 'partial'], ['LUAD', 'LUSC', 'wrong'],
+            ['LUSC', 'LUSC', 'correct'], ['LUSC', 'LUAD', 'wrong'], ['LUSC', 'SUSP', 'partial'],
+            ['PRAD', 'PRAD', 'correct'], ['PRAD', 'BENIGN', 'wrong'],
+        ] as [$truth, $code, $want]) {
+            $this->assertSame($want, $verdict($truth, $code), "{$code} on {$truth}");
+        }
+    }
 }

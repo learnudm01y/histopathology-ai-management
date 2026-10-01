@@ -54,6 +54,23 @@ class V2Diagnosis extends Model
     /** Codes that mean carcinoma, invasive or in situ. */
     private const MALIGNANT = ['IDC', 'ILC', 'MIXED', 'DCIS', 'LCIS', 'MUC', 'TUB', 'MPC', 'MBC', 'MED'];
 
+    /** Other codes for the same recorded diagnosis: counted as right. */
+    private const SAME = [
+        'LGG'  => ['ASTRO', 'OLIGO', 'ODG', 'OA', 'DA', 'AA', 'AO'],   // grade 2-3 diffuse gliomas
+        'PRAD' => ['ACINAR', 'PCA'],
+    ];
+
+    /** The right family but another type or grade: counted as partial. */
+    private const NEAR = [
+        'GBM'  => ['LGG', 'ASTRO', 'OLIGO', 'ODG', 'OA', 'DA', 'AA', 'AO'],
+        'LGG'  => ['GBM'],
+        'LUAD' => ['NSCLC', 'ADSQ'],
+        'LUSC' => ['NSCLC', 'ADSQ'],
+    ];
+
+    /** Codes that say no tumour was found. */
+    private const NO_TUMOUR = ['NORMAL', 'BENIGN', 'NONDX', 'FA', 'SA', 'PAP', 'UDH', 'FCC', 'ADH', 'ALH', 'FEA'];
+
     /** Codes that name a benign lesion. */
     private const BENIGN_LESION = ['BENIGN', 'FA', 'PHY', 'UDH', 'FCC', 'ADENOSIS', 'PASH', 'FIBROCYSTIC', 'SA', 'PAP'];
 
@@ -117,11 +134,12 @@ class V2Diagnosis extends Model
                 default => ['wrong', "{$code} called on a benign lesion"],
             },
             default => match (true) {
-                $code === $truth => ['correct', 'right type'],
+                $code === $truth || in_array($code, self::SAME[$truth] ?? [], true) => ['correct', 'right type'],
                 $code === 'MIXED' && in_array($truth, ['IDC', 'ILC'], true) => ['partial', 'mixed ductal-lobular called'],
-                $code === 'SUSP' => ['partial', 'carcinoma suspected but not called'],
-                in_array($code, self::MALIGNANT, true) => ['wrong', "carcinoma found, but typed as {$code}"],
-                default => ['wrong', "the carcinoma was missed ({$code})"],
+                in_array($code, self::NEAR[$truth] ?? [], true) => ['partial', "tumour found, typed as the related {$code}"],
+                $code === 'SUSP' => ['partial', 'tumour suspected but not called'],
+                in_array($code, self::NO_TUMOUR, true) => ['wrong', "the tumour was missed ({$code})"],
+                default => ['wrong', "tumour found, but typed as {$code}"],
             },
         };
         return ['result' => $result, 'truth' => $truth, 'reason' => $reason];
