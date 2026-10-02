@@ -64,8 +64,8 @@ class V2Diagnosis extends Model
     private const NEAR = [
         'GBM'  => ['LGG', 'ASTRO', 'OLIGO', 'ODG', 'OA', 'DA', 'AA', 'AO'],
         'LGG'  => ['GBM'],
-        'LUAD' => ['NSCLC', 'ADSQ'],
-        'LUSC' => ['NSCLC', 'ADSQ'],
+        'LUAD' => ['NSCLC', 'ADSQ', 'PSC', 'PLEO'],   // pleomorphic/sarcomatoid: a non-small cell carcinoma
+        'LUSC' => ['NSCLC', 'ADSQ', 'PSC', 'PLEO'],
     ];
 
     /** Codes that say no tumour was found. */

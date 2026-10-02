@@ -143,6 +143,45 @@ model got it wrong, and the change it produced. Read this before changing
 - **#48, #50:** voided by the integrity check for a refused command writing to
   `/dev/null`. This was a false positive, fixed in f44543c.
 
+## Brain, lung, prostate batch (runs #56–#115, 2026-10-01)
+
+53 correct, 4 partial and 3 wrong of 60 held-out slides; PRAD 20/20. Studied:
+
+- **#91 LUSC → NSCLC (partial).** The model saw keratin-pearl-like whorls and
+  still gave NSCLC. Rule: keratinisation, pearls or intercellular bridges
+  make it LUSC; NSCLC only without any differentiation (WHO).
+- **#74 LGG → GBM (partial).** Its "necrosis" (P361) is at 20× a cleft with
+  degenerating gemistocytic cells, a tear rather than coagulative or
+  palisading necrosis, and there is no MVP. Rule: grade 4 needs palisading
+  necrosis or definite MVP on zoom; tears and haemorrhage do not count.
+- **#62 GBM → PXA (wrong).** Bizarre giant and xanthomatous cells, but the
+  model itself saw the tumour infiltrating the brain. Rule: PXA (rare, young)
+  only for a circumscribed tumour with eosinophilic granular bodies; an
+  infiltrating pleomorphic glioma is giant-cell GBM.
+- **#73 LGG → GBM (partial), not changed.** P312 shows genuine glomeruloid
+  microvascular proliferation, histologically grade 4. The slide and the
+  label disagree; WHO 2021 grading also depends on molecular tests that H&E
+  cannot give.
+- **#59 GBM → LGG (partial), not changed.** A fragmented biopsy with no
+  necrosis or MVP visible; the model said GBM is not excluded. H&E cannot do
+  more.
+- **#78 LUAD → PSC (wrong → partial by scoring).** At 20× there are fascicles of
+  spindle and epithelioid cells with vacuolated cytoplasm, and no glands in the
+  zoomed areas: a pleomorphic/sarcomatoid carcinoma, which WHO classifies
+  apart from adenocarcinoma even with a glandular component. Scoring now
+  counts PSC/PLEO on LUAD or LUSC as a related non-small cell carcinoma.
+- **#83 LUAD → PLCH (wrong), label to review.** At 40× the zoomed areas are
+  sheets of eosinophils, lymphocytes and histiocytoid cells with anthracotic
+  pigment, with no glands or cohesive malignant epithelium. The model
+  described the slide accurately. Either this diagnostic slide does not hold
+  the tumour, or the tumour is a minor focus. It needs a pathologist's look,
+  not a rule.
+
+Technical: #62 read all 16 contact sheets; its "contact sheets failed to
+display" remark is not supported by its session (59 images returned, no
+error, no compaction). It finished 243 tiles in 4 minutes, and #83 opened 4
+tiles in 110 s: thin readings, which survey now partly guards against.
+
 ## Re-runs
 
 A re-run keeps its id (`php artisan v2:rerun <ids>`, or Re-run on the page).

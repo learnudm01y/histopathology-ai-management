@@ -624,6 +624,7 @@ class V2DiagnoseTest extends TestCase
             ['GBM', 'GBM', 'correct'], ['GBM', 'LGG', 'partial'], ['GBM', 'MET', 'wrong'], ['GBM', 'NORMAL', 'wrong'],
             ['LGG', 'LGG', 'correct'], ['LGG', 'ASTRO', 'correct'], ['LGG', 'OLIGO', 'correct'], ['LGG', 'GBM', 'partial'],
             ['LUAD', 'LUAD', 'correct'], ['LUAD', 'NSCLC', 'partial'], ['LUAD', 'LUSC', 'wrong'],
+            ['LUAD', 'PSC', 'partial'], ['LUAD', 'PLCH', 'wrong'],
             ['LUSC', 'LUSC', 'correct'], ['LUSC', 'LUAD', 'wrong'], ['LUSC', 'SUSP', 'partial'],
             ['PRAD', 'PRAD', 'correct'], ['PRAD', 'BENIGN', 'wrong'],
         ] as [$truth, $code, $want]) {

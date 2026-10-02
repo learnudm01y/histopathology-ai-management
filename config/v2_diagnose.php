@@ -100,5 +100,8 @@ return [
         125,    // TCGA-E9-A1NF (Normal): NONDX on scant frozen fragments, run #8
         299,    // TCGA-BH-A1EW (Normal): NONDX on stroma only, run #51
         475,    // TCGA-E2-A1IG (Normal): NONDX on scant frozen fragments, runs #48/#53
+        1581,   // TCGA-02-0001 (GBM): called PXA, run #62
+        1594,   // TCGA-DB-5270 (LGG): GBM called on a tissue tear, run #74
+        1612,   // TCGA-56-1622 (LUSC): NSCLC despite keratin pearls, run #91
     ],
 ];
