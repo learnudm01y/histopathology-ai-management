@@ -438,6 +438,15 @@ class V2DiagnoseTest extends TestCase
         foreach ($bad as [$tool, $in]) {
             $this->assertNotNull($runner->toolViolation($dir, $tool, $in), json_encode([$tool, $in]));
         }
+
+        // Full paths, as on the host (runs #106, #109): the run folder itself is fine, anything else is not.
+        $host = '/var/www/app/storage/app/v2_diagnose/106';
+        foreach (["ls {$host}", "ls {$host} && ls {$host}/sheets", "head -c 1500 {$host}/manifest.json"] as $cmd) {
+            $this->assertNull($runner->toolViolation($host, 'Bash', ['command' => $cmd]), $cmd);
+        }
+        foreach (["ls {$host}/../105", "head -c 99 {$host}5/result.json", 'cat /var/www/app/.env', "ls {$host} && ls /etc"] as $cmd) {
+            $this->assertNotNull($runner->toolViolation($host, 'Bash', ['command' => $cmd]), $cmd);
+        }
     }
 
     public function test_a_changed_helper_or_a_recorded_violation_fails_the_integrity_check(): void

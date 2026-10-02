@@ -486,8 +486,16 @@ class V2DiagnoseRunner
                 $segs = preg_split('/\s*(?:&&|\|)\s*/', $c);
                 foreach ($segs as $seg) {
                     if (! preg_match('#^(cat|ls|head|tail|wc)(?: [A-Za-z0-9_.\-*/ ]*)?$#', $seg)
-                        || preg_match('#(\.\.|(^|\s)/|~)#', $seg)) {
+                        || preg_match('#(\.\.|~)#', $seg)) {
                         return "ran a command other than the helpers: {$c}";
+                    }
+                    // A full path is fine when it is the run folder itself
+                    // (runs #106, #109: `ls /var/www/.../v2_diagnose/106`).
+                    preg_match_all('#(?:^|\s)(/\S+)#', $seg, $abs);
+                    foreach ($abs[1] as $path) {
+                        if (! $inside($path)) {
+                            return "ran a command other than the helpers: {$c}";
+                        }
                     }
                 }
                 return null;
