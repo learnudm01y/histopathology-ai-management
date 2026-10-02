@@ -488,7 +488,7 @@ def cmd_density(a) -> None:
         small = small_of(t)
         h = hematoxylin(small)[tissue_mask(small)]
         if h.size:
-            samples.append(h[:: max(1, h.size // 5000)])
+            samples.append(h[:: max(1, h.size // 5000)].copy())   # a copy: a view keeps the whole tile alive (OOM at 600+ tiles)
     thr = otsu(np.concatenate(samples)) if samples else 1.0
     write_density(run, ((t["id"], small_of(t)) for t in man["tiles"]), thr, mpp_work)
     out({"ok": True, "tiles": len(man["tiles"]), "hematoxylin_threshold": round(thr, 4)})
@@ -533,7 +533,7 @@ def cmd_prepare(a) -> None:
         thumbs[pid] = cv2.resize(small, (cell - 6, cell - 6), interpolation=cv2.INTER_AREA)
         h = hematoxylin(small)[tissue_mask(small)]
         if h.size:
-            samples.append(h[:: max(1, h.size // 5000)])
+            samples.append(h[:: max(1, h.size // 5000)].copy())   # a copy: a view keeps the whole tile alive (OOM at 600+ tiles)
     thr = otsu(np.concatenate(samples)) if samples else 1.0
 
     # Pass 2: the density maps, from the tiles again rather than from memory.

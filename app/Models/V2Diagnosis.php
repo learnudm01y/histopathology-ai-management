@@ -14,7 +14,7 @@ class V2Diagnosis extends Model
 {
     protected $table = 'v2_diagnoses';
 
-    public const RUNNING = ['queued', 'waiting_slide', 'tiling', 'preparing', 'analysing', 'finalising'];
+    public const RUNNING = ['queued', 'waiting_slide', 'waiting_quota', 'tiling', 'preparing', 'analysing', 'finalising'];
 
     protected $fillable = [
         'sample_id', 'user_id', 'organ', 'stain', 'age', 'sex', 'race', 'clinical_notes',

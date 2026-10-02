@@ -649,6 +649,7 @@ class V2DiagnoseRunner
         return match ($status) {
             'queued'        => 'queued',
             'waiting_slide' => 'fetching',
+            'waiting_quota' => 'queued',
             'tiling'        => in_array($marked, ['fetching', 'tiling'], true) ? $marked : 'tiling',
             'preparing'     => 'preparing',
             'analysing'     => in_array($marked, ['survey', 'detail', 'report'], true) ? $marked : 'survey',

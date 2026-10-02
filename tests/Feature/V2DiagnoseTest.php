@@ -621,4 +621,28 @@ class V2DiagnoseTest extends TestCase
             $this->assertSame($want, $verdict($truth, $code), "{$code} on {$truth}");
         }
     }
+
+    public function test_a_run_that_meets_the_usage_limit_waits_for_the_reset_instead_of_failing(): void
+    {
+        Queue::fake();
+        $runner = app(\App\Services\V2DiagnoseRunner::class);
+        $run = V2Diagnosis::create(['organ' => 'Brain', 'status' => 'waiting_quota', 'patches' => 3]);
+        $dir = $runner->runDir($run);
+        File::ensureDirectoryExists("{$dir}/patches");
+        file_put_contents("{$dir}/manifest.json", '{"tiles":[]}');
+
+        // While the limit holds, the prepared run is parked again without calling the model.
+        \Illuminate\Support\Facades\Cache::put('v2:quota_until', time() + 3600, 3600);
+        (new RunV2Diagnosis($run->id, 0, true))->handle($runner);
+        $this->assertSame('waiting_quota', $run->fresh()->status);
+        $this->assertTrue($run->fresh()->isRunning());
+        Queue::assertPushed(RunV2Diagnosis::class, fn ($j) => $j->runId === $run->id && $j->analyseOnly);
+
+        // The CLI's own wording is read for the reset time.
+        $reset = (fn (array $o) => $this->quotaReset($o))->call(new RunV2Diagnosis($run->id),
+            ['result' => "You've hit your session limit · resets 8:40am (UTC)"]);
+        $this->assertSame('08:40', $reset->format('H:i'));
+        $this->assertTrue($reset->isFuture());
+        $this->assertNull((fn (array $o) => $this->quotaReset($o))->call(new RunV2Diagnosis($run->id), ['result' => 'DONE']));
+    }
 }

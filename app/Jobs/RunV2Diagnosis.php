@@ -9,6 +9,8 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -31,7 +33,15 @@ class RunV2Diagnosis implements ShouldQueue
     /** How long a slide that is still arriving is waited for (~3 h at 2 min). */
     private const MAX_WAITS = 90;
 
-    public function __construct(public readonly int $runId, public readonly int $wait = 0)
+    /** Until when the analysis model's subscription limit holds (unix time), shared by every worker. */
+    private const QUOTA_KEY = 'v2:quota_until';
+
+    /**
+     * $analyseOnly: the slide was already tiled and prepared when the model's
+     * usage limit stopped the run, so it resumes at the analysis.
+     */
+    public function __construct(public readonly int $runId, public readonly int $wait = 0,
+                                public readonly bool $analyseOnly = false)
     {
         $this->onConnection(config('v2_diagnose.queue_connection'));
         $this->onQueue(config('v2_diagnose.queue'));
@@ -42,7 +52,7 @@ class RunV2Diagnosis implements ShouldQueue
         // Claim the run. Only a queued or waiting run can be claimed, so a
         // duplicate delivery finds nothing to do instead of paying twice.
         $claimed = V2Diagnosis::whereKey($this->runId)
-            ->whereIn('status', ['queued', 'waiting_slide'])
+            ->whereIn('status', ['queued', 'waiting_slide', 'waiting_quota'])
             ->update(['status' => 'tiling', 'started_at' => now()]);
         if (! $claimed) {
             return;
@@ -57,23 +67,34 @@ class RunV2Diagnosis implements ShouldQueue
                     . 'diagnosis (' . implode(', ', $leaks) . '). Remove them so the slide is read blind.');
             }
 
-            $wsi = $runner->resolveWsi($run);
-            if (! $wsi) {
-                $this->waitForSlide($run);
-                return;
+            $ready = $this->analyseOnly && is_file($runner->runDir($run) . '/manifest.json')
+                && is_dir($runner->runDir($run) . '/patches');
+            if (! $ready) {
+                $wsi = $runner->resolveWsi($run);
+                if (! $wsi) {
+                    $this->waitForSlide($run);
+                    return;
+                }
+
+                $t = config('v2_diagnose.tiling');
+                $run->stage('tiling', "Cutting the whole slide into {$t['patch_size']} px tiles at "
+                    . "{$t['target_mpp']} µm/px — every tile that holds tissue.");
+                $runner->tile($run, $wsi);
+
+                $cov = $runner->coverage($run);
+                $run->refresh()->stage('preparing', "{$run->patches} tiles cut"
+                    . ($cov !== null ? ', covering ' . round($cov * 100, 1) . '% of the tissue' : '')
+                    . ". Building view images, "
+                    . 'contact sheets and the density measurement.');
+                $runner->prepare($run);
             }
 
-            $t = config('v2_diagnose.tiling');
-            $run->stage('tiling', "Cutting the whole slide into {$t['patch_size']} px tiles at "
-                . "{$t['target_mpp']} µm/px — every tile that holds tissue.");
-            $runner->tile($run, $wsi);
-
-            $cov = $runner->coverage($run);
-            $run->refresh()->stage('preparing', "{$run->patches} tiles cut"
-                . ($cov !== null ? ', covering ' . round($cov * 100, 1) . '% of the tissue' : '')
-                . ". Building view images, "
-                . 'contact sheets and the density measurement.');
-            $runner->prepare($run);
+            // The model's usage limit is shared: while it holds, wait for it
+            // instead of spending a call that can only report it again.
+            if (($until = (int) Cache::get(self::QUOTA_KEY, 0)) > time()) {
+                $this->waitForQuota($run, $runner, Carbon::createFromTimestampUTC($until));
+                return;
+            }
 
             $prompt = $runner->buildPrompt($run);
             file_put_contents($runner->runDir($run) . '/prompt.md', $prompt);
@@ -85,6 +106,10 @@ class RunV2Diagnosis implements ShouldQueue
 
             $out = $runner->claude($run, $prompt);
             $this->account($run, $out);
+            if ($reset = $this->quotaReset($out)) {
+                $this->waitForQuota($run, $runner, $reset);
+                return;
+            }
             $this->guard($runner, $run);
             $session = $out['session_id'] ?? null;
 
@@ -98,6 +123,10 @@ class RunV2Diagnosis implements ShouldQueue
                 $runner->mark($run, 'report', "The report failed a check — the AI analysis model is correcting it (repair {$i} of {$attempts})", null, null, 0.5);
                 $out = $runner->claude($run, $this->repairPrompt($final['errors'] ?? []), $session);
                 $this->account($run, $out);
+                if ($reset = $this->quotaReset($out)) {
+                    $this->waitForQuota($run, $runner, $reset);
+                    return;
+                }
                 $this->guard($runner, $run);
                 $session = $out['session_id'] ?? $session;
                 $run->stage('finalising', 'Checking the repaired result.');
@@ -139,6 +168,46 @@ class RunV2Diagnosis implements ShouldQueue
             $run->update(['error' => mb_substr($e->getMessage(), 0, 4000), 'finished_at' => now()]);
             $run->stage('failed', 'Failed: the worker stopped the run (' . class_basename($e) . ').');
         }
+    }
+
+    /**
+     * When the model's subscription limit resets, if this call ended on it:
+     * the CLI answers "You've hit your session limit · resets 8:40am (UTC)"
+     * instead of analysing (runs #99-#115 failed on it). Null otherwise.
+     */
+    private function quotaReset(array $out): ?Carbon
+    {
+        $text = (string) ($out['result'] ?? '');
+        if (! preg_match('/hit your (session|usage|weekly|daily) limit|usage limit reached/i', $text)) {
+            return null;
+        }
+        $at = null;
+        if (preg_match('/resets\s+([^()·]+?)\s*\((UTC)\)/i', $text, $m)) {
+            try {
+                $at = Carbon::parse(trim($m[1]), 'UTC');
+                if ($at->isPast()) {
+                    $at->addDay();
+                }
+            } catch (\Throwable) {
+                $at = null;
+            }
+        }
+        return $at ?? now('UTC')->addHour();
+    }
+
+    /**
+     * Park the run until the limit resets: the tiles stay, the result fields
+     * stay empty, and the job comes back for the analysis alone. Runs are
+     * spread over a few minutes after the reset so they do not all start at once.
+     */
+    private function waitForQuota(V2Diagnosis $run, V2DiagnoseRunner $runner, Carbon $until): void
+    {
+        Cache::put(self::QUOTA_KEY, $until->timestamp, $until);
+        $run->update(['summary' => null, 'diagnosis_code' => null, 'diagnosis' => null, 'confidence' => null]);
+        $run->stage('waiting_quota', "Waiting for the analysis model's usage limit to reset at "
+            . $until->format('Y-m-d H:i') . ' UTC; the slide is prepared and will be analysed then.');
+        $runner->mark($run, 'queued', 'Waiting for the usage limit to reset at ' . $until->format('H:i') . ' UTC');
+        self::dispatch($this->runId, 0, true)->delay($until->copy()->addMinutes(3 + $this->runId % 10));
     }
 
     /** The slide is still on its way in: look again in two minutes. */
