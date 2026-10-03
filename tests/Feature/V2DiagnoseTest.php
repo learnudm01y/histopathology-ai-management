@@ -696,7 +696,7 @@ class V2DiagnoseTest extends TestCase
         $this->assertSame(['correct', 'wrong', 'failed'], [$right->outcome(), $wrong->outcome(), $failed->outcome()]);
 
         $page = $this->actingAs($this->user)->get('/admin/v2-diagnose?r_out=failed')->assertOk();
-        $page->assertSee('Failed (1)')->assertSee('✓ Correct (1)')->assertSee('1 matching the filter');
+        $page->assertSee('Failed (1)')->assertSee('✓ Correct (1)')->assertSee('1 matching the filter')->assertSee('≈ Partial (0)');
         $this->assertSame([$failed->id], $page->viewData('runs')->pluck('id')->all());
 
         $none = $this->actingAs($this->user)->get('/admin/v2-diagnose?r_out=partial')->assertOk();

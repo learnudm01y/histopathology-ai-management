@@ -74,12 +74,13 @@ class V2DiagnoseController extends Controller
             }
         }
         $outCounts = $outcomes->countBy()->all();
+        // Every known outcome is listed, even at zero, so the list reads the same each time.
         $outOptions = collect(V2Diagnosis::OUTCOMES)
             ->map(fn ($label, $key) => ['id' => $key, 'name' => $label, 'n' => $outCounts[$key] ?? 0])
             // Any status not foreseen above still gets an entry of its own.
             ->union(collect($outCounts)->diffKeys(V2Diagnosis::OUTCOMES)
                 ->map(fn ($n, $key) => ['id' => $key, 'name' => ucfirst(str_replace('_', ' ', $key)), 'n' => $n]))
-            ->filter(fn ($o) => $o['n'] > 0)->values()->all();
+            ->values()->all();
 
         $out = (string) $request->input('r_out') ?: null;
         $f['out'] = $out;
