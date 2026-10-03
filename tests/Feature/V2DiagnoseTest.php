@@ -655,4 +655,28 @@ class V2DiagnoseTest extends TestCase
         $this->assertTrue($reset->isFuture());
         $this->assertNull((fn (array $o) => $this->quotaReset($o))->call(new RunV2Diagnosis($run->id), ['result' => 'DONE']));
     }
+
+    public function test_a_slide_whose_label_is_under_review_is_counted_neither_right_nor_wrong(): void
+    {
+        $db = \Illuminate\Support\Facades\DB::table(...);
+        $tumour = $db('categories')->insertGetId(['label_en' => 'tumor']);
+        $luad = $db('disease_subtypes')->insertGetId(['category_id' => $tumour, 'name' => 'LUAD']);
+        $mk = function (string $code) use ($tumour, $luad) {
+            $s = Sample::forceCreate(['entity_submitter_id' => 'S', 'category_id' => $tumour, 'disease_subtype_id' => $luad]);
+            return V2Diagnosis::create(['sample_id' => $s->id, 'organ' => 'Lung', 'status' => 'completed',
+                'diagnosis_code' => $code, 'diagnosis' => "{$code} — x"]);
+        };
+        $disputed = $mk('LCH');
+        $mk('LUAD');
+        $mk('LUSC');
+        config(['v2_diagnose.label_review' => [$disputed->sample_id => 'the slide shows no tumour']]);
+
+        $v = $disputed->fresh()->verdict();
+        $this->assertSame(['review', 'wrong'], [$v['result'], $v['scored_as']], 'what it would have scored stays on record');
+        $this->assertStringContainsString('the slide shows no tumour', $v['reason']);
+
+        $page = $this->actingAs($this->user)->get('/admin/v2-diagnose')->assertOk();
+        $page->assertSee('(2 results)', false)->assertSee('1 correct')->assertSee('1 wrong')
+             ->assertSee('1 label under review')->assertSee('50% fully correct');
+    }
 }

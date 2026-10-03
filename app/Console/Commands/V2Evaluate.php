@@ -148,6 +148,6 @@ class V2Evaluate extends Command
     private function counts(array $c): string
     {
         return implode(', ', array_map(fn ($k) => "{$k} {$c[$k]}",
-            array_values(array_filter(['correct', 'partial', 'wrong', 'VOID', 'failed', 'refused'], fn ($k) => isset($c[$k])))));
+            array_values(array_filter(['correct', 'partial', 'wrong', 'review', 'VOID', 'failed', 'refused'], fn ($k) => isset($c[$k])))));
     }
 }

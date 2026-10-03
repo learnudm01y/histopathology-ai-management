@@ -87,6 +87,17 @@ return [
     'queue'            => env('V2_QUEUE', 'v2'),
 
     // ── Evaluation (php artisan v2:evaluate) ─────────────────────────────
+    // Slides whose tissue contradicts their recorded diagnosis, with the
+    // evidence. Their runs show as "under review", counted neither right nor
+    // wrong, until a pathologist settles the slide; then remove the entry.
+    // Never add a slide here to improve a score: only with evidence from the
+    // slide itself, written down in V2_DIAGNOSE_LESSONS.md.
+    'label_review' => [
+        1609 => 'TCGA-75-5122 DX1: every tile is an eosinophil-rich histiocytic and lymphoid infiltrate '
+              . '(likely smoking-related Langerhans cell histiocytosis) with no recognisable adenocarcinoma; '
+              . 'the case is adenocarcinoma, stage IB, so this block may not hold the tumour',
+    ],
+
     // Slides whose errors were studied to write the rules in the prompt
     // (resources/prompts/V2_DIAGNOSE_LESSONS.md). A correct answer on them is expected,
     // not evidence, so the report counts them apart from unseen slides.

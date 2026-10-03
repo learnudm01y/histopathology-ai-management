@@ -48,6 +48,7 @@
   .v2-vs.correct{background:#e4f1ec;border-color:#b9ddd0;color:#1f5446}
   .v2-vs.partial{background:#faf0da;border-color:#e8d19a;color:#6b4e0e}
   .v2-vs.wrong{background:#fbe9f0;border-color:#f0c2d3;color:#8c2a4d}
+  .v2-vs.review{background:#eceaf4;border-color:#d6d2e6;color:#3f3a56}
   .v2-vs.none{background:#f5f3fa;border-color:#e3e0ea;color:#6b6480}
   .v2-code{display:inline-block;background:#4b3a94;color:#fff;border-radius:6px;padding:.05rem .55rem;margin-right:.35rem;letter-spacing:.03em}
   /* Live progress of a run */
@@ -114,7 +115,7 @@
       @php $v = $run->verdict(); @endphp
       <div class="v2-vs {{ $v['result'] ?? 'none' }}">
         @if($v)
-          <b>{{ ['correct' => '✓ Correct', 'partial' => '≈ Partially correct', 'wrong' => '✗ Wrong'][$v['result']] }}</b>
+          <b>{{ ['correct' => '✓ Correct', 'partial' => '≈ Partially correct', 'wrong' => '✗ Wrong', 'review' => '⚑ Label under review'][$v['result']] }}</b>
           against the recorded diagnosis <b>{{ $v['truth'] }}</b> — {{ $v['reason'] }}.
         @else
           No recorded diagnosis for this slide in the archive, so the answer cannot be checked against one.

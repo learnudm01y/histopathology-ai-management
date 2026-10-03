@@ -64,7 +64,7 @@ class V2DiagnoseController extends Controller
 
         // The tally across every finished run in the filter whose slide has a
         // recorded diagnosis — not only the page shown.
-        $tally = ['correct' => 0, 'partial' => 0, 'wrong' => 0];
+        $tally = ['correct' => 0, 'partial' => 0, 'wrong' => 0, 'review' => 0];
         V2Diagnosis::with($withTruth)->when($any, $filtered)->where('status', 'completed')
             ->get(['id', 'sample_id', 'status', 'diagnosis_code'])
             ->each(function ($r) use (&$tally) {

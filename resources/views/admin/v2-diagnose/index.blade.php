@@ -109,6 +109,7 @@
   .v2-match.correct{background:#e4f1ec;color:#2c6b5b}
   .v2-match.partial{background:#faf0da;color:#8a6414}
   .v2-match.wrong{background:#fbe9f0;color:#b03d64}
+  .v2-match.review{background:#eceaf4;color:#4f4a66}
   .v2-tally{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:-.3rem 0 .9rem;font-size:.85rem;color:#57516a}
   .v2-eye{display:inline-flex;align-items:center;justify-content:center;width:2rem;height:2rem;border-radius:6px;
           color:#4b3a94;background:#f3f1f8;font-size:1.15rem;text-decoration:none;transition:background .15s,color .15s}
@@ -404,13 +405,14 @@
       @endif
     </div>
 
-    @php $scored = array_sum($tally); @endphp
+    @php $scored = $tally['correct'] + $tally['partial'] + $tally['wrong']; @endphp
     @if($scored)
     <div class="v2-tally" title="Finished runs whose slide has a recorded diagnosis in the archive, compared with it.">
       Against the recorded diagnosis ({{ $scored }} {{ array_filter($rf) ? 'filtered ' : '' }}results):
       <span class="v2-match correct">✓ {{ $tally['correct'] }} correct</span>
       <span class="v2-match partial">≈ {{ $tally['partial'] }} partial</span>
       <span class="v2-match wrong">✗ {{ $tally['wrong'] }} wrong</span>
+      @if($tally['review'])<span class="v2-match review" title="The slide's tissue contradicts its recorded diagnosis; a pathologist decides. Not counted.">⚑ {{ $tally['review'] }} label under review</span>@endif
       <span>· {{ round($tally['correct'] / $scored * 100) }}% fully correct</span>
     </div>
     @endif
@@ -469,7 +471,7 @@
           </td>
           <td class="v2-c-res">
             @if($v)
-              <span class="v2-match {{ $v['result'] }}">{{ ['correct' => '✓ Correct', 'partial' => '≈ Partial', 'wrong' => '✗ Wrong'][$v['result']] }}</span>
+              <span class="v2-match {{ $v['result'] }}">{{ ['correct' => '✓ Correct', 'partial' => '≈ Partial', 'wrong' => '✗ Wrong', 'review' => '⚑ Label under review'][$v['result']] }}</span>
               <div class="v2-sub">{{ $v['reason'] }}</div>
             @else
               <span class="v2-missing">{{ $state === 'failed' ? 'failed — no answer' : ($truth ? '—' : 'cannot be scored') }}</span>
@@ -709,7 +711,7 @@
     }
     rowsEl.innerHTML = rows.map(function (s) {
       var last = s.runs[0], picked = String(s.id) === sid.value;
-      var WORD = { correct: '✓ Correct', partial: '≈ Partial', wrong: '✗ Wrong' };
+      var WORD = { correct: '✓ Correct', partial: '≈ Partial', wrong: '✗ Wrong', review: '⚑ Label under review' };
       var runs = last
         ? '<span class="v2-used" title="This slide has been through V2 Diagnose before">● Used ×' + s.runs.length + '</span>'
           + '<a class="v2-runlink" href="' + last.url + '" target="_blank" onclick="event.stopPropagation()" title="Open run #' + last.id + '">'
@@ -755,7 +757,7 @@
         + '<div class="v2-sw-note">This slide has not been analysed before.</div></div>';
       opts = { icon: 'question', title: 'Run V2 Diagnose on this slide?', confirmButtonText: '▶ Yes, run it' };
     } else {
-      var WORD = { correct: '✓ Correct', partial: '≈ Partially correct', wrong: '✗ Wrong' };
+      var WORD = { correct: '✓ Correct', partial: '≈ Partially correct', wrong: '✗ Wrong', review: '⚑ Label under review' };
       var runs = s.runs.map(function (r) {
         var score = r.verdict
           ? '<span class="v2-match ' + r.verdict + '">' + WORD[r.verdict] + '</span><div class="v2-sw-why">' + esc(r.reason || '') + '</div>'

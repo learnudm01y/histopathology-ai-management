@@ -142,6 +142,14 @@ class V2Diagnosis extends Model
                 default => ['wrong', "tumour found, but typed as {$code}"],
             },
         };
+        // A slide whose own tissue contradicts its recorded diagnosis (the
+        // diagnosis is the case's, the slide may come from another block) is
+        // under review: neither right nor wrong until a pathologist decides.
+        // What the answer would have scored stays on the record.
+        if ($note = config('v2_diagnose.label_review')[$this->sample_id] ?? null) {
+            return ['result' => 'review', 'truth' => $truth, 'scored_as' => $result,
+                    'reason' => "the recorded diagnosis is under review for this slide: {$note} (scored as {$result} until then: {$reason})"];
+        }
         return ['result' => $result, 'truth' => $truth, 'reason' => $reason];
     }
 

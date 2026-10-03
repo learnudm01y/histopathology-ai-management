@@ -187,6 +187,16 @@ model got it wrong, and the change it produced. Read this before changing
     non-neoplastic specific diagnoses need the same 0.65 floor as carcinoma.
     The right answer for this slide is SUSP, which scores partial: the slide
     cannot give more.
+  - **Re-run with those rules: LCH (0.68)**, above the floor, with grooved
+    nuclei, no nucleoli and eosinophils cited, and keratin/TTF-1 named to
+    exclude a carcinoma. The patient was a smoker (heavy anthracosis), and
+    pulmonary LCH is a smoking-related lesion that can lie next to a lung
+    carcinoma, so this block most likely holds the LCH, not the tumour. The
+    model reads the slide, and the label describes the case. The slide is
+    listed in `label_review` (config): its runs show "label under review",
+    counted neither right nor wrong, until a pathologist settles it. Pushing
+    the model towards "adenocarcinoma" here would teach it to answer the
+    label, not the tissue.
 
 Technical: #62 read all 16 contact sheets; its "contact sheets failed to
 display" remark is not supported by its session (59 images returned, no
