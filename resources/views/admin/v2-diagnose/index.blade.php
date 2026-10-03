@@ -4,6 +4,24 @@
 
 @section('content')
 <style>
+  /* New analysis: the slide and its clinical context, in a modal opened from the bar. */
+  .v2-launch{display:flex;flex-wrap:wrap;gap:.8rem;align-items:center;justify-content:space-between;margin-bottom:1.1rem;
+          background:#fff;border:1px solid #e3e0ea;border-radius:8px;padding:.9rem 1.25rem}
+  .v2-launch .v2-hint{margin:0}
+  .v2-modal{position:fixed;inset:0;z-index:1040;display:flex;align-items:flex-start;justify-content:center;
+          padding:1rem;background:rgba(30,22,52,.5);overflow:hidden}
+  .v2-modal[hidden]{display:none}
+  .v2-modal-box{display:flex;flex-direction:column;width:min(1500px,100%);max-height:calc(100vh - 2rem);
+          background:#f6f5f9;border-radius:10px;box-shadow:0 12px 40px rgba(30,22,52,.35)}
+  .v2-modal-head{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.85rem 1.25rem;
+          background:#fff;border-bottom:1px solid #e3e0ea;border-radius:10px 10px 0 0}
+  .v2-modal-head h3{margin:0;font-size:1.1rem;font-weight:600}
+  .v2-modal-x{border:0;background:#f3f1f8;color:#4b3a94;width:2.2rem;height:2.2rem;border-radius:6px;font-size:1.4rem;line-height:1;cursor:pointer}
+  .v2-modal-x:hover{background:#4b3a94;color:#fff}
+  .v2-modal-body{overflow:auto;padding:1.1rem 1.25rem}
+  .v2-modal-body .v2-top{margin-bottom:0}
+  body.v2-modal-open{overflow:hidden}
+  @media(max-width:600px){.v2-modal{padding:0}.v2-modal-box{max-height:100vh;border-radius:0}.v2-modal-head{border-radius:0}}
   .v2-top{display:grid;gap:1.25rem;align-items:start;margin-bottom:1.1rem}
   .v2-top > .v2-card{margin-bottom:0;min-width:0}
   @media(min-width:1100px){
@@ -241,6 +259,22 @@
 
 <form method="POST" action="{{ route('admin.v2-diagnose.store') }}" enctype="multipart/form-data" id="v2form">
   @csrf
+  <div class="v2-launch">
+    <div class="v2-hint">Pick a slide and fill in its clinical context to start a new V2 Diagnose analysis.</div>
+    <button type="button" class="btn btn-primary" id="openNew">＋ New analysis</button>
+  </div>
+
+  {{-- Inside the form, so its fields are sent with it. --}}
+  <div class="v2-modal" id="newModal" role="dialog" aria-modal="true" aria-labelledby="newModalTitle" hidden>
+  <div class="v2-modal-box">
+  <div class="v2-modal-head">
+    <h3 id="newModalTitle">New analysis</h3>
+    <button type="button" class="v2-modal-x" id="closeNew" aria-label="Close">&times;</button>
+  </div>
+  <div class="v2-modal-body">
+  @if($errors->any())
+    <div class="alert alert-danger">@foreach($errors->all() as $e)<div>{{ $e }}</div>@endforeach</div>
+  @endif
   {{-- Wide screens: the context on the left, the slide on its right. Narrow: the slide first. --}}
   <div class="v2-top">
   <div class="v2-card v2-card-slide">
@@ -365,6 +399,9 @@
     </div>
 
     <button class="btn btn-primary" id="runBtn" style="margin-top:1rem;width:100%">Run V2 Diagnose</button>
+  </div>
+  </div>
+  </div>
   </div>
   </div>
 
@@ -949,6 +986,21 @@
       });
     });
   });
+  /* ── New analysis modal: opens from the bar, and by itself when a slide is
+        named in the URL or the form comes back with errors ── */
+  (function () {
+    var modal = document.getElementById('newModal');
+    function show() { modal.hidden = false; document.body.classList.add('v2-modal-open'); }
+    function hide() { modal.hidden = true; document.body.classList.remove('v2-modal-open'); }
+    document.getElementById('openNew').addEventListener('click', show);
+    document.getElementById('closeNew').addEventListener('click', hide);
+    modal.addEventListener('mousedown', function (e) { if (e.target === modal) hide(); });
+    document.addEventListener('keydown', function (e) {
+      // A combo menu (it prevents the key) or a SweetAlert over the modal closes first.
+      if (e.key === 'Escape' && !e.defaultPrevented && !modal.hidden && !document.querySelector('.swal2-container')) hide();
+    });
+    if (@json($errors->any()) || @json((bool) $picked)) show();
+  })();
   /* ── Results filter: each choice applies at once, and clears the finer ones ── */
   document.querySelectorAll('select[form="resultsFilter"]').forEach(function (sel) {
     sel.addEventListener('change', function () {
