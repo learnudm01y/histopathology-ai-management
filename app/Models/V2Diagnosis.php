@@ -153,6 +153,30 @@ class V2Diagnosis extends Model
         return ['result' => $result, 'truth' => $truth, 'reason' => $reason];
     }
 
+    /** The outcomes the results list can be filtered by, in display order. */
+    public const OUTCOMES = [
+        'correct'  => '✓ Correct',
+        'partial'  => '≈ Partial',
+        'wrong'    => '✗ Wrong',
+        'review'   => '⚑ Label under review',
+        'unscored' => 'Completed, no recorded diagnosis',
+        'failed'   => 'Failed',
+        'running'  => 'In progress',
+    ];
+
+    /** Where the run stands: its verdict when it has one, otherwise its state. */
+    public function outcome(): string
+    {
+        if ($v = $this->verdict()) {
+            return $v['result'];
+        }
+        return match (true) {
+            $this->status === 'completed' => 'unscored',
+            $this->isRunning() => 'running',
+            default => (string) $this->status,
+        };
+    }
+
     public function isRunning(): bool
     {
         return in_array($this->status, self::RUNNING, true);

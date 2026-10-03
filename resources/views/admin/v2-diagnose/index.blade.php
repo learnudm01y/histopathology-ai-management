@@ -115,7 +115,7 @@
           color:#4b3a94;background:#f3f1f8;font-size:1.15rem;text-decoration:none;transition:background .15s,color .15s}
   .v2-eye:hover{background:#4b3a94;color:#fff;text-decoration:none}
   /* Results filter: organ → classification → disease, one GET form. */
-  .v2-rfilter{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:.7rem;align-items:end;margin-bottom:1rem}
+  .v2-rfilter{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) auto;gap:.7rem;align-items:end;margin-bottom:1rem}
   @media(max-width:900px){.v2-rfilter{grid-template-columns:1fr}}
   .v2-rfilter label{display:block;font-size:.8rem;font-weight:600;color:#41394f;margin-bottom:.35rem}
   .v2-rfilter select.v2-in{display:block;width:100%;height:2.4rem;padding:.4rem .6rem;font-size:.88rem;color:#2d2540;background:#fff;
@@ -400,6 +400,15 @@
           @endforeach
         </select>
       </div>
+      <div>
+        <label for="r_out">Outcome</label>
+        <select name="r_out" id="r_out" form="resultsFilter" class="v2-in">
+          <option value="">Every outcome</option>
+          @foreach($rfOptions['outs'] as $o)
+            <option value="{{ $o['id'] }}" @selected($rf['out'] === $o['id'])>{{ $o['name'] }} ({{ $o['n'] }})</option>
+          @endforeach
+        </select>
+      </div>
       @if(array_filter($rf))
         <a href="{{ route('admin.v2-diagnose') }}#results" class="v2-rclear">Clear filter</a>
       @endif
@@ -408,7 +417,7 @@
     @php $scored = $tally['correct'] + $tally['partial'] + $tally['wrong']; @endphp
     @if($scored)
     <div class="v2-tally" title="Finished runs whose slide has a recorded diagnosis in the archive, compared with it.">
-      Against the recorded diagnosis ({{ $scored }} {{ array_filter($rf) ? 'filtered ' : '' }}results):
+      Against the recorded diagnosis ({{ $scored }} {{ array_filter(\Illuminate\Support\Arr::except($rf, 'out')) ? 'filtered ' : '' }}results):
       <span class="v2-match correct">✓ {{ $tally['correct'] }} correct</span>
       <span class="v2-match partial">≈ {{ $tally['partial'] }} partial</span>
       <span class="v2-match wrong">✗ {{ $tally['wrong'] }} wrong</span>

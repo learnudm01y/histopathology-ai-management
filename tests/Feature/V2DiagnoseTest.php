@@ -679,4 +679,27 @@ class V2DiagnoseTest extends TestCase
         $page->assertSee('(2 results)', false)->assertSee('1 correct')->assertSee('1 wrong')
              ->assertSee('1 label under review')->assertSee('50% fully correct');
     }
+
+    public function test_the_results_list_filters_by_outcome(): void
+    {
+        $db = \Illuminate\Support\Facades\DB::table(...);
+        $tumour = $db('categories')->insertGetId(['label_en' => 'tumor']);
+        $luad = $db('disease_subtypes')->insertGetId(['category_id' => $tumour, 'name' => 'LUAD']);
+        $mk = function (string $status, ?string $code) use ($tumour, $luad) {
+            $s = Sample::forceCreate(['entity_submitter_id' => 'S', 'category_id' => $tumour, 'disease_subtype_id' => $luad]);
+            return V2Diagnosis::create(['sample_id' => $s->id, 'organ' => 'Lung', 'status' => $status,
+                'diagnosis_code' => $code, 'diagnosis' => $code ? "{$code} — x" : null]);
+        };
+        $right = $mk('completed', 'LUAD');
+        $wrong = $mk('completed', 'LUSC');
+        $failed = $mk('failed', null);
+        $this->assertSame(['correct', 'wrong', 'failed'], [$right->outcome(), $wrong->outcome(), $failed->outcome()]);
+
+        $page = $this->actingAs($this->user)->get('/admin/v2-diagnose?r_out=failed')->assertOk();
+        $page->assertSee('Failed (1)')->assertSee('✓ Correct (1)')->assertSee('1 matching the filter');
+        $this->assertSame([$failed->id], $page->viewData('runs')->pluck('id')->all());
+
+        $none = $this->actingAs($this->user)->get('/admin/v2-diagnose?r_out=partial')->assertOk();
+        $this->assertSame(0, $none->viewData('runs')->total());
+    }
 }

@@ -60,18 +60,32 @@ class V2DiagnoseController extends Controller
             });
         };
         $any = array_filter($f);
-        $runs = V2Diagnosis::with($withTruth)->when($any, $filtered)->latest('id')->paginate(25)->withQueryString()->fragment('results');
 
-        // The tally across every finished run in the filter whose slide has a
-        // recorded diagnosis — not only the page shown.
-        $tally = ['correct' => 0, 'partial' => 0, 'wrong' => 0, 'review' => 0];
-        V2Diagnosis::with($withTruth)->when($any, $filtered)->where('status', 'completed')
+        // Every run in the filter, sorted by outcome. The verdict is worked
+        // out in PHP (it compares codes against the recorded diagnosis), so
+        // the outcome filter picks ids here and the page queries those.
+        $outcomes = V2Diagnosis::with($withTruth)->when($any, $filtered)
             ->get(['id', 'sample_id', 'status', 'diagnosis_code'])
-            ->each(function ($r) use (&$tally) {
-                if ($v = $r->verdict()) {
-                    $tally[$v['result']]++;
-                }
-            });
+            ->mapWithKeys(fn ($r) => [$r->id => $r->outcome()]);
+        $tally = ['correct' => 0, 'partial' => 0, 'wrong' => 0, 'review' => 0];
+        foreach ($outcomes as $o) {
+            if (isset($tally[$o])) {
+                $tally[$o]++;
+            }
+        }
+        $outCounts = $outcomes->countBy()->all();
+        $outOptions = collect(V2Diagnosis::OUTCOMES)
+            ->map(fn ($label, $key) => ['id' => $key, 'name' => $label, 'n' => $outCounts[$key] ?? 0])
+            // Any status not foreseen above still gets an entry of its own.
+            ->union(collect($outCounts)->diffKeys(V2Diagnosis::OUTCOMES)
+                ->map(fn ($n, $key) => ['id' => $key, 'name' => ucfirst(str_replace('_', ' ', $key)), 'n' => $n]))
+            ->filter(fn ($o) => $o['n'] > 0)->values()->all();
+
+        $out = (string) $request->input('r_out') ?: null;
+        $f['out'] = $out;
+        $runs = V2Diagnosis::with($withTruth)->when($any, $filtered)
+            ->when($out, fn ($q) => $q->whereIn('id', $outcomes->filter(fn ($o) => $o === $out)->keys()->all() ?: [0]))
+            ->latest('id')->paginate(25)->withQueryString()->fragment('results');
 
         // The archive, counted by organ and stain, so the two filters only
         // offer what holds a slide — and say how many.
@@ -100,7 +114,7 @@ class V2DiagnoseController extends Controller
             'runs'    => $runs,
             'tally'   => $tally,
             'rf'      => $f,
-            'rfOptions' => $this->resultFilterOptions($f),
+            'rfOptions' => $this->resultFilterOptions($f) + ['outs' => $outOptions],
             'archive' => $archive,
             'organs'  => Organ::orderBy('name')->pluck('name'),
             'stains'  => Stain::orderBy('name')->pluck('name'),
