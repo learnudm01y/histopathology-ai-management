@@ -103,5 +103,6 @@ return [
         1581,   // TCGA-02-0001 (GBM): called PXA, run #62
         1594,   // TCGA-DB-5270 (LGG): GBM called on a tissue tear, run #74
         1612,   // TCGA-56-1622 (LUSC): NSCLC despite keratin pearls, run #91
+        1609,   // TCGA-75-5122 (LUAD): PLCH called on an inflammation-dominated slide, run #83
     ],
 ];

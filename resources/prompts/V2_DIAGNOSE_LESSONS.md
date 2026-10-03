@@ -176,6 +176,17 @@ model got it wrong, and the change it produced. Read this before changing
   described the slide accurately. Either this diagnostic slide does not hold
   the tumour, or the tumour is a minor focus. It needs a pathologist's look,
   not a rule.
+  - **Follow-up (2026-10-03):** the case record is adenocarcinoma NOS, stage IB,
+    peripheral, with a consistent pathology review, so the label is right for
+    the case. All 73 tiles plus nine 20× regions across both pieces show
+    lymphoid aggregates, eosinophils, fibrosis, histiocytoid cells and native
+    bronchioles, with scattered large epithelioid cells that H&E cannot place,
+    and no gland, papilla or lepidic growth. The model's error was not the
+    description but the leap to a rare entity at 0.55 without stains. Rules:
+    inflammation can hide carcinoma (SUSP with keratin/TTF-1), and rare or
+    non-neoplastic specific diagnoses need the same 0.65 floor as carcinoma.
+    The right answer for this slide is SUSP, which scores partial: the slide
+    cannot give more.
 
 Technical: #62 read all 16 contact sheets; its "contact sheets failed to
 display" remark is not supported by its session (59 images returned, no
