@@ -56,6 +56,7 @@ MAX_BOX_FRACTION = 0.85   # a region is lesional tissue, not the tile it sits on
 MASK_PX = 250             # fine density map per tile, 4 view px per cell (~3.8 um)
 HEAT_GRID = 50            # heat cells per tile side when built slide-wide (~19 um)
 MASK_LEVEL = 0.30         # default cut on the fine map for a tumour mask (chosen on TCGA-AN-A046)
+TILE_REF_MIN = 0.15       # floor of a tumour tile's own density reference, so near-empty tissue is not amplified
 NEG_DROP_MAX_PX = 60_000  # a negative point removes a dense patch whole up to ~6% of the tile ...
 NEG_CARVE_PX = 32         # ... and only a ~30 um hole in anything larger,
 NEG_FLOOD_PX = 160        # plus whatever is continuous with it within ~150 um
@@ -903,7 +904,7 @@ def _clusters(cells: dict) -> list:
 
 
 def slide_mask(run: str, tiles: dict, regions: list, um_per_view_px: float,
-               implicit: set | None = None) -> tuple[list, dict, dict]:
+               implicit: set | None = None, report: dict | None = None) -> tuple[list, dict, dict]:
     """The tumour mask of the whole slide, cut in one piece.
 
     Each tile's raw fractions are laid side by side into one canvas per piece
@@ -995,6 +996,43 @@ def slide_mask(run: str, tiles: dict, regions: list, um_per_view_px: float,
         else:
             tis_c = tis
         del v
+
+        # In tiles the model scored as tumour, density is read against the
+        # tile's own reference (its 90th percentile over tissue), not only the
+        # slide's maximum. On breast carcinoma the nests are the densest thing
+        # on the slide, but a glioma's scattered nuclei, prostate glands, or a
+        # slide whose maximum is pen ink or a lymphoid aggregate fell below the
+        # slide-wide cut: tumour tiles of runs #65, #78, #100 were 0-4% masked.
+        # The reference is interpolated between tile centres, so no seam
+        # appears at a tile border; other tiles keep the slide scale.
+        #
+        # Where even the tile's own reference is near zero, the nuclei could
+        # not be measured at all (pale vesicular or spindle nuclei; run #78's
+        # sarcomatoid carcinoma), so density cannot draw a border there: the
+        # tile's tissue is drawn instead, still cut by negative points and
+        # non-tumour regions, and counted in report["tissue_drawn"].
+        refs = np.ones((nr, nc), np.float32)
+        unmeasured = []
+        for pid in group:
+            if pid not in implicit:
+                continue
+            c, r = cells[pid]
+            ys, xs = (r - r0) * RU, (c - c0) * RU
+            sel = tis_c[ys:ys + RU, xs:xs + RU] > 0.3
+            if sel.sum() >= 0.02 * RU * RU:
+                refs[r - r0, c - c0] = float(np.percentile(up[ys:ys + RU, xs:xs + RU][sel], 90))
+                if refs[r - r0, c - c0] < TILE_REF_MIN / 3:
+                    unmeasured.append((ys, xs))
+        refs = np.clip(refs, TILE_REF_MIN, 1.0)
+        if (refs < 1.0).any():
+            ref_img = cv2.resize(refs, (W, H), interpolation=cv2.INTER_LINEAR)
+            up = np.clip(up / ref_img, 0, 1)
+            del ref_img
+        for ys, xs in unmeasured:
+            tile = up[ys:ys + RU, xs:xs + RU]
+            tile[tis_c[ys:ys + RU, xs:xs + RU] > 0.3] = 1.0
+        if report is not None:
+            report["tissue_drawn"] = report.get("tissue_drawn", 0) + len(unmeasured)
 
         def to_canvas(pid, p, c0=c0, r0=r0, RU=RU, k_view=k_view):
             c, r = cells[pid]
@@ -1266,8 +1304,13 @@ def cmd_finalize(a) -> None:
     # or not, so the mask covers every tumour tile read (see slide_mask).
     drawn = {g["patch"] for g in result.get("regions") or [] if g["label"] in TUMOUR_LABELS}
     implicit = {p["id"] for p in result["patches"] if float(p.get("tumour_score", 0)) >= 0.5}
+    mask_stats = {}
     mask_rings_l0, tile_cover, tile_dens = (slide_mask(run, tiles, result.get("regions") or [], um_per_view_px,
-                                                       implicit) if has_raw else ([], {}, {}))
+                                                       implicit, mask_stats) if has_raw else ([], {}, {}))
+    if mask_stats.get("tissue_drawn"):
+        warnings.append(f"{mask_stats['tissue_drawn']} tumour tile(s) are drawn by their tissue outline, not a "
+                        "nuclear-density border: their nuclei could not be measured (pale, vesicular or spindle "
+                        "nuclei, or ink). The model's tile scores stand; the border there is approximate.")
     # The heat grid: the slide-wide one when the raw maps exist, else the
     # per-tile density.json of older runs.
     hg = HEAT_GRID if has_raw else GRID
