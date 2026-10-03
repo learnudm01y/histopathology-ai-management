@@ -911,10 +911,12 @@ def slide_mask(run: str, tiles: dict, regions: list, um_per_view_px: float,
     runs across tile borders exactly as the tissue does: no seams, no gaps,
     no edges drawn along the side of a tile.
 
-    The model decides what is tumour. The boxes of its tumour regions say where
-    a mask may exist (and at which mask_level); every tile it scored as tumour
-    without drawing a region (*implicit*) counts as one whole-tile box, so the
-    mask reaches all the tumour on the slide and not only the tiles it opened.
+    The model decides what is tumour. Every tile it scored as tumour
+    (*implicit*) is a whole-tile box at the default level, whether or not it
+    drew regions there: a region marks a focus, not the limit of the tumour
+    (run #55: regions covering 8-18% of tiles scored 0.8-0.9 left most of the
+    tumour in exactly the tiles it examined undrawn). Inside a region's box its
+    own mask_level applies.
     Its non-tumour regions are cut out, and its negative points remove what
     they sit on. The border itself comes from the pixels.
 
@@ -999,6 +1001,7 @@ def slide_mask(run: str, tiles: dict, regions: list, um_per_view_px: float,
             return ((c - c0) * RU + p[0] * k_view, (r - r0) * RU + p[1] * k_view)
 
         level = np.full((H, W), np.inf, np.float32)   # inf: no tumour region here
+        boxed = np.full((H, W), np.inf, np.float32)   # the regions' own levels, where they drew one
         exclude = np.zeros((H, W), np.uint8)
         negatives = []
         for pid in group:
@@ -1010,15 +1013,16 @@ def slide_mask(run: str, tiles: dict, regions: list, um_per_view_px: float,
                 if g["label"] in TUMOUR_LABELS:
                     x0, y0 = to_canvas(pid, g["box"][:2])
                     x1, y1 = to_canvas(pid, g["box"][2:])
-                    sl = level[int(y0):int(np.ceil(y1)), int(x0):int(np.ceil(x1))]
+                    sl = boxed[int(y0):int(np.ceil(y1)), int(x0):int(np.ceil(x1))]
                     np.minimum(sl, float(g.get("mask_level", MASK_LEVEL)), out=sl)
                     negatives += [to_canvas(pid, p) for p in g.get("negative_points", [])]
                 else:
                     poly = np.array([to_canvas(pid, p) for p in g["polygon"]], np.int32)
                     cv2.fillPoly(exclude, [poly], 1)
 
+        level = np.where(np.isfinite(boxed), boxed, level)   # a region's level wins inside its box
         m = ((up >= level) & (tis_c > 0.3) & (exclude == 0)).astype(np.uint8)
-        del level, exclude, tis_c
+        del level, boxed, exclude, tis_c
         kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         m = cv2.morphologyEx(cv2.morphologyEx(m, cv2.MORPH_OPEN, kern), cv2.MORPH_CLOSE, kern)
 
@@ -1258,11 +1262,10 @@ def cmd_finalize(a) -> None:
     # One tumour mask for the whole slide, cut across tile borders (slide_mask).
     has_raw = os.path.isfile(os.path.join(run, "masks", f"raw_{next(iter(tiles))}.png"))
     um_per_view_px = float(man.get("target_mpp") or 0.5) * int(man["patch_size"]) / VIEW_PX
-    # Tiles scored as tumour where no tumour region was drawn: the mask is cut
-    # on them as whole-tile regions, so it covers every tumour tile read.
+    # Every tile scored as tumour is cut as a whole-tile region, drawn regions
+    # or not, so the mask covers every tumour tile read (see slide_mask).
     drawn = {g["patch"] for g in result.get("regions") or [] if g["label"] in TUMOUR_LABELS}
-    implicit = {p["id"] for p in result["patches"]
-                if float(p.get("tumour_score", 0)) >= 0.5 and p["id"] not in drawn}
+    implicit = {p["id"] for p in result["patches"] if float(p.get("tumour_score", 0)) >= 0.5}
     mask_rings_l0, tile_cover, tile_dens = (slide_mask(run, tiles, result.get("regions") or [], um_per_view_px,
                                                        implicit) if has_raw else ([], {}, {}))
     # The heat grid: the slide-wide one when the raw maps exist, else the
@@ -1323,7 +1326,7 @@ def cmd_finalize(a) -> None:
     coverage = {"tissue_read": tiling.get("coverage"), "tiles": len(tiles),
                 "tumour_tiles": sum(1 for p in result["patches"] if float(p.get("tumour_score", 0)) >= 0.5),
                 "tiles_opened_as_regions": len({g["patch"] for g in result.get("regions") or []}),
-                "tumour_tiles_masked_without_region": len(implicit)}
+                "tumour_tiles_masked_without_region": len(implicit - drawn)}
     if tiling.get("mpp_source") == "estimated from nuclear size":
         warnings.append(f"The slide file declares no scale; it was estimated from nuclear size as "
                         f"{tiling.get('base_mpp')} um/px (measured {tiling.get('mpp_measured')}).")
