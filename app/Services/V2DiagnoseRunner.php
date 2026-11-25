@@ -144,6 +144,18 @@ class V2DiagnoseRunner
         if ($run) {
             File::ensureDirectoryExists($this->runDir($run));
         }
+        // Room first: the slide is copied here, and a slide read off the Drive
+        // mount also lands in the mount's own cache on the same disk. Two 3-4 GB
+        // slides prepared at once took 15 GB in four minutes (2026-11-25).
+        $mount = rtrim((string) config('services.gdrive_mount', '/mnt/gdrive'), '/');
+        $reserve = (int) ((float) (@filesize($wsi) ?: 0) * (str_starts_with($wsi, $mount . '/') ? 2.2 : 1.3));
+        $this->evictPrepared($reserve);
+        $free = (float) @disk_free_space(dirname($final));
+        if ($free > 0 && $free - $reserve < 3 * 1024 ** 3) {
+            File::deleteDirectory($build);
+            throw new \RuntimeException(sprintf('Not enough disk space to prepare this slide: it needs about %.1f GB '
+                . 'and %.1f GB are free.', $reserve / 1024 ** 3, $free / 1024 ** 3));
+        }
         $seconds = [];
         try {
             // Tiling reads thousands of scattered regions, and on the Drive mount
@@ -339,11 +351,12 @@ class V2DiagnoseRunner
     }
 
     /**
-     * Keep the cache within its size, and the disk above its floor: the
+     * Keep the cache within its size, and the disk above its floor, with
+     * room for $reserve more bytes (a slide about to be prepared): the
      * slides used longest ago go first. One that a run is linking at this
      * moment (its lock is held) is skipped.
      */
-    public function evictPrepared(): void
+    public function evictPrepared(int $reserve = 0): void
     {
         $root = rtrim((string) config('v2_diagnose.prepared.dir'), '/\\');
         foreach (glob("{$root}/*.build-*", GLOB_ONLYDIR) ?: [] as $stale) {
@@ -361,9 +374,9 @@ class V2DiagnoseRunner
         $total = array_sum(array_column($entries, 'bytes'));
         $max = (float) config('v2_diagnose.prepared.max_gb') * 1024 ** 3;
         $minFree = (float) config('v2_diagnose.prepared.min_free_gb', 0) * 1024 ** 3;
-        $lowDisk = fn () => $minFree > 0 && is_dir($root) && (float) @disk_free_space($root) < $minFree;
+        $lowDisk = fn () => $minFree > 0 && is_dir($root) && (float) @disk_free_space($root) - $reserve < $minFree;
         foreach ($entries as $e) {
-            if ($total <= $max && ! $lowDisk()) {
+            if ($total + $reserve <= $max && ! $lowDisk()) {
                 break;
             }
             $lock = $this->preparedLock($e['key']);

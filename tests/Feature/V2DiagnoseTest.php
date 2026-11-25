@@ -830,6 +830,21 @@ class V2DiagnoseTest extends TestCase
         $this->assertNotNull($runner->prepared('3'));
     }
 
+    public function test_room_is_made_before_a_slide_is_prepared(): void
+    {
+        $runner = app(\App\Services\V2DiagnoseRunner::class);
+        $gb = 1024 ** 3;
+        foreach ([1, 2, 3] as $i) {
+            $this->preparedSlide((string) $i, time() - 100 * (4 - $i), (int) (0.3 * $gb));
+        }
+        config(['v2_diagnose.prepared.max_gb' => 1.0]);
+        // 0.9 GB held, a 0.5 GB slide coming: the two used longest ago make room.
+        $runner->evictPrepared((int) (0.5 * $gb));
+        $this->assertNull($runner->prepared('1'));
+        $this->assertNull($runner->prepared('2'));
+        $this->assertNotNull($runner->prepared('3'));
+    }
+
     public function test_the_prepared_cache_gives_way_when_the_disk_runs_low(): void
     {
         $runner = app(\App\Services\V2DiagnoseRunner::class);
