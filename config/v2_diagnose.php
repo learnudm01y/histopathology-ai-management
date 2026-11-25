@@ -69,6 +69,16 @@ return [
         'on_upload' => (bool) env('V2_PREPARE_ON_UPLOAD', true),
     ],
 
+    // How a slide is copied off Drive to be prepared: straight from Drive with
+    // rclone (through the mount, its cache would keep a second copy of every
+    // slide on the same disk — 2026-11-25), through the mount when that fails.
+    'fetch' => [
+        'rclone'  => env('V2_RCLONE_BIN', '/usr/bin/rclone'),
+        'config'  => env('V2_RCLONE_CONFIG', storage_path('app/rclone.conf')),
+        'remote'  => env('V2_RCLONE_REMOTE', 'gdrive:'),
+        'streams' => (int) env('V2_RCLONE_STREAMS', 8),
+    ],
+
     // Where a run's slide sits during its analysis, outside every run folder
     // (the model's file tools reach only its own folder).
     'slides_dir' => env('V2_SLIDES_DIR', storage_path('app/v2_slides')),

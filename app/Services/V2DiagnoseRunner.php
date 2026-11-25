@@ -144,11 +144,13 @@ class V2DiagnoseRunner
         if ($run) {
             File::ensureDirectoryExists($this->runDir($run));
         }
-        // Room first: the slide is copied here, and a slide read off the Drive
-        // mount also lands in the mount's own cache on the same disk. Two 3-4 GB
-        // slides prepared at once took 15 GB in four minutes (2026-11-25).
+        // Room first: the slide is copied here, and a slide read through the
+        // Drive mount also lands in the mount's own cache on the same disk (two
+        // 3-4 GB slides took 15 GB in four minutes, 2026-11-25). Copied straight
+        // from Drive with rclone, it is on the disk once.
         $mount = rtrim((string) config('services.gdrive_mount', '/mnt/gdrive'), '/');
-        $reserve = (int) ((float) (@filesize($wsi) ?: 0) * (str_starts_with($wsi, $mount . '/') ? 2.2 : 1.3));
+        $viaMount = str_starts_with($wsi, $mount . '/') && ! $this->rcloneFetch();
+        $reserve = (int) ((float) (@filesize($wsi) ?: 0) * ($viaMount ? 2.2 : 1.3));
         $this->evictPrepared($reserve);
         $free = (float) @disk_free_space(dirname($final));
         if ($free > 0 && $free - $reserve < 3 * 1024 ** 3) {
@@ -391,16 +393,75 @@ class V2DiagnoseRunner
         }
     }
 
-    /** A local file is linked (same disk) or copied; a file on the Drive mount is copied with progress. */
+    /**
+     * A local file is linked (same disk) or copied. A file on the Drive mount
+     * is copied straight from Drive with rclone, so the mount's cache does not
+     * keep a second copy of it; through the mount only when that fails.
+     */
     private function placeSlide(string $from, string $to, ?V2Diagnosis $run): void
     {
         @unlink($to);
         $mount = rtrim((string) config('services.gdrive_mount', '/mnt/gdrive'), '/');
         if (str_starts_with($from, $mount . '/')) {
-            $this->copyWithProgress($run, $from, $to);
+            if (! $this->rcloneCopy(substr($from, strlen($mount) + 1), (int) @filesize($from), $to, $run)) {
+                $this->copyWithProgress($run, $from, $to);
+            }
         } else {
             $this->linkOrCopy($from, $to, true);
         }
+    }
+
+    /** Whether slides are copied straight from Drive with rclone (config v2_diagnose.fetch). */
+    public function rcloneFetch(): bool
+    {
+        $c = config('v2_diagnose.fetch');
+        return ! empty($c['rclone']) && @is_executable($c['rclone']) && @is_readable((string) ($c['config'] ?? ''));
+    }
+
+    /** rclone copyto from the Drive remote, with progress for the run page. False when it did not work. */
+    private function rcloneCopy(string $remotePath, int $size, string $to, ?V2Diagnosis $run): bool
+    {
+        if (! $this->rcloneFetch()) {
+            return false;
+        }
+        $c = config('v2_diagnose.fetch');
+        // A private copy of the config: a token refresh during the copy is
+        // written there, never into the file the mount itself reads.
+        $conf = tempnam(sys_get_temp_dir(), 'v2rc');
+        copy($c['config'], $conf);
+        @chmod($conf, 0600);
+        $mb = fn (int $b) => number_format($b / 1048576);
+        $process = new Process([$c['rclone'], 'copyto', $c['remote'] . $remotePath, $to, '--config', $conf,
+            '--multi-thread-streams', (string) $c['streams'], '--multi-thread-cutoff', '64M',
+            '--drive-acknowledge-abuse', '--retries', '3', '--low-level-retries', '10'], null, null, null, 3 * 3600);
+        try {
+            $run && $this->mark($run, 'fetching', 'Copying the slide from storage', 0, $size ?: null);
+            $process->start();
+            while ($process->isRunning()) {
+                usleep(2_000_000);
+                $process->checkTimeout();
+                if ($run) {
+                    clearstatcache();
+                    $copied = (int) array_sum(array_map('filesize', glob($to . '*') ?: []));
+                    $this->mark($run, 'fetching', "Copying the slide from storage — {$mb(min($copied, $size ?: $copied))} of {$mb($size)} MB",
+                        min($copied, $size ?: $copied), $size ?: null);
+                }
+            }
+        } catch (\Throwable $e) {
+            $process->stop(5);
+            Log::warning("[V2Diagnose] rclone copy of {$remotePath} failed: {$e->getMessage()}");
+        } finally {
+            @unlink($conf);
+        }
+        if ($process->isSuccessful() && is_file($to) && (! $size || filesize($to) === $size)) {
+            return true;
+        }
+        Log::warning("[V2Diagnose] rclone copy of {$remotePath} did not complete (exit {$process->getExitCode()}): "
+            . mb_substr(trim($process->getErrorOutput()), -500) . ' — copying through the mount instead.');
+        foreach (glob($to . '*') ?: [] as $f) {
+            @unlink($f);
+        }
+        return false;
     }
 
     private function linkOrCopy(string $from, string $to, bool $link): void
