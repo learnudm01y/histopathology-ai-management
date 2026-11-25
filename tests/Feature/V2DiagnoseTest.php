@@ -764,6 +764,53 @@ class V2DiagnoseTest extends TestCase
         $this->assertSame([100, 'completed'], [$p['percent'], $p['status']]);
     }
 
+    public function test_the_written_answer_is_checked_against_the_pathology_report(): void
+    {
+        $ref = storage_path('framework/testing/v2_reference.json');
+        file_put_contents($ref, json_encode(['TCGA-UU-A93S' => [
+            'project' => 'TCGA-BRCA', 'report_chars' => 3000,
+            'type' => ['value' => 'IDC', 'text' => 'Infiltrating duct carcinoma, NOS (8500/3)'],
+            'grade' => ['value' => 3, 'text' => 'Total overall grade: 9, grade III (G3).', 'system' => 'Nottingham'],
+            'in_situ' => ['value' => 'absent', 'text' => 'Ductal carcinoma in-situ: Not identified.'],
+            'lvi' => ['value' => 'present', 'text' => 'There is dermal lymphatic invasion.'],
+        ]]));
+        $this->app->instance(\App\Services\V2WrittenCheck::class, new \App\Services\V2WrittenCheck($ref));
+
+        $make = function (string $slide, array $report) {
+            $s = Sample::forceCreate(['entity_submitter_id' => $slide]);
+            $run = V2Diagnosis::create(['sample_id' => $s->id, 'organ' => 'Breast', 'status' => 'completed',
+                'diagnosis_code' => 'IDC', 'diagnosis' => 'IDC — invasive carcinoma NST', 'confidence' => 0.8,
+                'summary' => "IDC — invasive carcinoma NST, Nottingham grade 2.\nNo DCIS seen.", 'finished_at' => now()]);
+            $dir = "{$this->runs}/{$run->id}";
+            File::ensureDirectoryExists($dir);
+            file_put_contents("{$dir}/final.json", '{}');
+            touch("{$dir}/final.json", time() - 60);
+            file_put_contents("{$dir}/view.json", json_encode(['regions' => [], 'tumour_mask' => ['polygons' => []], 'report' => $report]));
+            file_put_contents("{$dir}/heat.json", '{"grid":50,"model":{},"density":{}}');
+            file_put_contents("{$dir}/prompt_version", 'abc123');
+            $run->update(['run_dir' => $dir]);
+            return $run;
+        };
+        // The structured report says grade 3 and LVI present; the free text says grade 2.
+        $run = $make('TCGA-UU-A93S-01Z-00-DX1', ['grade' => '3', 'grade_basis' => 'tubules 3, nuclei 3, mitoses 3',
+                                                 'in_situ' => 'absent', 'lvi' => 'present']);
+        $normal = $make('TCGA-UU-A93S-11A-01-TS1', ['grade' => 'not applicable', 'in_situ' => 'absent', 'lvi' => 'absent']);
+
+        $this->actingAs($this->user);
+        $page = $this->get("/admin/v2-diagnose/{$run->id}")->assertOk()
+            ->assertSee('Against the written pathology report')->assertSee('Total overall grade: 9, grade III (G3).')
+            ->assertSee('tubules 3, nuclei 3, mitoses 3')->assertSee('There is dermal lymphatic invasion.');
+        $this->assertSame(['agree', 'agree', 'agree', 'agree'], array_column($page->viewData('written')['checks'], 'result'));
+        $this->assertStringNotContainsStringIgnoringCase('claude', $page->getContent());
+
+        // A normal-tissue block is not compared: the report describes the tumour.
+        $this->get("/admin/v2-diagnose/{$normal->id}")->assertOk()->assertDontSee('Against the written pathology report');
+
+        $this->artisan('v2:written-check', ['--runs' => (string) $run->id])->assertSuccessful()
+            ->expectsOutputToContain('abc123 · held-out · grade');
+        @unlink($ref);
+    }
+
     public function test_a_slide_whose_label_is_under_review_is_counted_neither_right_nor_wrong(): void
     {
         $db = \Illuminate\Support\Facades\DB::table(...);

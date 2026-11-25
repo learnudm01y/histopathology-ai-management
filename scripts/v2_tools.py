@@ -55,6 +55,11 @@ REGION_LABELS = TUMOUR_LABELS | {"necrosis", "lymphoid", "normal", "other"}
 TISSUE_KINDS = {"tumour", "stroma", "fat", "lymphoid", "necrosis", "normal", "mixed", "other", "background"}
 MAX_SUMMARY_LINES = 5
 CODE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9-]{1,11}$")
+# The written findings, as fields the platform can check against a pathology
+# report (app/Services/V2WrittenCheck.php).
+REPORT_STATES = ("present", "possible", "absent", "not assessable")
+GRADE_RE = re.compile(r"^\s*(?:[1-5](?:\s*[-–]\s*[1-5])?|not applicable|not assessable)\s*$", re.I)
+GLEASON_RE = re.compile(r"^\s*[345]\s*\+\s*[345]\s*$")
 ARABIC_RE = re.compile(r"[؀-ۿݐ-ݿﭐ-﷿ﹰ-﻿]")
 MAX_BOX_FRACTION = 0.85   # a region is lesional tissue, not the tile it sits on
 MASK_PX = 250             # fine density map per tile, 4 view px per cell (~3.8 um)
@@ -897,6 +902,22 @@ def validate(run: str, box_rule: bool = True) -> tuple[dict | None, list, list]:
             errors.append(f"{field}: must be written in English")
     if not _num(r.get("confidence")) or not 0 <= r["confidence"] <= 1:
         errors.append("confidence: required, a number 0..1")
+    rep = r.get("report")
+    if not isinstance(rep, dict):
+        errors.append('report: required, an object: {"grade": "2", "grade_basis": "...", "in_situ": "...", "lvi": "..."} '
+                      '(and "gleason": "3+4" for prostate)')
+    else:
+        if not isinstance(rep.get("grade"), str) or not GRADE_RE.match(rep["grade"]):
+            errors.append('report.grade: one grade as a digit ("2"; the Grade Group for prostate, the CNS WHO grade for '
+                          'glioma), or "not applicable" when there is no tumour, or "not assessable"')
+        for k in ("in_situ", "lvi"):
+            if rep.get(k) not in REPORT_STATES:
+                errors.append(f"report.{k}: one of {', '.join(REPORT_STATES)}")
+        if rep.get("gleason") not in (None, "", "not applicable") and not (
+                isinstance(rep["gleason"], str) and GLEASON_RE.match(rep["gleason"])):
+            errors.append('report.gleason: primary + secondary pattern, e.g. "3+4"')
+        if "grade_basis" in rep and (not isinstance(rep["grade_basis"], str) or len(rep["grade_basis"]) > 240):
+            errors.append("report.grade_basis: a short string (at most 240 characters)")
 
     seen = set()
     for i, p in enumerate(r.get("patches") or []):
@@ -1376,6 +1397,7 @@ def export(run: str, final: dict) -> dict:
                                      for poly in (final.get("tumour_mask") or {}).get("polygons") or []]},
         "coverage": final.get("coverage"), "checks": final.get("checks"),
         "sam_refined": final.get("sam_refined", False), "warnings": final.get("warnings", []),
+        "report": final.get("report"),
     }
     heat = {
         "grid": final["grid"],
@@ -1526,6 +1548,8 @@ def cmd_finalize(a) -> None:
         "diagnosis_code": result["diagnosis_code"].strip(),
         "diagnosis": with_code(result["diagnosis_code"], result["diagnosis"]),
         "confidence": result["confidence"],
+        "report": {k: str(v).strip() for k, v in (result.get("report") or {}).items()
+                   if k in ("grade", "grade_basis", "gleason", "in_situ", "lvi") and v is not None},
         "tiles": [{**tiles[pid], "tissue": scores[pid]["tissue"], "tumour_score": scores[pid]["tumour_score"],
                    "note": str(scores[pid].get("note", ""))[:300]} for pid in tiles],
         "regions": regions,

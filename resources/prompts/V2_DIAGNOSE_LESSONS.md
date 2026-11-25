@@ -238,6 +238,57 @@ the instructions, in a harness that used the runner's own CLI flags.
   This is 7–11x faster on 40x slides. View images differ from the old ones
   by about 2–6 grey levels, and the density grids correlate at 0.99.
 
+## The written answer against the pathology reports (2026-11-25)
+
+Until now only `diagnosis_code` was scored, against the slide's recorded
+class. The text — grade, in-situ component, lymphovascular invasion — was
+never checked. `php artisan v2:written-check` now compares it, field by field,
+with the case's pathology report: the TCGA reports (OCR text, Kefeli et al.
+2024) and the GDC record, read into `resources/reference/v2_written_reports.json`
+by `scripts/v2_report_reference.py`. Every reference value carries the
+sentence it was read from. The extraction was audited by hand on the 88
+evaluated patients; the other ~600 breast patients are extracted the same way
+but not audited.
+
+- **The report describes the case; a run reads one slide.** A feature the
+  report found and the slide does not show is "not on this slide", not an
+  error. Normal-tissue blocks (TCGA sample type 11, "-11A") are not compared at
+  all: the report describes the tumour, not that block. The breast runs
+  #5–#9 and #48–#54 are on such blocks, and were rightly read as benign.
+- **First measurement, runs #1–#129, 93 tumour slides with a report:**
+  type 83 agree, 6 close, 4 disagree. Grade 49 agree, 10 close (a written
+  range that includes the report's grade), 20 one step off, 4 further off,
+  4 not stated. In situ (breast) 17 agree, 3 written as possible, 4 not on the
+  slide, none written present when the report has none. LVI was not stated in
+  29 of 44: the instructions never asked for it.
+- **Prostate**: all three Gleason 3+3 cases were written 3+4, and pattern 5
+  was missed in three (4+5 → 4+3 twice, 5+3 → 3+3). The view images are about
+  10×, where tangentially cut pattern-3 glands look poorly formed. Rule: every
+  reported pattern must be seen on a zoom image, small separate glands with
+  lumens are pattern 3, and pattern 5 is looked for in the most cellular areas.
+  The tissue was not re-read at 40× for these cases: the rule is the ISUP
+  definition, guards both directions, and must be proved on other slides.
+  The report's Gleason covers the whole gland, so one slide can differ.
+- **Glioma**: two anaplastic oligodendrogliomas were written grade 2
+  "favoured" with mitoses not counted; two anaplastic astrocytomas were
+  written grade 4 on microvascular proliferation; two GBMs grade 3. Rule:
+  count mitoses on at least five zooms of the most cellular areas and write
+  the count before choosing grade 2 or 3.
+- **Lung**: the answers used IASLC grades, the reports differentiation
+  (well / moderately / poorly), so the two could not be compared; two
+  well-differentiated squamous carcinomas were written moderately. Rule: write
+  the differentiation as a report does, plus the IASLC grade for adenocarcinoma.
+- **Breast**: grades were often hedged ("high grade", "grade 2–3"). Rule: score
+  the three Nottingham components and write one grade, saying which component
+  was estimated.
+- **Format**: `report` in result.json (grade, grade_basis, gleason, in_situ,
+  lvi) is required by the validator, kept in final.json and view.json, and is
+  what `v2:written-check` reads first. Line 4 of the summary states the same.
+- **Not yet proved.** Every prostate, brain and lung slide in the archive had
+  already been run, so the new rules for them can only be re-run on their own
+  tuning slides. Unseen slides exist only for breast:
+  `php artisan v2:evaluate --queue --written --classes=IDC,ILC --per-class=N`.
+
 ## Isolation: how the model is kept from cheating
 
 The run folder sits inside the application, so an unscoped tool reaches .env,

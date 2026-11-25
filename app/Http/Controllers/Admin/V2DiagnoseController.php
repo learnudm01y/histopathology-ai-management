@@ -12,6 +12,7 @@ use App\Models\Sample;
 use App\Models\Stain;
 use App\Models\V2Diagnosis;
 use App\Services\V2DiagnoseRunner;
+use App\Services\V2WrittenCheck;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -475,6 +476,8 @@ class V2DiagnoseController extends Controller
             // Every run shows its workflow: live while it runs, and afterwards
             // as the record of how the result was reached (or where it stopped).
             'progress' => $this->runner->progress($run),
+            // The written answer against the case's pathology report, where there is one.
+            'written' => $done ? app(V2WrittenCheck::class)->forRun($run) : null,
         ]);
     }
 

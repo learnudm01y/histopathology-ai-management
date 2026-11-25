@@ -6,6 +6,7 @@ use App\Jobs\RunV2Diagnosis;
 use App\Models\Sample;
 use App\Models\V2Diagnosis;
 use App\Services\V2DiagnoseRunner;
+use App\Services\V2WrittenCheck;
 use Illuminate\Console\Command;
 
 /**
@@ -36,6 +37,7 @@ class V2Evaluate extends Command
         {--seed= : with --queue, makes the random pick repeatable}
         {--prompt= : report on this prompt version only (default: the current one)}
         {--all-versions : report on every run, whatever its prompt version}
+        {--written : with --queue, only slides whose case has a written pathology report to check the answer against}
         {--dry-run : with --queue, list the pick and stop}';
 
     protected $description = 'Score V2 Diagnose on unseen archive slides, or queue a blind batch of them';
@@ -51,13 +53,19 @@ class V2Evaluate extends Command
         $per = max(1, (int) $this->option('per-class'));
         $seed = $this->option('seed') !== null ? (int) $this->option('seed') : random_int(1, PHP_INT_MAX);
         $tuning = (array) config('v2_diagnose.tuning_samples', []);
+        $written = app(V2WrittenCheck::class);
 
         $used = V2Diagnosis::whereNotNull('sample_id')->distinct()->pluck('sample_id')->all();
         $pool = Sample::with(['organ:id,name', 'stain:id,name', 'category:id,label_en', 'diseaseSubtype:id,name'])
             ->where('storage_status', 'available')->whereNotNull('wsi_remote_path')
             ->whereHas('organ', fn ($q) => $q->where('name', $this->option('organ')))
             ->whereNotIn('id', array_merge($used, $tuning))
+            ->when($this->option('written'), fn ($q) => $q->with('patientCase:id,submitter_id'))
             ->get()
+            // --written: the case's pathology report is in the reference, so the
+            // written answer can be checked field by field (v2:written-check).
+            ->when($this->option('written'), fn ($c) => $c->filter(fn ($s) => V2WrittenCheck::isTumourSlide($s)
+                && isset($written->reference(V2WrittenCheck::patientOfSample($s))['report_chars'])))
             ->groupBy(fn ($s) => V2Diagnosis::classOf($s));
 
         $picked = collect();

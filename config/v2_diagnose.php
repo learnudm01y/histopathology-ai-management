@@ -148,5 +148,32 @@ return [
         1594,   // TCGA-DB-5270 (LGG): GBM called on a tissue tear, run #74
         1612,   // TCGA-56-1622 (LUSC): NSCLC despite keratin pearls, run #91
         1609,   // TCGA-75-5122 (LUAD): PLCH called on an inflammation-dominated slide, run #83
+        // 2026-11-25, "Grade and written findings": grades checked against the
+        // pathology reports (v2:written-check). Report grade → written grade.
+        1569,   // TCGA-2A-A8VL (PRAD): Gleason 3+3 → 3+4, run #97
+        1570,   // TCGA-XK-AAIR (PRAD): Gleason 4+4 → 4+5, run #98
+        1565,   // TCGA-YL-A8HJ (PRAD): Gleason 4+5 → 4+3, run #100
+        1567,   // TCGA-J4-8198 (PRAD): Gleason 4+3 → 3+4, run #101
+        1560,   // TCGA-HC-7075 (PRAD): Gleason 3+3 → 3+4, run #103
+        1566,   // TCGA-CH-5737 (PRAD): Gleason 4+3 → 4+4, run #107
+        1577,   // TCGA-TP-A8TT (PRAD): Gleason 4+3 → 4+5, run #108
+        1575,   // TCGA-HI-7168 (PRAD): Gleason 4+5 → 4+3, run #110
+        1564,   // TCGA-V1-A8MF (PRAD): Gleason 3+3 → 3+4, run #112
+        1568,   // TCGA-VP-A872 (PRAD): Gleason 5+3 → 3+3, run #113
+        1576,   // TCGA-H9-7775 (PRAD): Gleason 3+4 → 3+3, run #115
+        1589,   // TCGA-41-2571 (GBM): CNS WHO grade 4 → 3, run #59
+        1593,   // TCGA-FG-5962 (LGG): anaplastic oligodendroglioma, grade 3 → 2, run #67
+        1595,   // TCGA-QH-A65R (LGG): anaplastic oligodendroglioma, grade 3 → 2, run #70
+        1597,   // TCGA-E1-A7YD (LGG): anaplastic astrocytoma, grade 3 → 4, runs #73/#121
+        1601,   // TCGA-44-2655 (LUAD): moderately differentiated → IASLC 3, run #81
+        1603,   // TCGA-86-6562 (LUAD): poorly differentiated → IASLC 2, run #85
+        1619,   // TCGA-21-1070 (LUSC): poorly → poorly-to-moderately, run #87
+        1610,   // TCGA-85-6175 (LUSC): well → moderately differentiated, run #89
+        1613,   // TCGA-66-2727 (LUSC): poorly → poorly-to-moderately, run #90
+        1618,   // TCGA-18-3406 (LUSC): well → moderately differentiated, run #92
+        1505,   // TCGA-MS-A51U (ILC): Nottingham 2 → "high grade", run #3
+        1395,   // TCGA-AC-A23C (IDC): Nottingham 1 → 2, run #15
+        1396,   // TCGA-AC-A62V (IDC): Nottingham 3 → 2, run #16
+        1544,   // TCGA-AN-A0XW (IDC): grade 2 → "high-grade", run #19
     ],
 ];

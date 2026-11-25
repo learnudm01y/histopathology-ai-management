@@ -51,6 +51,23 @@
   .v2-vs.review{background:#eceaf4;border-color:#d6d2e6;color:#3f3a56}
   .v2-vs.none{background:#f5f3fa;border-color:#e3e0ea;color:#6b6480}
   .v2-code{display:inline-block;background:#4b3a94;color:#fff;border-radius:6px;padding:.05rem .55rem;margin-right:.35rem;letter-spacing:.03em}
+  .v2-wr{margin-top:.9rem}
+  .v2-wr h4{font-size:.9rem;font-weight:600;margin:0 0 .45rem;color:#2c2540}
+  .v2-wr h4 span{font-weight:400;color:#8a83a0}
+  .v2-wr table{width:100%;border-collapse:collapse;font-size:.84rem}
+  .v2-wr th{font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;color:#8a83a0;font-weight:600;text-align:left;padding:.3rem .4rem;border-bottom:1px solid #ebe8f1}
+  .v2-wr td{padding:.4rem;border-bottom:1px solid #f3f1f7;vertical-align:top}
+  .v2-wr td b{font-weight:600}
+  .v2-wr q{display:block;font-size:.76rem;color:#7a7390;margin-top:.15rem;quotes:"“" "”";line-height:1.35}
+  .v2-wr td small{display:block;font-size:.74rem;color:#8a83a0;margin-top:.15rem}
+  .v2-wr-f{white-space:nowrap;color:#57516a}
+  .v2-wr-r{display:inline-block;white-space:nowrap;border-radius:99px;padding:.08rem .55rem;font-size:.76rem;font-weight:600;border:1px solid}
+  .v2-wr-r.agree{background:#e4f1ec;border-color:#b9ddd0;color:#1f5446}
+  .v2-wr-r.near{background:#eef4e6;border-color:#cfe0b8;color:#41602a}
+  .v2-wr-r.off_by_one{background:#faf0da;border-color:#e8d19a;color:#6b4e0e}
+  .v2-wr-r.disagree{background:#fbe9f0;border-color:#f0c2d3;color:#8c2a4d}
+  .v2-wr-r.not_stated,.v2-wr-r.not_seen{background:#f5f3fa;border-color:#e3e0ea;color:#6b6480}
+  .v2-wr p{font-size:.76rem;color:#8a83a0;margin:.45rem 0 0}
   .v2-wait{color:#6b6480;font-size:.9rem;line-height:1.55}
   .v2-wait b{color:#2c2540}
 </style>
@@ -97,6 +114,28 @@
         @endif
       </div>
       <div class="v2-summary">{{ $run->summary }}</div>
+      @if($written)
+        {{-- Field by field against the pathologist's written report (V2WrittenCheck). --}}
+        <div class="v2-wr">
+          <h4>Against the written pathology report <span>· case {{ $written['patient'] }}</span></h4>
+          <table>
+            <thead><tr><th>Field</th><th>Report</th><th>Written by the AI</th><th></th></tr></thead>
+            <tbody>
+            @foreach($written['checks'] as $c)
+              <tr>
+                <td class="v2-wr-f">{{ $c['label'] }}</td>
+                <td><b>{{ $c['report'] ?? '—' }}</b>@if($c['report_text'])<q>{{ $c['report_text'] }}</q>@endif</td>
+                <td><b>{{ $c['written'] ?? '—' }}</b>@if($c['written_text'])<q>{{ $c['written_text'] }}</q>@endif</td>
+                <td><span class="v2-wr-r {{ $c['result'] }}" title="{{ $c['note'] }}">{{ \App\Services\V2WrittenCheck::RESULTS[$c['result']] }}</span>
+                  @if($c['note'])<small>{{ $c['note'] }}</small>@endif</td>
+              </tr>
+            @endforeach
+            </tbody>
+          </table>
+          <p>The report describes the whole case; this run read one slide. A feature the report found that the slide
+            does not show is “not on this slide”, not an error. Report fields are read from the TCGA pathology report and the GDC record.</p>
+        </div>
+      @endif
       @if(!empty($run->warnings))
         <div class="v2-warn">@foreach($run->warnings as $w)<div>{{ $w }}</div>@endforeach</div>
       @endif
