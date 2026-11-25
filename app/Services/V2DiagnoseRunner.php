@@ -339,8 +339,9 @@ class V2DiagnoseRunner
     }
 
     /**
-     * Keep the cache within its size: the slides used longest ago go first.
-     * One that a run is linking at this moment (its lock is held) is skipped.
+     * Keep the cache within its size, and the disk above its floor: the
+     * slides used longest ago go first. One that a run is linking at this
+     * moment (its lock is held) is skipped.
      */
     public function evictPrepared(): void
     {
@@ -359,8 +360,10 @@ class V2DiagnoseRunner
         usort($entries, fn ($a, $b) => $a['used'] <=> $b['used']);
         $total = array_sum(array_column($entries, 'bytes'));
         $max = (float) config('v2_diagnose.prepared.max_gb') * 1024 ** 3;
+        $minFree = (float) config('v2_diagnose.prepared.min_free_gb', 0) * 1024 ** 3;
+        $lowDisk = fn () => $minFree > 0 && is_dir($root) && (float) @disk_free_space($root) < $minFree;
         foreach ($entries as $e) {
-            if ($total <= $max) {
+            if ($total <= $max && ! $lowDisk()) {
                 break;
             }
             $lock = $this->preparedLock($e['key']);

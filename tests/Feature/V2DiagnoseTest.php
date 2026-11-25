@@ -73,11 +73,16 @@ class V2DiagnoseTest extends TestCase
         $this->runs = storage_path('framework/testing/v2_runs');
         config(['v2_diagnose.runs_dir' => $this->runs,
                 'v2_diagnose.prepared.dir' => storage_path('framework/testing/v2_prepared'),
-                'v2_diagnose.slides_dir' => storage_path('framework/testing/v2_slides')]);
+                'v2_diagnose.slides_dir' => storage_path('framework/testing/v2_slides'),
+                'v2_diagnose.prepared.min_free_gb' => 0]);
     }
 
     protected function tearDown(): void
     {
+        // The helper copy is read-only, which Windows will not delete.
+        foreach (glob($this->runs . '/*/tools/v2_tools.py') ?: [] as $f) {
+            @chmod($f, 0644);
+        }
         File::deleteDirectory($this->runs);
         File::deleteDirectory(storage_path('framework/testing/v2_prepared'));
         File::deleteDirectory(storage_path('framework/testing/v2_slides'));
@@ -823,6 +828,18 @@ class V2DiagnoseTest extends TestCase
         $this->assertNotNull($runner->prepared('1'));
         $this->assertNull($runner->prepared('2'));
         $this->assertNotNull($runner->prepared('3'));
+    }
+
+    public function test_the_prepared_cache_gives_way_when_the_disk_runs_low(): void
+    {
+        $runner = app(\App\Services\V2DiagnoseRunner::class);
+        $this->preparedSlide('1', time() - 200);
+        $this->preparedSlide('2', time() - 100);
+        // Far under its size limit, but the disk is below the floor: everything goes.
+        config(['v2_diagnose.prepared.max_gb' => 100, 'v2_diagnose.prepared.min_free_gb' => 1e9]);
+        $runner->evictPrepared();
+        $this->assertNull($runner->prepared('1'));
+        $this->assertNull($runner->prepared('2'));
     }
 
     public function test_the_prompt_asks_for_the_compact_result_and_no_haste(): void

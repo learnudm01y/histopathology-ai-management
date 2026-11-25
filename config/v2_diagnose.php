@@ -59,10 +59,13 @@ return [
     // copy the crops are read from — and reused by every run on them, so a run
     // on a prepared slide starts at the analysis. Built by the first run, or in
     // advance: on upload for analysis, or `php artisan v2:prepare`. The slides
-    // used longest ago are removed above max_gb (0 keeps nothing).
+    // used longest ago are removed above max_gb (0 keeps nothing), and while
+    // the disk has less than min_free_gb left (the Drive mount's own cache
+    // grows to 20 GB on the same disk).
     'prepared' => [
         'dir'       => env('V2_PREPARED_DIR', storage_path('app/v2_prepared')),
-        'max_gb'    => (float) env('V2_PREPARED_MAX_GB', 15),
+        'max_gb'    => (float) env('V2_PREPARED_MAX_GB', 10),
+        'min_free_gb' => (float) env('V2_PREPARED_MIN_FREE_GB', 10),
         'on_upload' => (bool) env('V2_PREPARE_ON_UPLOAD', true),
     ],
 
