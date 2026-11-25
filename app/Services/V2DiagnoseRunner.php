@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\V2Diagnosis;
 use App\Models\Sample;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
@@ -959,17 +960,36 @@ class V2DiagnoseRunner
         return is_file($file) ? (json_decode((string) @file_get_contents($file), true) ?: []) : [];
     }
 
-    /** The steps of a run as the page shows them: label, and its share of the whole in percent. */
+    /**
+     * The steps of a run as the page shows them, in order: label, its share
+     * of the whole in percent (from, to), a short name for the workflow bar,
+     * and what happens in it.
+     */
     public const STEPS = [
-        'queued'     => ['Waiting in the analysis queue', 0, 2],
-        'fetching'   => ['Fetching the slide from storage', 2, 8],
-        'tiling'     => ['Cutting the whole slide into tiles', 8, 25],
-        'preparing'  => ['Preparing the tiles for the AI model', 25, 35],
-        'survey'     => ['AI model surveying the whole slide', 35, 62],
-        'detail'     => ['AI model examining key tiles at full resolution', 62, 82],
-        'report'     => ['Receiving the diagnosis from the AI analysis model', 82, 90],
-        'finalising' => ['Checking the result and mapping it onto the slide', 90, 99],
+        'queued'     => ['Waiting in the analysis queue', 0, 2, 'Queue',
+                         'The run waits for a free analysis worker.'],
+        'fetching'   => ['Fetching the slide from storage', 2, 8, 'Fetch slide',
+                         'The slide file is copied from storage to the analysis server.'],
+        'tiling'     => ['Cutting the whole slide into tiles', 8, 25, 'Tile slide',
+                         'The tissue is found and every part of it that holds tissue is cut into tiles at one fixed magnification.'],
+        'preparing'  => ['Preparing the tiles for the AI model', 25, 35, 'Prepare',
+                         'Contact sheets, an overview, a coverage map and a nuclear-density measure are built from the tiles.'],
+        'survey'     => ['AI model surveying the whole slide', 35, 62, 'Survey',
+                         'The AI model reads every tile on the contact sheets and scores each one.'],
+        'detail'     => ['AI model examining key tiles at full resolution', 62, 82, 'Examine',
+                         'Tiles that matter for the diagnosis are opened at full resolution and measured.'],
+        'report'     => ['Receiving the diagnosis from the AI analysis model', 82, 90, 'Report',
+                         'The AI model writes its diagnosis, regions and tile scores, and checks them against the required format.'],
+        'finalising' => ['Checking the result and mapping it onto the slide', 90, 99, 'Map result',
+                         'The answer is validated, converted to slide coordinates, and the tumour mask and heatmap are drawn.'],
     ];
+
+    /** The steps for the page's workflow bar: key, label, short name, explanation. */
+    public static function stepMeta(): array
+    {
+        return array_map(fn ($k) => ['key' => $k, 'label' => self::STEPS[$k][0],
+            'short' => self::STEPS[$k][3], 'hint' => self::STEPS[$k][4]], array_keys(self::STEPS));
+    }
 
     /** The step a run status stands for, refined by the step last marked. */
     private function stepOf(string $status, ?string $marked): ?string
@@ -977,7 +997,9 @@ class V2DiagnoseRunner
         return match ($status) {
             'queued'        => 'queued',
             'waiting_slide' => 'fetching',
-            'waiting_quota' => 'queued',
+            // Parked on the usage limit: the slide is already tiled and
+            // prepared, and the analysis is what it waits to start.
+            'waiting_quota' => 'survey',
             'tiling'        => in_array($marked, ['fetching', 'tiling'], true) ? $marked : 'tiling',
             'preparing'     => 'preparing',
             'analysing'     => in_array($marked, ['survey', 'detail', 'report'], true) ? $marked : 'survey',
@@ -1000,15 +1022,25 @@ class V2DiagnoseRunner
 
         // When each step began: from the progress file where it has it,
         // otherwise from the stage log (runs begun before the file existed).
+        // A run re-run in place keeps its old log, so only this attempt's
+        // part counts: from the last time it was queued.
         $started = array_map('intval', $p['started'] ?? []);
-        $started['queued'] ??= $run->created_at?->timestamp;
+        $events = $run->events ?? [];
+        $from = 0;
+        foreach ($events as $i => $e) {
+            if (($e['status'] ?? null) === 'queued') {
+                $from = $i;
+            }
+        }
         $lastRunning = null;
-        foreach ($run->events ?? [] as $e) {
+        foreach (array_slice($events, $from) as $e) {
             if ($k = $this->stepOf((string) ($e['status'] ?? ''), null)) {
                 $started[$k] ??= strtotime((string) $e['at']) ?: null;
                 $lastRunning = (string) $e['status'];
             }
         }
+        $started['queued'] ??= $run->created_at?->timestamp;
+        $waiting = in_array($status, ['waiting_slide', 'waiting_quota'], true);
 
         $current = match ($status) {
             'completed' => 'finalising',
@@ -1031,6 +1063,10 @@ class V2DiagnoseRunner
         } elseif ($frac === null && $current === 'detail' && $done) {
             $frac = min(0.95, $done / 45);       // a large slide opens about 30-60 tiles
         }
+        if ($waiting) {
+            // What it waits for, and until when; no count from before it stopped.
+            [$detail, $done, $total, $frac] = [$run->stage_message ?: $detail, null, null, null];
+        }
 
         [, $lo, $hi] = self::STEPS[$current];
         $percent = $status === 'completed' ? 100 : (int) floor($lo + ($hi - $lo) * max(0, min(1, (float) $frac)));
@@ -1041,7 +1077,7 @@ class V2DiagnoseRunner
         foreach ($keys as $i => $k) {
             $state = match (true) {
                 $status === 'completed' || $i < $at => 'done',
-                $i === $at => $status === 'failed' ? 'failed' : 'active',
+                $i === $at => $status === 'failed' ? 'failed' : ($waiting ? 'waiting' : 'active'),
                 default => 'pending',
             };
             // A finished step lasted until the next step that has a start time.
@@ -1060,18 +1096,35 @@ class V2DiagnoseRunner
         }
 
         return [
+            'status'  => $status,
+            'waiting' => $waiting,
             'percent' => $percent,
             'step'    => $current,
+            'index'   => $at,
+            'count'   => count($keys),
             'label'   => self::STEPS[$current][0],
             'detail'  => $detail,
             'done'    => $done,
             'total'   => $total,
             'frac'    => $frac,
             'since'   => $started[$current] ?? null,
-            'began'   => $run->started_at?->timestamp ?? $run->created_at?->timestamp,
+            // From when a worker took it up; before that, from when it was queued.
+            'began'   => $run->started_at?->timestamp ?? $started['queued'],
+            'finished' => in_array($status, ['completed', 'failed'], true) ? $run->finished_at?->timestamp : null,
             'now'     => time(),
             'steps'   => $steps,
         ];
+    }
+
+    /**
+     * The part of progress() the results list needs for one running row:
+     * where it is, and each step's state — without the per-step durations.
+     */
+    public function brief(V2Diagnosis $run): array
+    {
+        $p = $this->progress($run);
+        return Arr::only($p, ['status', 'waiting', 'percent', 'step', 'index', 'count', 'detail', 'frac', 'since', 'now'])
+            + ['states' => array_column($p['steps'], 'state')];
     }
 
     public function finalize(V2Diagnosis $run): array

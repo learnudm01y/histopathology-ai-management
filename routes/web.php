@@ -148,6 +148,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::get('v2-diagnose',                         [V2DiagnoseController::class, 'index'])->name('v2-diagnose');
         Route::post('v2-diagnose',                        [V2DiagnoseController::class, 'store'])->name('v2-diagnose.store');
         Route::get('v2-diagnose/archive',                 [V2DiagnoseController::class, 'archiveSamples'])->name('v2-diagnose.archive');
+        Route::get('v2-diagnose/live',                    [V2DiagnoseController::class, 'live'])->name('v2-diagnose.live');
         Route::get('v2-diagnose/sample/{sample}/context',[V2DiagnoseController::class, 'sampleContext'])->name('v2-diagnose.sample-context');
         Route::get('v2-diagnose/{run}',                   [V2DiagnoseController::class, 'show'])->whereNumber('run')->name('v2-diagnose.show');
         Route::get('v2-diagnose/{run}/status',            [V2DiagnoseController::class, 'status'])->whereNumber('run')->name('v2-diagnose.status');

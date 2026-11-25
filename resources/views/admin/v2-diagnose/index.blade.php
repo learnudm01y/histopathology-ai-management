@@ -104,6 +104,13 @@
   table.v2-runs tr.v2-r-correct td:first-child{box-shadow:inset 3px 0 0 #3a9a7a}
   table.v2-runs tr.v2-r-partial td:first-child{box-shadow:inset 3px 0 0 #d9a53a}
   table.v2-runs tr.v2-r-wrong td:first-child,table.v2-runs tr.v2-r-failed td:first-child{box-shadow:inset 3px 0 0 #c9506f}
+  table.v2-runs tr.v2-r-running td:first-child{box-shadow:inset 3px 0 0 #6c5bc4}
+  /* A row that has just finished, replaced in place: a short highlight. */
+  table.v2-runs tr.v2-flash td{animation:v2-flash 2.4s ease-out}
+  @keyframes v2-flash{from{background:#e9e4fb}to{background:transparent}}
+  .v2-live-note{font-size:.78rem;color:#8a83a0;margin:.1rem 0 .6rem;display:flex;align-items:center;gap:.4rem}
+  .v2-live-note::before{content:"";width:7px;height:7px;border-radius:50%;background:#2f9a74;animation:wf-blink 1.6s ease-in-out infinite}
+  .v2-live-note.off::before{background:#c58a1a;animation:none}
   table.v2-runs .v2-c-act{width:1%;white-space:nowrap;vertical-align:middle;padding-right:.4rem}
   table.v2-runs .v2-c-run{width:1%;white-space:nowrap}
   table.v2-runs .v2-c-slide{max-width:17rem}
@@ -465,6 +472,8 @@
     @if($runs->isEmpty())
       <p style="color:#6b6480">{{ array_filter($rf) ? 'No result matches this filter.' : 'No results yet.' }}</p>
     @else
+    <div class="v2-live-note" id="liveNote" @if(! $live) hidden @endif>
+      <span id="liveNoteText">Running analyses update live — each one shows its step in the workflow; a finished one shows its answer in place.</span></div>
     <div class="v2-rwrap">
     <table class="v2-runs">
       <thead><tr>
@@ -473,57 +482,7 @@
       </tr></thead>
       <tbody>
       @foreach($runs as $r)
-        @php
-          $v = $r->verdict(); $truth = $r->recordedClass();
-          $state = in_array($r->status, ['completed', 'failed']) ? $r->status : 'run';
-          $slide = $r->sample?->entity_submitter_id ?: ($r->sample?->file_name ?: 'sample #'.$r->sample_id);
-          $conf = $r->confidence !== null ? (int) round($r->confidence * 100) : null;
-          $who = collect([$r->sex ? ucfirst($r->sex) : null, $r->age ? $r->age.' y' : null, $r->race])->filter()->implode(' · ');
-        @endphp
-        <tr class="v2-r-{{ $v['result'] ?? ($state === 'failed' ? 'failed' : 'none') }}">
-          <td class="v2-c-act"><div class="v2-rowbtns">
-            <a href="{{ route('admin.v2-diagnose.show', $r) }}" class="v2-eye" title="Open run #{{ $r->id }}: slide, regions, heatmap"
-               aria-label="Open run #{{ $r->id }}"><i class="mdi mdi-eye-outline"></i></a>
-            <button type="button" class="v2-del" data-del="{{ route('admin.v2-diagnose.destroy', $r) }}" data-id="{{ $r->id }}"
-                    data-slide="{{ $slide }}" data-dx="{{ $r->diagnosis }}" data-running="{{ $r->isRunning() ? $r->status : '' }}"
-                    title="Delete run #{{ $r->id }}" aria-label="Delete run #{{ $r->id }}"><i class="mdi mdi-trash-can-outline"></i></button>
-          </div></td>
-          <td class="v2-c-run">
-            <a href="{{ route('admin.v2-diagnose.show', $r) }}" class="v2-runno">#{{ $r->id }}</a>
-            <span class="v2-st {{ $state }}">{{ $r->status }}</span>
-            <div class="v2-sub" title="{{ $r->created_at->format('Y-m-d H:i') }}">{{ $r->created_at->format('d M Y · H:i') }}</div>
-          </td>
-          <td class="v2-c-slide">
-            <div class="v2-id" title="{{ $slide }}">{{ $slide }}</div>
-            <div class="v2-sub">sample #{{ $r->sample_id }} · {{ $r->organ }}{{ $r->stain ? ' · '.$r->stain : '' }}</div>
-            @if($who)<div class="v2-sub">{{ $who }}</div>@endif
-          </td>
-          <td class="v2-c-dx">
-            @if($r->diagnosis)
-              <div class="v2-dxtext" title="{{ $r->diagnosis }}">{{ $r->diagnosis }}</div>
-              @if($conf !== null)
-                <div class="v2-conf" title="Confidence {{ $conf }}%">
-                  <span class="v2-bar"><span style="width:{{ $conf }}%"></span></span>
-                  <span>{{ $conf }}%</span><span class="v2-sub">· {{ $r->regions_count }} regions</span>
-                </div>
-              @endif
-            @else
-              <span class="v2-missing">{{ $state === 'run' ? 'Running…' : '—' }}</span>
-            @endif
-          </td>
-          <td class="v2-c-truth">
-            @if($truth)<span class="v2-truth">{{ $truth }}</span>
-            @else<span class="v2-missing">not recorded</span>@endif
-          </td>
-          <td class="v2-c-res">
-            @if($v)
-              <span class="v2-match {{ $v['result'] }}">{{ ['correct' => '✓ Correct', 'partial' => '≈ Partial', 'wrong' => '✗ Wrong', 'review' => '⚑ Label under review'][$v['result']] }}</span>
-              <div class="v2-sub">{{ $v['reason'] }}</div>
-            @else
-              <span class="v2-missing">{{ $state === 'failed' ? 'failed — no answer' : ($truth ? '—' : 'cannot be scored') }}</span>
-            @endif
-          </td>
-        </tr>
+        @include('admin.v2-diagnose.partials.run-row', ['r' => $r, 'live' => $live[$r->id] ?? null])
       @endforeach
       </tbody>
     </table>
@@ -536,6 +495,79 @@
 <form method="POST" id="delForm" style="display:none">@csrf @method('DELETE')</form>
 <form method="GET" id="resultsFilter" action="{{ route('admin.v2-diagnose') }}#results"></form>
 
+@include('admin.v2-diagnose.partials.workflow')
+<script>
+/* ── Running rows stay live: one request for all of them every few seconds.
+      A row still running gets its new workflow state; a row that has
+      finished is replaced by its rendered row, in place — no reload. ── */
+(function () {
+  var url = @json(route('admin.v2-diagnose.live'));
+  var note = document.getElementById('liveNote'), noteText = document.getElementById('liveNoteText');
+  var timer = null, fails = 0, busy = false;
+
+  function draw(tr) {
+    var box = tr.querySelector('[data-wf]');
+    if (!box) return;
+    try { V2Flow.compact(box, JSON.parse(box.getAttribute('data-wf'))); } catch (e) { /* keeps "Running…" */ }
+    box.removeAttribute('data-wf');
+    box.setAttribute('data-wf-on', '');
+  }
+  function liveRows() { return Array.prototype.slice.call(document.querySelectorAll('tr[data-live]')); }
+
+  function apply(id, s) {
+    var tr = document.querySelector('tr[data-run="' + id + '"]');
+    if (!tr) return;
+    if (s.running) {
+      var box = tr.querySelector('[data-wf-on]');
+      if (box) V2Flow.compact(box, s.progress);
+      var st = tr.querySelector('[data-st]');
+      if (st) st.textContent = s.status.replace(/_/g, ' ');
+      var del = tr.querySelector('.v2-del');
+      if (del) del.setAttribute('data-running', s.status);
+      return;
+    }
+    if (s.status === 'deleted') { tr.parentNode.removeChild(tr); return; }
+    var t = document.createElement('tbody');
+    t.innerHTML = s.html.trim();
+    var row = t.querySelector('tr');
+    if (!row) return;
+    row.classList.add('v2-flash');
+    tr.parentNode.replaceChild(row, tr);
+  }
+
+  function schedule(ms) { clearTimeout(timer); timer = setTimeout(poll, ms); }
+
+  function poll() {
+    var rows = liveRows();
+    if (!rows.length) { note.hidden = true; return; }
+    if (document.hidden || busy) return;          // picked up again when the tab is shown
+    busy = true;
+    var ids = rows.map(function (tr) { return tr.getAttribute('data-run'); }).join(',');
+    fetch(url + '?ids=' + ids, { headers: { 'Accept': 'application/json' }, credentials: 'same-origin', cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (d) {
+        fails = 0;
+        note.classList.remove('off');
+        noteText.textContent = 'Running analyses update live — each one shows its step in the workflow; a finished one shows its answer in place.';
+        Object.keys(d.runs || {}).forEach(function (id) { apply(id, d.runs[id]); });
+        busy = false;
+        if (!liveRows().length) { note.hidden = true; return; }   // nothing left running on this page
+        schedule(4000);
+      })
+      .catch(function () {
+        busy = false;
+        fails++;
+        note.classList.add('off');
+        noteText.textContent = 'Live updates interrupted — retrying…';
+        schedule(Math.min(30000, 4000 * Math.pow(2, fails)));
+      });
+  }
+
+  liveRows().forEach(draw);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) poll(); });
+  if (liveRows().length) schedule(4000);
+})();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
 <script>
 (function () {
@@ -962,9 +994,12 @@
       .then(function (s) { if (s) { choose(s, true); if (meta) render(); } });
   }
   onSource();
-  /* ── Delete a run, after asking ───────────────────────────────────────── */
-  document.querySelectorAll('.v2-del').forEach(function (b) {
-    b.addEventListener('click', function () {
+  /* ── Delete a run, after asking. Delegated, so a row replaced in place by
+        the live update keeps its button working. ─────────────────────────── */
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('.v2-del');
+    if (!b) return;
+    (function () {
       var d = b.dataset;
       if (d.running) {
         var msg = 'Run #' + d.id + ' is still ' + d.running + '. Wait for it to finish, then delete it.';
@@ -984,7 +1019,7 @@
         b.disabled = true;
         send();
       });
-    });
+    })();
   });
   /* ── New analysis modal: opens from the bar, and by itself when a slide is
         named in the URL or the form comes back with errors ── */

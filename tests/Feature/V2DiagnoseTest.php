@@ -665,6 +665,105 @@ class V2DiagnoseTest extends TestCase
         $this->assertNull((fn (array $o) => $this->quotaReset($o))->call(new RunV2Diagnosis($run->id), ['result' => 'DONE']));
     }
 
+    public function test_the_workflow_shows_each_step_and_where_the_run_is(): void
+    {
+        $runner = app(\App\Services\V2DiagnoseRunner::class);
+        $keys = array_column(\App\Services\V2DiagnoseRunner::stepMeta(), 'key');
+        $this->assertSame(['queued', 'fetching', 'tiling', 'preparing', 'survey', 'detail', 'report', 'finalising'], $keys);
+
+        // In the survey: the steps before it done, it active with its count, the rest pending.
+        $run = V2Diagnosis::create(['organ' => 'Breast', 'status' => 'analysing', 'patches' => 64]);
+        $runner->mark($run, 'survey', 'Contact sheet 2 of 4 read', 2, 4);
+        $p = $runner->progress($run);
+        $this->assertSame(['survey', 4, 8, 'analysing', false], [$p['step'], $p['index'], $p['count'], $p['status'], $p['waiting']]);
+        $this->assertSame(['done', 'done', 'done', 'done', 'active', 'pending', 'pending', 'pending'], array_column($p['steps'], 'state'));
+        $this->assertSame(48, $p['percent']);                    // half of the survey's 35-62 share
+        $this->assertSame('Contact sheet 2 of 4 read', $p['detail']);
+        $this->assertSame(array_column($p['steps'], 'state'), $runner->brief($run)['states']);
+
+        // Parked on the usage limit: tiling is done, the analysis is what it waits for — not back to the queue.
+        $run->stage('waiting_quota', 'Waiting for the usage limit to reset at 2026-11-25 18:00 UTC.');
+        $p = $runner->progress($run->fresh());
+        $this->assertSame(['survey', true, 'waiting'], [$p['step'], $p['waiting'], $p['steps'][4]['state']]);
+        $this->assertStringContainsString('18:00 UTC', $p['detail']);
+
+        // Completed: every step done, at 100%, and the whole run timed.
+        $run->update(['finished_at' => now()]);
+        $run->stage('completed', 'Done.');
+        $p = $runner->progress($run->fresh());
+        $this->assertSame(100, $p['percent']);
+        $this->assertSame(array_fill(0, 8, 'done'), array_column($p['steps'], 'state'));
+        $this->assertNotNull($p['finished']);
+
+        // Failed while tiling: that step is where it stopped.
+        $bad = V2Diagnosis::create(['organ' => 'Breast', 'status' => 'queued']);
+        $bad->stage('tiling', 'Cutting.');
+        $bad->stage('failed', 'Failed: unreadable slide.');
+        $p = $runner->progress($bad->fresh());
+        $this->assertSame(['tiling', 'failed'], [$p['step'], $p['steps'][2]['state']]);
+
+        // A run re-run in place times its steps from this attempt, not from the old log.
+        $re = V2Diagnosis::create(['organ' => 'Breast', 'status' => 'queued', 'events' => [
+            ['at' => '2026-01-01 10:00:00', 'status' => 'queued', 'message' => 'first'],
+            ['at' => '2026-01-01 10:01:00', 'status' => 'tiling', 'message' => 'old tiling'],
+            ['at' => '2026-01-01 10:09:00', 'status' => 'completed', 'message' => 'old result'],
+            ['at' => '2026-11-25 09:00:00', 'status' => 'queued', 'message' => 'Re-run in place.'],
+            ['at' => '2026-11-25 09:00:30', 'status' => 'tiling', 'message' => 'new tiling'],
+        ]]);
+        $re->update(['status' => 'tiling']);
+        $p = $runner->progress($re->fresh());
+        $this->assertSame(strtotime('2026-11-25 09:00:30'), $p['since']);
+        $this->assertSame(30, $p['steps'][0]['seconds'], 'the queue step of this attempt lasted 30 s');
+    }
+
+    public function test_the_results_list_keeps_running_rows_live_and_replaces_a_finished_one_in_place(): void
+    {
+        $runner = app(\App\Services\V2DiagnoseRunner::class);
+        $going = V2Diagnosis::create(['sample_id' => $this->sample()->id, 'organ' => 'Breast', 'status' => 'tiling']);
+        $runner->mark($going, 'tiling', 'Cutting tiles');
+        $done = V2Diagnosis::create(['sample_id' => $this->sample()->id, 'organ' => 'Breast', 'status' => 'completed',
+            'diagnosis_code' => 'IDC', 'diagnosis' => 'IDC — invasive ductal carcinoma', 'confidence' => 0.8, 'regions_count' => 3]);
+        $this->actingAs($this->user);
+
+        // The list draws the running row's workflow from the state it was rendered with.
+        $page = $this->get('/admin/v2-diagnose')->assertOk();
+        $this->assertSame([$going->id], array_keys($page->viewData('live')));
+        $page->assertSee('data-run="' . $going->id . '" data-live', false)->assertSee('data-wf=', false)
+             ->assertSee('window.V2Flow', false)->assertSee('.wfc-segs{', false);
+
+        // One request answers for every row asked about: still running, finished, or deleted.
+        $res = $this->getJson("/admin/v2-diagnose/live?ids={$going->id},{$done->id},999999")->assertOk();
+        $this->assertTrue($res->json("runs.{$going->id}.running"));
+        $this->assertSame('tiling', $res->json("runs.{$going->id}.progress.step"));
+        $this->assertSame('Cutting tiles', $res->json("runs.{$going->id}.progress.detail"));
+        $this->assertCount(8, $res->json("runs.{$going->id}.progress.states"));
+        $this->assertFalse($res->json("runs.{$done->id}.running"));
+        $html = $res->json("runs.{$done->id}.html");
+        $this->assertStringContainsString('data-run="' . $done->id . '"', $html);
+        $this->assertStringContainsString('IDC — invasive ductal carcinoma', $html);
+        $this->assertStringNotContainsString('data-live', $html);
+        $this->assertSame('deleted', $res->json('runs.999999.status'));
+
+        $this->get('/admin/v2-diagnose/live?ids=')->assertOk()->assertExactJson(['runs' => [], 'now' => $res->json('now')]);
+    }
+
+    public function test_the_run_page_shows_the_workflow_and_never_reloads_itself(): void
+    {
+        $running = V2Diagnosis::create(['sample_id' => $this->sample()->id, 'organ' => 'Breast', 'status' => 'analysing']);
+        $this->actingAs($this->user);
+        $page = $this->get("/admin/v2-diagnose/{$running->id}")->assertOk();
+        $page->assertSee('id="wf"', false)->assertSee('V2Flow.full', false)->assertSee('data-swap', false)
+             ->assertSee('ol.wf-steps{', false)
+             ->assertSee('appears here as soon as the last step of the workflow finishes');
+        $this->assertStringNotContainsString('location.reload', $page->getContent());
+        $this->assertSame('survey', $page->viewData('progress')['step']);
+
+        // A finished run keeps its workflow, as the record of how the result was reached.
+        $running->update(['status' => 'completed', 'diagnosis' => 'IDC', 'finished_at' => now()]);
+        $p = $this->get("/admin/v2-diagnose/{$running->id}")->assertOk()->viewData('progress');
+        $this->assertSame([100, 'completed'], [$p['percent'], $p['status']]);
+    }
+
     public function test_a_slide_whose_label_is_under_review_is_counted_neither_right_nor_wrong(): void
     {
         $db = \Illuminate\Support\Facades\DB::table(...);

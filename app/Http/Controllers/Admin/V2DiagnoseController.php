@@ -30,10 +30,13 @@ class V2DiagnoseController extends Controller
 
     public function __construct(private readonly V2DiagnoseRunner $runner) {}
 
+    /** What a results row needs to judge its answer against the recorded diagnosis. */
+    private const TRUTH_WITH = ['sample:id,entity_submitter_id,file_name,category_id,disease_subtype_id',
+                                'sample.category:id,label_en', 'sample.diseaseSubtype:id,name'];
+
     public function index(Request $request)
     {
-        $withTruth = ['sample:id,entity_submitter_id,file_name,category_id,disease_subtype_id',
-                      'sample.category:id,label_en', 'sample.diseaseSubtype:id,name'];
+        $withTruth = self::TRUTH_WITH;
 
         // The results, filtered by the slide's organ and its place in the
         // taxonomy: classification group, then disease (with every finer
@@ -113,6 +116,9 @@ class V2DiagnoseController extends Controller
 
         return view('admin.v2-diagnose.index', [
             'runs'    => $runs,
+            // Where each running row is in its workflow; the page keeps it live.
+            'live'    => $runs->getCollection()->filter->isRunning()
+                ->mapWithKeys(fn ($r) => [$r->id => $this->runner->brief($r)])->all(),
             'tally'   => $tally,
             'rf'      => $f,
             'rfOptions' => $this->resultFilterOptions($f) + ['outs' => $outOptions],
@@ -466,7 +472,9 @@ class V2DiagnoseController extends Controller
             // The small drawing file only: final.json runs to megabytes and is
             // never needed to render the page.
             'final'  => $done ? $run->viewData() : null,
-            'progress' => $run->status === 'completed' ? null : $this->runner->progress($run),
+            // Every run shows its workflow: live while it runs, and afterwards
+            // as the record of how the result was reached (or where it stopped).
+            'progress' => $this->runner->progress($run),
         ]);
     }
 
@@ -476,6 +484,32 @@ class V2DiagnoseController extends Controller
             'id', 'status', 'stage_message', 'events', 'summary', 'diagnosis', 'confidence',
             'regions_count', 'error',
         ]) + ['progress' => $this->runner->progress($run)]);
+    }
+
+    /**
+     * Live state of the running rows of the results list, in one request:
+     * where each run is in its workflow, or — once it has finished — its row
+     * rendered again, so the list updates in place without a reload.
+     */
+    public function live(Request $request): JsonResponse
+    {
+        $ids = collect(explode(',', (string) $request->query('ids')))
+            ->map(fn ($id) => (int) $id)->filter()->unique()->take(50)->all();
+        $runs = V2Diagnosis::with(self::TRUTH_WITH)->whereIn('id', $ids)->get();
+
+        $out = [];
+        foreach ($runs as $r) {
+            $out[$r->id] = $r->isRunning()
+                ? ['status' => $r->status, 'running' => true, 'progress' => $this->runner->brief($r)]
+                : ['status' => $r->status, 'running' => false,
+                   'html' => view('admin.v2-diagnose.partials.run-row', ['r' => $r, 'live' => null])->render()];
+        }
+        // A run deleted meanwhile is reported as gone, so its row can go too.
+        foreach (array_diff($ids, $runs->modelKeys()) as $gone) {
+            $out[$gone] = ['status' => 'deleted', 'running' => false];
+        }
+        return response()->json(['runs' => $out, 'now' => time()])
+            ->header('Cache-Control', 'no-store');
     }
 
     /**
