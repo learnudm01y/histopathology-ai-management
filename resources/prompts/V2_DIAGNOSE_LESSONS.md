@@ -210,6 +210,34 @@ The previous attempt's folder stays as `<id>.attemptN`, and its answer is
 written into the stage log. #53 and #54 were opened as new runs before this
 existed.
 
+## Speed (2026-11-25)
+
+Measured on 4 slides (42–444 tiles), each analysed by several variants of
+the instructions, in a harness that used the runner's own CLI flags.
+
+- The model's time is spent generating text (about 100 tokens a second), not
+  waiting between steps. Writing result.json took 30–50% of an analysis,
+  because `patches` listed every tile as JSON and every region carried a
+  polygon. The compact `tiles` form, with the polygon optional, plus batched
+  reads cut the analysis from 132–439 s to 82–163 s. Every diagnosis stayed
+  correct.
+- **Never tell the model the run is timed.** With that sentence it opened
+  fewer tiles, and on the 444-tile prostate it marked tumour tiles as normal
+  without opening them (Gleason 3+3 against 3+4). The Pace section says that
+  batching changes the speed of the reading, never its amount.
+- **`--effort low` is rejected.** It skipped views and survey crops and
+  called a GBM an LGG.
+- **Parallel sheet-reader subagents are rejected.** They were no faster on
+  the large slide, because merging their reports cost more than reading.
+- **The baseline is not reproducible on large prostate slides.** Two runs of
+  the same 444-tile slide with the same instructions gave 30 and 10 tumour
+  tiles (IoU 0.21), and Grade Group 2 and 1. Compare any change against this
+  spread, not against a single run.
+- **Tiling.** Tiles are now stored at the view scale, read from the pyramid
+  level nearest it, and zoom/survey read full resolution from the slide.
+  This is 7–11x faster on 40x slides. View images differ from the old ones
+  by about 2–6 grey levels, and the density grids correlate at 0.99.
+
 ## Isolation: how the model is kept from cheating
 
 The run folder sits inside the application, so an unscoped tool reaches .env,

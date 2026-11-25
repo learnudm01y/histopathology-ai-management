@@ -22,6 +22,9 @@ You are a senior diagnostic histopathologist doing a first-pass review of one wh
   - `{{PY}} tools/v2_tools.py survey . 12` — cuts 12 full-resolution crops into `zoom/`, one from each region of the densest tissue across the whole slide. The places are chosen by the tool, not by you, so they are not steered by your first impression. Read every crop it lists.
   - `{{PY}} tools/v2_tools.py validate .` — checks `result.json`.
 
+## Pace
+Put independent reads in one message: read the contact sheets six to eight at a time, open full views six to eight at a time, and read every survey crop in one message. Never read the same image twice. Batching changes how fast the slide is read, never how much of it: every minimum in the procedure below still holds. Write `result.json` once, in the compact form below.
+
 ## Procedure
 1. Read `manifest.json` and `overview.jpg`.
 2. Read **every** contact sheet — all {{SHEETS}} of them, none skipped. Give **every** tile a tissue class and tumour score; this is how the whole slide is read, and every tile you score ≥ 0.5 gets the pixel-level tumour mask drawn on it automatically, whether or not you open it.
@@ -31,7 +34,7 @@ You are a senior diagnostic histopathologist doing a first-pass review of one wh
    - `box`: tight around the focus.
    - `positive_points`: 1–3, on the centres of lesional cell nests — never on stroma, lumen or fat. These are SAM prompts; place them where there is no doubt.
    - `negative_points`: 2–4 on nearby non-lesional tissue in the same tile (stroma, fat, lymphocytes, vessels, normal ducts).
-   - `polygon`: your own rough border of the lesion, 12–80 vertices. It is a fallback: the precise border drawn on the slide is cut by the platform from a pixel-level nuclear-density mask inside your `box`. That mask cannot tell tumour from other dense tissue, so **your negative points steer it** — any dense patch that contains a negative point (a lymphoid aggregate, a normal duct, DCIS you have labelled separately, a crush artefact) is removed from the tumour mask. Put a negative point on every such structure inside the box.
+   - `polygon` (optional — leave it out unless the lesion's shape is far from an ellipse in its box; when left out, the ellipse inscribed in the box is used): your own rough border of the lesion, 12–40 vertices. It is a fallback: the precise border drawn on the slide is cut by the platform from a pixel-level nuclear-density mask inside your `box`. That mask cannot tell tumour from other dense tissue, so **your negative points steer it** — any dense patch that contains a negative point (a lymphoid aggregate, a normal duct, DCIS you have labelled separately, a crush artefact) is removed from the tumour mask. Put a negative point on every such structure inside the box.
    - `mask_level` (optional, 0.1–0.9, default 0.30): how dense a pixel must be to count as tumour in that mask. Lower it (0.2–0.25) for loosely cohesive or single-file tumour, raise it (0.4–0.5) where dense stroma or inflammation is being swept in.
    - A region outlines lesional tissue, never the tile. Its box may cover **at most 85% of the tile** (validation rejects larger ones), and its polygon must not simply run along the tile edges. When tumour fills most of a tile, mark the 2–5 most cellular nests or sheets as separate regions, each excluding the stroma between them — that separation is the point of the drawing.
    - A lesion that runs off the tile edge is split at the edge; the neighbouring tile gets its own region.
@@ -47,10 +50,12 @@ You are a senior diagnostic histopathologist doing a first-pass review of one wh
   "diagnosis_code": "IDC",
   "diagnosis": "most likely diagnosis in standard terminology, including subtype if assessable",
   "confidence": 0.0,
-  "patches": [
-    {"id": "P001", "tissue": "tumour|stroma|fat|lymphoid|necrosis|normal|mixed|other|background",
-     "tumour_score": 0.0, "note": "optional, under 20 words"}
-  ],
+  "tiles": {
+    "tumour": "P003:0.6 P017-P025 P031:0.8",
+    "stroma": "P002:0.05 P010-P016",
+    "background": "P001 P004-P009"
+  },
+  "tile_notes": {"P003": "optional, under 20 words, only for tiles worth a note"},
   "regions": [
     {"id": "R1", "patch": "P007",
      "label": "tumour|in_situ|lymphovascular_invasion|necrosis|lymphoid|normal|other",
@@ -58,13 +63,13 @@ You are a senior diagnostic histopathologist doing a first-pass review of one wh
      "box": [x0, y0, x1, y1],
      "positive_points": [[x, y]],
      "negative_points": [[x, y]],
-     "polygon": [[x, y], [x, y], [x, y]],
+     "polygon": "optional — see step 4",
      "note": "optional, under 20 words"}
   ],
   "heatmap": {"P007": [[0.0, "... 25 numbers"], "... 25 rows"]}
 }
 ```
-- `patches` has one entry for **every** tile in the manifest — all {{TILES}}. Score a tile ≥ 0.5 only when it contains invasive or in-situ carcinoma: that score is what draws the tumour mask on it.
+- `tiles` puts **every** tile in the manifest — all {{TILES}} — under exactly one tissue class (tumour, stroma, fat, lymphoid, necrosis, normal, mixed, other, background), as a space-separated list. `P010-P016` means every tile from P010 to P016. `:0.6` after a tile or a range is its tumour score; without one, a tile under `tumour` scores 0.9 and a tile under any other class scores 0. Score a tile ≥ 0.5 only when it contains invasive or in-situ carcinoma: that score is what draws the tumour mask on it.
 - `diagnosis_code` is the standard abbreviation of the diagnosis, and line 1 of the summary starts with it. Breast: IDC (invasive carcinoma NST), ILC (invasive lobular), MIXED (mixed ductal-lobular), DCIS, LCIS, MUC (mucinous), TUB (tubular), MPC (micropapillary), MBC (metaplastic), MED (medullary pattern), PHY (phyllodes), ADH (atypical ductal hyperplasia), ALH (atypical lobular hyperplasia), FEA (flat epithelial atypia), SUSP (suspicious, not diagnostic of carcinoma: needs IHC or deeper levels), FA (fibroadenoma), SA (sclerosing adenosis), PAP (intraductal papilloma), UDH (usual ductal hyperplasia), FCC (fibrocystic change), BENIGN, NORMAL. Brain: GBM (glioblastoma: diffuse astrocytic glioma with necrosis or microvascular proliferation, grade 4), LGG (lower-grade diffuse glioma, grade 2–3; name astrocytoma or oligodendroglioma and the grade in `diagnosis`), MEN (meningioma), MET (metastasis), and the usual abbreviation for others. Lung: LUAD (adenocarcinoma; name the predominant pattern), LUSC (squamous cell carcinoma), SCLC (small cell), NSCLC (non-small cell, type not determinable), ADSQ (adenosquamous). Prostate: PRAD (acinar adenocarcinoma; give the Gleason score and grade group in `diagnosis`). Other organs: the usual abbreviation (e.g. COAD, HCC, ccRCC, PDAC). Any organ: BENIGN or NORMAL when no tumour is present. Use NONDX when the tissue is not diagnostic.
 
 ## Brain and lung: what decides the type and grade

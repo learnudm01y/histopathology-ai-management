@@ -48,7 +48,27 @@ return [
         // No cap and no tissue threshold: every tile with any tissue is read
         // (scripts/v2_tools.py tile), and the coverage is measured per run.
         'workers'          => (int) env('V2_PATCH_WORKERS', 2),
+        // Tiles are stored at the view scale (this edge, ~1 um/px), read from
+        // the pyramid level nearest it; zoom and survey read full resolution
+        // from the slide only where they cut a crop. On a 40x slide that is
+        // 11x faster than storing full-resolution tiles (2026-11-25).
+        'stored_px'        => (int) env('V2_STORED_PX', 1000),
     ],
+
+    // Slides prepared once — tiles, view images, sheets, density and the slide
+    // copy the crops are read from — and reused by every run on them, so a run
+    // on a prepared slide starts at the analysis. Built by the first run, or in
+    // advance: on upload for analysis, or `php artisan v2:prepare`. The slides
+    // used longest ago are removed above max_gb (0 keeps nothing).
+    'prepared' => [
+        'dir'       => env('V2_PREPARED_DIR', storage_path('app/v2_prepared')),
+        'max_gb'    => (float) env('V2_PREPARED_MAX_GB', 15),
+        'on_upload' => (bool) env('V2_PREPARE_ON_UPLOAD', true),
+    ],
+
+    // Where a run's slide sits during its analysis, outside every run folder
+    // (the model's file tools reach only its own folder).
+    'slides_dir' => env('V2_SLIDES_DIR', storage_path('app/v2_slides')),
 
     // Edge of the image Claude actually sees. The Read tool shrinks anything
     // above ~1.15 megapixels, and a coordinate given on a shrunk image is off

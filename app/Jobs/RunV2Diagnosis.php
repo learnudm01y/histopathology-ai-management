@@ -70,23 +70,39 @@ class RunV2Diagnosis implements ShouldQueue
             $ready = $this->analyseOnly && is_file($runner->runDir($run) . '/manifest.json')
                 && is_dir($runner->runDir($run) . '/patches');
             if (! $ready) {
-                $wsi = $runner->resolveWsi($run);
-                if (! $wsi) {
-                    $this->waitForSlide($run);
+                // A slide is prepared once (V2DiagnoseRunner::buildPrepared) and
+                // every run on it reuses that. While another job prepares this
+                // slide, the run waits for it instead of preparing it twice.
+                $key = $runner->preparedKey($run);
+                $lock = $runner->preparedLock($key);
+                if (! $lock->get()) {
+                    $this->waitForPreparation($run);
                     return;
                 }
-
-                $t = config('v2_diagnose.tiling');
-                $run->stage('tiling', "Cutting the whole slide into {$t['patch_size']} px tiles at "
-                    . "{$t['target_mpp']} µm/px — every tile that holds tissue.");
-                $runner->tile($run, $wsi);
-
-                $cov = $runner->coverage($run);
-                $run->refresh()->stage('preparing', "{$run->patches} tiles cut"
-                    . ($cov !== null ? ', covering ' . round($cov * 100, 1) . '% of the tissue' : '')
-                    . ". Building view images, "
-                    . 'contact sheets and the density measurement.');
-                $runner->prepare($run);
+                try {
+                    $wsi = $runner->resolveWsi($run);
+                    $cache = $runner->prepared($key);
+                    if ($cache) {
+                        $run->stage('preparing', 'The slide was prepared in advance: its tiles, view images and '
+                            . 'density measurement are reused.');
+                    } else {
+                        if (! $wsi) {
+                            $this->waitForSlide($run);
+                            return;
+                        }
+                        $t = config('v2_diagnose.tiling');
+                        $run->stage('tiling', "Cutting the whole slide into {$t['patch_size']} px tiles at "
+                            . "{$t['target_mpp']} µm/px — every tile that holds tissue.");
+                        $cache = $runner->buildPrepared($key, $wsi, $run);
+                    }
+                    $runner->usePrepared($run, $cache, $wsi);
+                } finally {
+                    $lock->release();
+                }
+                if (! $run->sample_id) {
+                    \Illuminate\Support\Facades\File::deleteDirectory($cache);   // nothing else can reuse it
+                }
+                $runner->evictPrepared();
             }
 
             // The model's usage limit is shared: while it holds, wait for it
@@ -95,6 +111,8 @@ class RunV2Diagnosis implements ShouldQueue
                 $this->waitForQuota($run, $runner, Carbon::createFromTimestampUTC($until));
                 return;
             }
+            // A run that waited for the usage limit gave its slide copy back.
+            $runner->ensureSlide($run);
 
             $prompt = $runner->buildPrompt($run);
             file_put_contents($runner->runDir($run) . '/prompt.md', $prompt);
@@ -153,6 +171,7 @@ class RunV2Diagnosis implements ShouldQueue
             ]);
             $run->stage('completed', 'Done — ' . ($final['regions'] ?? 0) . ' regions drawn on the slide.');
         } catch (\Throwable $e) {
+            $runner->dropSlide($run);
             Log::error("[V2Diagnose] run #{$run->id} failed: {$e->getMessage()}");
             $run->update(['error' => mb_substr($e->getMessage(), 0, 4000), 'finished_at' => now()]);
             $run->stage('failed', 'Failed: ' . mb_substr($e->getMessage(), 0, 300));
@@ -203,11 +222,27 @@ class RunV2Diagnosis implements ShouldQueue
     private function waitForQuota(V2Diagnosis $run, V2DiagnoseRunner $runner, Carbon $until): void
     {
         Cache::put(self::QUOTA_KEY, $until->timestamp, $until);
+        // A parked run keeps its tiles, not its slide copy: a long batch parked
+        // at once would otherwise hold every slide on disk (ensureSlide puts it back).
+        $runner->dropSlide($run);
         $run->update(['summary' => null, 'diagnosis_code' => null, 'diagnosis' => null, 'confidence' => null]);
         $run->stage('waiting_quota', "Waiting for the analysis model's usage limit to reset at "
             . $until->format('Y-m-d H:i') . ' UTC; the slide is prepared and will be analysed then.');
         $runner->mark($run, 'queued', 'Waiting for the usage limit to reset at ' . $until->format('H:i') . ' UTC');
         self::dispatch($this->runId, 0, true)->delay($until->copy()->addMinutes(3 + $this->runId % 10));
+    }
+
+    /** Another job is preparing this slide: look again in thirty seconds, then link what it built. */
+    private function waitForPreparation(V2Diagnosis $run): void
+    {
+        if ($this->wait >= 4 * self::MAX_WAITS) {
+            $run->update(['error' => 'The slide was being prepared by another job for too long.', 'finished_at' => now()]);
+            $run->stage('failed', 'Failed: the slide was being prepared by another job for too long.');
+            return;
+        }
+        $run->stage('waiting_slide', 'Waiting for the slide to finish being prepared by another job.');
+        app(V2DiagnoseRunner::class)->mark($run, 'fetching', 'Waiting for the slide to finish being prepared');
+        self::dispatch($this->runId, $this->wait + 1)->delay(now()->addSeconds(30));
     }
 
     /** The slide is still on its way in: look again in two minutes. */

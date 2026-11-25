@@ -71,12 +71,16 @@ class V2DiagnoseTest extends TestCase
 
         $this->user = User::forceCreate(['name' => 'Tester', 'email' => 't@example.com', 'password' => 'x']);
         $this->runs = storage_path('framework/testing/v2_runs');
-        config(['v2_diagnose.runs_dir' => $this->runs]);
+        config(['v2_diagnose.runs_dir' => $this->runs,
+                'v2_diagnose.prepared.dir' => storage_path('framework/testing/v2_prepared'),
+                'v2_diagnose.slides_dir' => storage_path('framework/testing/v2_slides')]);
     }
 
     protected function tearDown(): void
     {
         File::deleteDirectory($this->runs);
+        File::deleteDirectory(storage_path('framework/testing/v2_prepared'));
+        File::deleteDirectory(storage_path('framework/testing/v2_slides'));
         parent::tearDown();
     }
 
@@ -701,5 +705,133 @@ class V2DiagnoseTest extends TestCase
 
         $none = $this->actingAs($this->user)->get('/admin/v2-diagnose?r_out=partial')->assertOk();
         $this->assertSame(0, $none->viewData('runs')->total());
+    }
+
+    /** A prepared slide in the cache, as buildPrepared leaves it (format 2, three tiles). */
+    private function preparedSlide(string $key, int $usedAt = 0, int $bytes = 1000): string
+    {
+        $runner = app(\App\Services\V2DiagnoseRunner::class);
+        $dir = $runner->preparedDir($key);
+        foreach (['patches', 'view', 'sheets', 'masks'] as $sub) {
+            File::ensureDirectoryExists("{$dir}/{$sub}");
+        }
+        foreach (['P001', 'P002', 'P003'] as $id) {
+            file_put_contents("{$dir}/view/{$id}.jpg", "view {$id}");
+            file_put_contents("{$dir}/patches/patch_{$id}.jpg", "tile {$id}");
+            file_put_contents("{$dir}/masks/raw_{$id}.png", "mask {$id}");
+        }
+        file_put_contents("{$dir}/sheets/sheet_01.jpg", 'sheet');
+        file_put_contents("{$dir}/manifest.json", json_encode(['tiles' => []]));
+        file_put_contents("{$dir}/density.json", '{"tiles":{}}');
+        file_put_contents("{$dir}/slide.svs", 'the slide');
+        file_put_contents("{$dir}/tiling.json", json_encode([
+            'patches_extracted' => 3, 'patch_size' => 1904, 'target_mpp' => 0.5, 'base_mpp' => 0.25,
+            'slide_width' => 5000, 'slide_height' => 4000, 'scale_l0_px_per_out_px' => 2.0, 'coverage' => 1.0,
+            'format' => 2, 'stored_px' => 1000, 'full_level' => 0, 'slide_file' => null,
+            'thumb_file' => "{$dir}/thumb.jpg"]));
+        file_put_contents("{$dir}/meta.json", json_encode([
+            'format' => 2, 'key' => $key, 'slide' => 'slide.svs', 'patch_size' => 1904, 'target_mpp' => 0.5,
+            'stored_px' => 1000, 'tiles' => 3, 'bytes' => $bytes, 'used_at' => $usedAt ?: time()]));
+        return $dir;
+    }
+
+    public function test_a_run_on_a_prepared_slide_starts_at_the_analysis(): void
+    {
+        Queue::fake();
+        $runner = app(\App\Services\V2DiagnoseRunner::class);
+        $sample = $this->sample();
+        $cache = $this->preparedSlide((string) $sample->id);
+        $run = V2Diagnosis::create(['sample_id' => $sample->id, 'organ' => 'Breast', 'status' => 'queued']);
+
+        // The usage limit holds, so the run stops right after its slide is in place.
+        \Illuminate\Support\Facades\Cache::put('v2:quota_until', time() + 3600, 3600);
+        (new RunV2Diagnosis($run->id))->handle($runner);
+
+        $run->refresh();
+        $dir = $runner->runDir($run);
+        $this->assertSame('waiting_quota', $run->status);
+        $this->assertSame(3, (int) $run->patches);
+        $this->assertSame(1904, (int) $run->patch_size);
+        $this->assertStringContainsString('prepared in advance', collect($run->events)->pluck('message')->implode(' '));
+        foreach (['view/P002.jpg', 'patches/patch_P003.jpg', 'sheets/sheet_01.jpg', 'masks/raw_P001.png',
+                  'manifest.json', 'density.json', 'tools/v2_tools.py', 'tools.sha256'] as $f) {
+            $this->assertFileExists("{$dir}/{$f}");
+        }
+        // The slide is never inside the run folder, where the model's tools reach.
+        $this->assertFileDoesNotExist("{$dir}/slide.svs");
+        $tiling = json_decode(file_get_contents("{$dir}/tiling.json"), true);
+        $this->assertSame($runner->slidePath($run, 'svs'), $tiling['slide_file']);
+        // A parked run gives its slide copy back; the prepared slide stays for the next run.
+        $this->assertFileDoesNotExist($tiling['slide_file']);
+        $this->assertFileExists("{$cache}/slide.svs");
+        Queue::assertPushed(RunV2Diagnosis::class, fn ($j) => $j->runId === $run->id && $j->analyseOnly);
+
+        // When it resumes, the slide is linked back from the cache before the analysis.
+        $runner->ensureSlide($run);
+        $this->assertFileExists($runner->slidePath($run, 'svs'));
+        $this->assertSame('the slide', file_get_contents($runner->slidePath($run, 'svs')));
+    }
+
+    public function test_a_run_waits_while_its_slide_is_being_prepared_elsewhere(): void
+    {
+        Queue::fake();
+        $runner = app(\App\Services\V2DiagnoseRunner::class);
+        $sample = $this->sample();
+        $run = V2Diagnosis::create(['sample_id' => $sample->id, 'organ' => 'Breast', 'status' => 'queued']);
+
+        $lock = $runner->preparedLock((string) $sample->id);
+        $this->assertTrue($lock->get());
+        try {
+            (new RunV2Diagnosis($run->id))->handle($runner);
+        } finally {
+            $lock->release();
+        }
+        $this->assertSame('waiting_slide', $run->fresh()->status);
+        $this->assertStringContainsString('being prepared', collect($run->fresh()->events)->pluck('message')->implode(' '));
+        Queue::assertPushed(RunV2Diagnosis::class, fn ($j) => $j->runId === $run->id && $j->wait === 1);
+    }
+
+    public function test_a_prepared_slide_of_an_older_format_is_not_reused(): void
+    {
+        $runner = app(\App\Services\V2DiagnoseRunner::class);
+        $dir = $this->preparedSlide('77');
+        $this->assertSame($dir, $runner->prepared('77'));
+        config(['v2_diagnose.tiling.stored_px' => 1200]);
+        $this->assertNull($runner->prepared('77'));
+        config(['v2_diagnose.tiling.stored_px' => 1000]);
+        unlink("{$dir}/slide.svs");
+        $this->assertNull($runner->prepared('77'), 'a prepared slide without its slide copy cannot cut crops');
+    }
+
+    public function test_the_prepared_cache_drops_the_slides_used_longest_ago(): void
+    {
+        $runner = app(\App\Services\V2DiagnoseRunner::class);
+        $gb = 1024 ** 3;
+        $this->preparedSlide('1', time() - 300, (int) (0.5 * $gb));
+        $this->preparedSlide('2', time() - 200, (int) (0.5 * $gb));
+        $this->preparedSlide('3', time() - 100, (int) (0.5 * $gb));
+        config(['v2_diagnose.prepared.max_gb' => 1.0]);
+
+        // Slide 1 is being linked into a run right now: it is skipped, the next oldest goes.
+        $lock = $runner->preparedLock('1');
+        $lock->get();
+        try {
+            $runner->evictPrepared();
+        } finally {
+            $lock->release();
+        }
+        $this->assertNotNull($runner->prepared('1'));
+        $this->assertNull($runner->prepared('2'));
+        $this->assertNotNull($runner->prepared('3'));
+    }
+
+    public function test_the_prompt_asks_for_the_compact_result_and_no_haste(): void
+    {
+        $tpl = file_get_contents(resource_path('prompts/v2_diagnose.md'));
+        $this->assertStringContainsString('"tiles": {', $tpl);
+        $this->assertStringContainsString('never how much of it', $tpl);
+        // Saying the run is timed made the model open fewer tiles (2026-11-25): it must not come back.
+        $this->assertStringNotContainsStringIgnoringCase('timed', $tpl);
+        $this->assertStringNotContainsString('"patches": [', $tpl);
     }
 }

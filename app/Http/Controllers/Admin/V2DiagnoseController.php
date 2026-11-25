@@ -586,6 +586,7 @@ class V2DiagnoseController extends Controller
         }
 
         $removed = $this->purgeClaudeRecords($run);
+        $this->runner->dropSlide($run);
 
         $root = realpath((string) config('v2_diagnose.runs_dir'));
         $dir = $run->run_dir ? realpath($run->run_dir) : false;

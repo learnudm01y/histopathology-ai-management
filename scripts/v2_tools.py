@@ -5,7 +5,10 @@ V2 Diagnose — the deterministic half of the pipeline.
 The model reads the tiles and answers in coordinates; everything around that is
 here, so that nothing numeric depends on a language model doing arithmetic:
 
-    tile     RUN SLIDE        the whole slide, every tile with tissue; measures coverage
+    tile     RUN SLIDE        the whole slide, every tile with tissue; measures coverage.
+                              Tiles are stored at the view scale (~1 um/px), read from the
+                              pyramid level nearest it; full resolution is read from the
+                              slide only where a crop asks for it (--slide-ref)
     prepare  RUN              view images, contact sheets, nuclear-density grids, manifest
     density  RUN              rebuild density.json and masks/ for an existing run
     show     RUN P007         print one tile's density grid (0-9) — for the model
@@ -22,7 +25,8 @@ here, so that nothing numeric depends on a language model doing arithmetic:
 
 Coordinate spaces
     view px   : the 1000x1000 image the model is shown (RUN/view/P007.jpg), origin top-left
-    tile px   : the full-resolution tile (e.g. 1904x1904)
+    tile px   : the full-resolution tile (e.g. 1904x1904 at 0.5 um/px); since format 2 it is
+                not stored, only read from the slide for zoom/survey crops
     level-0   : SVS level-0 pixels. x_l0 = tile.x + view_x * tile.size_l0 / view_px
 
 Dependencies: numpy, opencv-python-headless, Pillow (the same as patch_extract.py).
@@ -90,7 +94,9 @@ def progress(run: str, phase: str, done: int, total: int, detail: str, force: bo
         return
     _last_progress[0] = now
     try:
-        save(os.path.join(run, "progress_py.json"),
+        # A slide prepared for a run is built outside the run folder (the
+        # prepared-slide cache), so the run page's progress file is named here.
+        save(os.environ.get("V2_PROGRESS") or os.path.join(run, "progress_py.json"),
              {"phase": phase, "done": done, "total": total, "detail": detail, "at": int(now)})
     except OSError:
         pass                                  # progress is only ever informative
@@ -247,15 +253,15 @@ def _open_slide(path: str) -> None:
 
 
 def _read_tile(job: tuple) -> str:
-    """Read one tile at the analysis scale and write it as JPEG (worker)."""
-    x0, y0, size_l0, level, patch_px, out_path = job
+    """Read one tile and write it as JPEG at patch_px (worker)."""
+    x0, y0, size_l0, level, patch_px, out_path, quality = job
     ds = _slide.level_downsamples[level]
     n = int(math.ceil(size_l0 / ds))
     region = _slide.read_region((x0, y0), level, (n, n))      # beyond the slide: transparent
     tile = Image.new("RGB", region.size, (255, 255, 255))
     tile.paste(region, mask=region.split()[3])
     tile = tile.resize((patch_px, patch_px), Image.LANCZOS)
-    tile.save(out_path, "JPEG", quality=90)
+    tile.save(out_path, "JPEG", quality=quality)
     return out_path
 
 
@@ -404,10 +410,24 @@ def cmd_tile(a) -> None:
 
     scale = a.mpp / mpp0                              # level-0 px per output px
     size_l0 = int(round(a.patch * scale))
-    level = 0
+    full_level = 0
     for i, d in enumerate(slide.level_downsamples):   # deepest level that needs no upsampling
         if d <= scale + 1e-6:
-            level = i
+            full_level = i
+    # Format 2 (--stored-px): the stored tile is the view-scale image, ~1 um/px,
+    # read from the deepest level that gives it with at most 10% upsampling. On
+    # a 40x slide that is the 1 um/px pyramid level rather than level 0: 16x
+    # fewer pixels decoded per tile, 0.26 s instead of 2.9 s (measured
+    # 2026-11-25 on a 444-tile slide). Nothing reads a whole tile at full
+    # resolution any more: zoom and survey read it from the slide itself
+    # (--slide-ref), only where a crop is asked for.
+    stored = max(VIEW_PX, int(a.stored_px)) if a.stored_px else a.patch
+    level = full_level
+    if a.stored_px:
+        level = 0
+        for i, d in enumerate(slide.level_downsamples):
+            if d <= size_l0 / stored * 1.10 + 1e-6:
+                level = i
 
     mask, ds, thumb = slide_tissue_mask(slide, mpp0)
     cols, rows = math.ceil(W0 / size_l0), math.ceil(H0 / size_l0)
@@ -423,7 +443,7 @@ def cmd_tile(a) -> None:
                 continue
             covered[my0:my1, mx0:mx1] = cell
             name = f"patch_{len(jobs):05d}_x{x0}_y{y0}.jpg"
-            jobs.append((x0, y0, size_l0, level, a.patch, os.path.join(pdir, name)))
+            jobs.append((x0, y0, size_l0, level, stored, os.path.join(pdir, name), 95 if a.stored_px else 90))
             coords.append((name, x0, y0))
     slide.close()
     if not jobs:
@@ -460,6 +480,8 @@ def cmd_tile(a) -> None:
 
     out({"patches_extracted": len(jobs), "candidates_total": cols * rows, "patches_skipped": 0,
          "patch_size": a.patch, "level": level, "base_mpp": mpp0, "target_mpp": a.mpp,
+         "format": 2 if a.stored_px else 1, "stored_px": stored if a.stored_px else None,
+         "full_level": full_level, "slide_file": a.slide_ref or None,
          "scale_l0_px_per_out_px": round(scale, 6), "slide_width": W0, "slide_height": H0,
          "max_patches": None, "min_tissue": MIN_TISSUE, "grid": [cols, rows],
          "mpp_source": mpp_source, "mpp_measured": mpp_measured,
@@ -625,25 +647,60 @@ def cmd_contours(a) -> None:
          "polygons": contours_of(up >= a.level, 400, 4.0)})
 
 
-def zoom_crop(run: str, tiles: dict, pid: str, x: float, y: float) -> dict:
-    """A VIEW_PX crop of the full-resolution tile centred on (x, y) in view px.
+_slides_open: dict = {}
+
+
+def _slide_for_crops(run: str, tiling: dict):
+    """The slide a format-2 run reads full resolution from (kept open per process)."""
+    path = tiling.get("slide_file")
+    if not path or not os.path.isfile(path):
+        out({"error": "the slide is not available for full-resolution crops on this run"}, 1)
+    if path not in _slides_open:
+        import openslide
+        _slides_open[path] = openslide.OpenSlide(path)
+    return _slides_open[path]
+
+
+def zoom_crop(run: str, tiles: dict, pid: str, x: float, y: float, tiling: dict | None = None) -> dict:
+    """A VIEW_PX crop of the tile at its full resolution, centred on (x, y) in view px.
 
     view/ images are the tile shrunk ~1.9x (about 1 um/px, a 10x objective);
     this is the tile's own resolution (0.5 um/px, about 20x), which is what
     cytology needs: myoepithelial layers, cytoplasmic vacuoles, nuclear detail.
+    Format 2 reads it from the slide (only the crop, at the level the tile
+    scale needs); format 1 cut it from the stored full-resolution tile.
     """
     t = tiles.get(pid)
     if not t:
         out({"error": f"unknown tile {pid}"}, 1)
-    src = os.path.join(run, "patches", t["file"])
-    if not os.path.isfile(src):
-        out({"error": "the full-resolution tile is no longer kept for this run"}, 1)
-    img = Image.open(src).convert("RGB")
-    k = img.width / VIEW_PX                                # full-res px per view px
-    half = min(VIEW_PX, img.width) // 2
-    cx = int(min(max(x * k, half), img.width - half))
-    cy = int(min(max(y * k, half), img.height - half))
-    crop = np.array(img.crop((cx - half, cy - half, cx + half, cy + half)))
+    tiling = tiling if tiling is not None else (
+        load(os.path.join(run, "tiling.json")) if os.path.isfile(os.path.join(run, "tiling.json")) else {})
+    if tiling.get("stored_px"):
+        full = int(tiling["patch_size"])                    # the tile's edge at full resolution
+        k = full / VIEW_PX
+        half = min(VIEW_PX, full) // 2
+        cx = int(min(max(x * k, half), full - half))
+        cy = int(min(max(y * k, half), full - half))
+        slide = _slide_for_crops(run, tiling)
+        lvl = int(tiling.get("full_level") or 0)
+        ds = slide.level_downsamples[lvl]
+        per = t["size_l0"] / full                           # level-0 px per full-resolution px
+        n = int(math.ceil(2 * half * per / ds))
+        region = slide.read_region((int(round(t["x"] + (cx - half) * per)), int(round(t["y"] + (cy - half) * per))),
+                                   lvl, (n, n))
+        img = Image.new("RGB", region.size, (255, 255, 255))
+        img.paste(region, mask=region.split()[3])
+        crop = np.array(img.resize((2 * half, 2 * half), Image.LANCZOS))
+    else:
+        src = os.path.join(run, "patches", t["file"])
+        if not os.path.isfile(src):
+            out({"error": "the full-resolution tile is no longer kept for this run"}, 1)
+        img = Image.open(src).convert("RGB")
+        k = img.width / VIEW_PX                            # full-res px per view px
+        half = min(VIEW_PX, img.width) // 2
+        cx = int(min(max(x * k, half), img.width - half))
+        cy = int(min(max(y * k, half), img.height - half))
+        crop = np.array(img.crop((cx - half, cy - half, cx + half, cy + half)))
     os.makedirs(os.path.join(run, "zoom"), exist_ok=True)
     name = f"zoom/{pid}_{int(x)}_{int(y)}.jpg"
     Image.fromarray(crop).save(os.path.join(run, name), quality=90)
@@ -708,7 +765,16 @@ def cmd_survey(a) -> None:
     points = survey_points(tiles, density, n)
     if not points:
         out({"ok": True, "crops": [], "note": "no dense tissue on this slide to survey"})
-    crops = [zoom_crop(a.run, tiles, pid, x, y) for pid, x, y in points]
+    tiling = load(os.path.join(a.run, "tiling.json")) if os.path.isfile(os.path.join(a.run, "tiling.json")) else {}
+    if tiling.get("stored_px"):
+        # Read from the slide: two processes, as the tiling uses (a 40x crop
+        # decodes ~4 MP of level 0, about half a second).
+        from multiprocessing import Pool
+        _slide_for_crops(a.run, tiling)       # a missing slide is reported here, not inside a worker
+        with Pool(2) as pool:
+            crops = pool.starmap(zoom_crop, [(a.run, tiles, pid, x, y, tiling) for pid, x, y in points])
+    else:
+        crops = [zoom_crop(a.run, tiles, pid, x, y) for pid, x, y in points]
     out({"ok": True, "crops": crops,
          "note": f"{len(crops)} full-resolution crops spread over the densest parts of the whole slide, "
                  "chosen by the tool; Read every one of them"})
@@ -726,6 +792,71 @@ def _pt(p) -> bool:
     return isinstance(p, (list, tuple)) and len(p) == 2 and all(_num(c) and -1 <= c <= VIEW_PX + 1 for c in p)
 
 
+_TILE_TOKEN = re.compile(r"(P\d+)(?:-(P\d+))?(?::(\d*\.?\d+))?")
+
+
+def expand_compact(r: dict, ids: set, errors: list, warnings: list) -> dict:
+    """The compact result form, written in a fraction of the tokens of the long one.
+
+    "tiles" {class: "P001 P004-P009 P017:0.6"} becomes "patches" (a range is
+    every id between its ends; ":0.6" is the tumour score, otherwise 0.9 under
+    tumour and 0 under any other class), "tile_notes" {id: note} their notes,
+    and a region without a polygon gets the ellipse inscribed in its box. Writing
+    the long form took 30-50% of an analysis (measured 2026-11-25); a result
+    in the long form is still read as it is.
+    """
+    spec = r.get("tiles")
+    if isinstance(spec, dict) and "patches" not in r:
+        notes = r.get("tile_notes") if isinstance(r.get("tile_notes"), dict) else {}
+        got = {}
+        for kind, lst in spec.items():
+            if kind not in TISSUE_KINDS:
+                errors.append(f"tiles.{kind}: not a tissue class; use one of {sorted(TISSUE_KINDS)}")
+                continue
+            if not isinstance(lst, str):
+                errors.append(f'tiles.{kind}: must be one string of tile ids, e.g. "P001 P004-P009 P017:0.6"')
+                continue
+            for tok in lst.replace(",", " ").split():
+                m = _TILE_TOKEN.fullmatch(tok)
+                if not m:
+                    errors.append(f"tiles.{kind}: cannot read '{tok}'")
+                    continue
+                a, b = m.group(1), m.group(2) or m.group(1)
+                if a not in ids or b not in ids:
+                    errors.append(f"tiles.{kind}: '{tok}' names a tile that is not in manifest.json")
+                    continue
+                score = float(m.group(3)) if m.group(3) else (0.9 if kind == "tumour" else 0.0)
+                if not 0 <= score <= 1:
+                    errors.append(f"tiles.{kind}: '{tok}' score must be 0..1")
+                    continue
+                pad = len(a) - 1
+                for k in range(int(a[1:]), int(b[1:]) + 1):
+                    pid = f"P{k:0{pad}d}"
+                    if pid not in ids:
+                        continue
+                    if pid in got:
+                        warnings.append(f"tiles: {pid} is listed twice; the higher tumour score is kept")
+                        if score <= got[pid][1]:
+                            continue
+                    got[pid] = (kind, score)
+        missing = sorted(ids - set(got))
+        if missing:
+            errors.append(f"tiles: every tile needs a class; missing {', '.join(missing[:20])}"
+                          + (" ..." if len(missing) > 20 else ""))
+        r["patches"] = [{"id": pid, "tissue": got.get(pid, ("other", 0.0))[0],
+                         "tumour_score": got.get(pid, ("other", 0.0))[1],
+                         **({"note": str(notes[pid])} if pid in notes else {})} for pid in sorted(ids)]
+    for g in r.get("regions") or []:
+        b = g.get("box") if isinstance(g, dict) else None
+        if (isinstance(g, dict) and not isinstance(g.get("polygon"), list)
+                and isinstance(b, list) and len(b) == 4 and all(_num(c) for c in b)):
+            cx, cy, rx, ry = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2, (b[2] - b[0]) / 2, (b[3] - b[1]) / 2
+            g["polygon"] = [[round(cx + rx * math.cos(2 * math.pi * k / 16)),
+                             round(cy + ry * math.sin(2 * math.pi * k / 16))] for k in range(16)]
+            g["polygon_auto"] = True
+    return r
+
+
 def validate(run: str, box_rule: bool = True) -> tuple[dict | None, list, list]:
     """Return (result, errors, warnings)."""
     errors, warnings = [], []
@@ -740,6 +871,7 @@ def validate(run: str, box_rule: bool = True) -> tuple[dict | None, list, list]:
         return None, ["result.json must be a JSON object"], warnings
 
     ids = {t["id"] for t in load(os.path.join(run, "manifest.json"))["tiles"]}
+    r = expand_compact(r, ids, errors, warnings)
 
     s = r.get("summary")
     if not isinstance(s, str) or not s.strip():
@@ -1412,6 +1544,9 @@ def main() -> None:
     p = sub.add_parser("tile"); p.add_argument("run"); p.add_argument("slide")
     p.add_argument("--patch", type=int, default=1904); p.add_argument("--mpp", type=float, default=0.5)
     p.add_argument("--workers", type=int, default=2)
+    p.add_argument("--stored-px", type=int, default=0,
+                   help="store tiles at this edge (the view scale) and read full resolution on demand; 0: full-resolution tiles")
+    p.add_argument("--slide-ref", default="", help="the slide file zoom/survey read full resolution from")
     p = sub.add_parser("density"); p.add_argument("run")
     p = sub.add_parser("show"); p.add_argument("run"); p.add_argument("tile")
     p = sub.add_parser("contours"); p.add_argument("run"); p.add_argument("tile")

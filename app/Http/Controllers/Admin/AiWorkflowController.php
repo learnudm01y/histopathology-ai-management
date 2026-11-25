@@ -314,6 +314,9 @@ class AiWorkflowController extends Controller
             $sample->delete();
             return back()->withErrors(['source' => 'Could not take the slide in: ' . $e->getMessage()]);
         }
+        // A slide taken in for analysis is prepared for V2 Diagnose as soon as
+        // it has landed, so a V2 run on it starts at the analysis.
+        \App\Jobs\PrepareV2Slide::afterUpload($sample->id);
 
         $modelKey = $validated['model'] ?: config('diagnosis_models.default');
         $auto = (bool) ($validated['auto'] ?? false);

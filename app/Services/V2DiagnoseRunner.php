@@ -3,6 +3,8 @@
 namespace App\Services;
 
 use App\Models\V2Diagnosis;
+use App\Models\Sample;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\Process\Process;
@@ -10,10 +12,16 @@ use Symfony\Component\Process\Process;
 /**
  * The stages of one V2 Diagnose run, in order.
  *
- *   tile      scripts/patch_extract.py at the V2 scale      → RUN/patches, RUN/tiling.json
- *   prepare   scripts/v2_tools.py prepare                   → view images, sheets, density, manifest
+ *   prepare   scripts/v2_tools.py tile + prepare, once per slide, into the
+ *             prepared-slide cache (PREPARED/<sample>)      → tiles, view images, sheets, density
+ *   use       the cache linked into the run folder, the slide beside it    → RUN/…, SLIDES/<run>.svs
  *   analyse   claude -p (headless), the prompt on stdin     → RUN/result.json
  *   finalize  scripts/v2_tools.py finalize                  → RUN/final.json (level-0 coordinates)
+ *
+ * A slide is prepared once, by whichever comes first: a run, or
+ * PrepareV2Slide when the slide is uploaded or warmed up in advance
+ * (php artisan v2:prepare). Every later run on it — a re-run, an evaluation
+ * repeat — starts at the analysis.
  *
  * Claude only ever writes view-pixel coordinates; the conversion to slide
  * pixels is Python's, so the numbers drawn on the slide never depend on a
@@ -68,7 +76,12 @@ class V2DiagnoseRunner
         if ($run->wsi_path && is_file($run->wsi_path)) {
             return $run->wsi_path;
         }
-        $sample = $run->sample;
+        return $this->resolveSampleWsi($run->sample);
+    }
+
+    /** Where an archive slide can be read from right now (the Drive mount), or null. */
+    public function resolveSampleWsi(?Sample $sample): ?string
+    {
         if ($sample && $sample->wsi_remote_path) {
             $mount = rtrim((string) config('services.gdrive_mount', '/mnt/gdrive'), '/');
             $path = $mount . '/' . ltrim((string) $sample->wsi_remote_path, '/');
@@ -79,81 +92,308 @@ class V2DiagnoseRunner
         return null;
     }
 
-    public function tile(V2Diagnosis $run, string $wsi): void
+    /** Format of a prepared slide: 2 stores tiles at the view scale and reads full resolution from the slide. */
+    public const PREPARED_FORMAT = 2;
+
+    /** The cache key of a run's slide: its archive sample, or the run itself when it has none. */
+    public function preparedKey(V2Diagnosis $run): string
     {
-        $dir = $this->runDir($run);
+        return $run->sample_id ? (string) $run->sample_id : "run-{$run->id}";
+    }
+
+    public function preparedDir(string $key): string
+    {
+        return rtrim((string) config('v2_diagnose.prepared.dir'), '/\\') . '/' . $key;
+    }
+
+    /** Held while a slide is being prepared or linked into a run, so it is never prepared twice at once. */
+    public function preparedLock(string $key): \Illuminate\Contracts\Cache\Lock
+    {
+        return Cache::lock("v2:prepare:{$key}", 7200);
+    }
+
+    /** The prepared copy of a slide when it is complete and made with today's tiling settings, else null. */
+    public function prepared(string $key): ?string
+    {
+        $dir = $this->preparedDir($key);
+        $meta = $this->readJson("{$dir}/meta.json");
         $t = config('v2_diagnose.tiling');
-        File::ensureDirectoryExists($dir);
-        File::deleteDirectory("{$dir}/patches");   // a retried run starts clean
+        $ok = (int) ($meta['format'] ?? 0) === self::PREPARED_FORMAT
+            && (int) ($meta['patch_size'] ?? 0) === (int) $t['patch_size']
+            && abs((float) ($meta['target_mpp'] ?? 0) - (float) $t['target_mpp']) < 1e-9
+            && (int) ($meta['stored_px'] ?? 0) === (int) $t['stored_px']
+            && is_file("{$dir}/manifest.json") && is_file("{$dir}/" . ($meta['slide'] ?? '-'));
+        return $ok ? $dir : null;
+    }
 
-        // Tiling reads thousands of scattered regions, and on the Drive mount
-        // each one is a network round trip: 18 tiles in 30 minutes, measured.
-        // One sequential copy of the whole file runs at full bandwidth (a
-        // 70 MB slide in 11 s), so the slide is copied in first and tiled
-        // locally. The copy is only for tiling; the viewer keeps the original.
-        $source = $wsi;
-        $local = null;
-        $mount = rtrim((string) config('services.gdrive_mount', '/mnt/gdrive'), '/');
-        if (str_starts_with($wsi, $mount . '/')) {
-            $local = "{$dir}/slide." . pathinfo($wsi, PATHINFO_EXTENSION);
-            $this->copyWithProgress($run, $wsi, $local);
-            $source = $local;
+    /**
+     * Prepare a slide once, into the cache: copy it off Drive, tile it at the
+     * view scale, build the view images, contact sheets and density. Returns
+     * the cache folder. With a run, its page shows the progress.
+     *
+     * The build goes to a temporary folder renamed into place at the end, so
+     * a half-built slide is never taken for a prepared one.
+     */
+    public function buildPrepared(string $key, string $wsi, ?V2Diagnosis $run = null): string
+    {
+        $t = config('v2_diagnose.tiling');
+        $final = $this->preparedDir($key);
+        $build = $final . '.build-' . getmypid() . '-' . bin2hex(random_bytes(3));
+        File::ensureDirectoryExists($build);
+        $env = $run ? ['V2_PROGRESS' => $this->runDir($run) . '/progress_py.json'] : [];
+        if ($run) {
+            File::ensureDirectoryExists($this->runDir($run));
         }
-        $this->mark($run, 'tiling', 'Finding the tissue on the slide');
-
-        // The whole slide, every tile that holds tissue — not patch_extract.py,
-        // which samples for training: a 100-tile random cap and a half-tissue
-        // rule left 70% of the tissue unread on the first production runs.
-        // v2_tools measures the coverage it achieves, and the run records it.
+        $seconds = [];
         try {
+            // Tiling reads thousands of scattered regions, and on the Drive mount
+            // each one is a network round trip (18 tiles in 30 minutes, measured),
+            // so the slide is copied in first. It stays beside the tiles: zoom and
+            // survey read their full-resolution crops from it during the analysis.
+            $slide = 'slide.' . strtolower(pathinfo($wsi, PATHINFO_EXTENSION) ?: 'svs');
+            $t0 = microtime(true);
+            $this->placeSlide($wsi, "{$build}/{$slide}", $run);
+            $seconds['fetch'] = round(microtime(true) - $t0, 1);
+
+            // The whole slide, every tile that holds tissue — not patch_extract.py,
+            // which samples for training: a 100-tile random cap and a half-tissue
+            // rule left 70% of the tissue unread on the first production runs.
+            // Tiles are stored at the view scale, read from the pyramid level
+            // nearest it: on a 40x slide 11x faster than cutting them at full
+            // resolution (2026-11-25), which only zoom and survey need.
+            if ($run) {
+                $this->mark($run, 'tiling', 'Finding the tissue on the slide');
+            }
+            $t0 = microtime(true);
             $result = $this->python([
-                base_path('scripts/v2_tools.py'), 'tile', $dir, $source,
+                base_path('scripts/v2_tools.py'), 'tile', $build, "{$build}/{$slide}",
                 '--patch', (string) $t['patch_size'],
                 '--mpp', (string) $t['target_mpp'],
                 '--workers', (string) max(1, $t['workers']),
-            ], 6 * 3600);
+                '--stored-px', (string) $t['stored_px'],
+            ], 6 * 3600, false, $env);
+            $seconds['tile'] = round(microtime(true) - $t0, 1);
+            if (empty($result['patches_extracted'])) {
+                throw new \RuntimeException('Tiling produced no tissue tiles.');
+            }
+            file_put_contents("{$build}/tiling.json", json_encode($result, JSON_PRETTY_PRINT));
+
+            if ($run) {
+                $cov = isset($result['coverage']) ? ', covering ' . round($result['coverage'] * 100, 1) . '% of the tissue' : '';
+                $run->stage('preparing', "{$result['patches_extracted']} tiles cut{$cov}. Building view images, "
+                    . 'contact sheets and the density measurement.');
+                $this->mark($run, 'preparing', 'Building the view images the AI model will read');
+            }
+            $t0 = microtime(true);
+            $this->python([base_path('scripts/v2_tools.py'), 'prepare', $build], 3600, false, $env);
+            $seconds['prepare'] = round(microtime(true) - $t0, 1);
+
+            $bytes = 0;
+            foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($build, \FilesystemIterator::SKIP_DOTS)) as $f) {
+                $bytes += $f->getSize();
+            }
+            file_put_contents("{$build}/meta.json", json_encode([
+                'format' => self::PREPARED_FORMAT, 'key' => $key, 'slide' => $slide,
+                'patch_size' => (int) $t['patch_size'], 'target_mpp' => (float) $t['target_mpp'],
+                'stored_px' => (int) $t['stored_px'], 'tiles' => (int) $result['patches_extracted'],
+                'wsi_bytes' => @filesize($wsi) ?: null, 'bytes' => $bytes, 'seconds' => $seconds,
+                'built_at' => time(), 'used_at' => time(),
+            ], JSON_PRETTY_PRINT));
+
+            File::deleteDirectory($final);          // an outdated format, if any
+            if (! @rename($build, $final)) {
+                throw new \RuntimeException('Could not put the prepared slide in place.');
+            }
         } finally {
-            if ($local) {
-                @unlink($local);    // one slide copy per run is enough disk to spend
+            if (is_dir($build)) {
+                File::deleteDirectory($build);
             }
         }
+        return $final;
+    }
 
-        if (empty($result['patches_extracted'])) {
-            throw new \RuntimeException('Tiling produced no tissue tiles.');
+    /**
+     * Link a prepared slide into a run: the tiles, view images and sheets are
+     * hard links (nothing in a run writes to them), the small files and the
+     * masks are copied, and the slide is linked beside the run — outside its
+     * folder, where the model's file tools cannot reach it.
+     */
+    public function usePrepared(V2Diagnosis $run, string $cache, ?string $wsi = null): void
+    {
+        $dir = $this->runDir($run);
+        File::ensureDirectoryExists($dir);
+        foreach (['patches' => true, 'view' => true, 'sheets' => true, 'masks' => false] as $sub => $link) {
+            File::deleteDirectory("{$dir}/{$sub}");
+            if (! is_dir("{$cache}/{$sub}")) {
+                continue;
+            }
+            File::ensureDirectoryExists("{$dir}/{$sub}");
+            foreach (scandir("{$cache}/{$sub}") ?: [] as $f) {
+                if ($f !== '.' && $f !== '..') {
+                    $this->linkOrCopy("{$cache}/{$sub}/{$f}", "{$dir}/{$sub}/{$f}", $link);
+                }
+            }
         }
-        file_put_contents("{$dir}/tiling.json", json_encode($result, JSON_PRETTY_PRINT));
+        foreach (['tiling.json', 'density.json', 'manifest.json', 'overview.jpg', 'thumb.jpg', 'coverage.jpg'] as $f) {
+            if (is_file("{$cache}/{$f}")) {
+                copy("{$cache}/{$f}", "{$dir}/{$f}");
+            }
+        }
+        $meta = $this->readJson("{$cache}/meta.json");
+        $this->dropSlide($run);
+        $slide = $this->slidePath($run, pathinfo((string) ($meta['slide'] ?? 'slide.svs'), PATHINFO_EXTENSION));
+        File::ensureDirectoryExists(dirname($slide));
+        $this->linkOrCopy("{$cache}/{$meta['slide']}", $slide, true);
 
+        $tiling = $this->readJson("{$dir}/tiling.json");
+        $tiling['slide_file'] = $slide;
+        $tiling['thumb_file'] = "{$dir}/thumb.jpg";
+        file_put_contents("{$dir}/tiling.json", json_encode($tiling, JSON_PRETTY_PRINT));
+        $meta['used_at'] = time();
+        @file_put_contents("{$cache}/meta.json", json_encode($meta, JSON_PRETTY_PRINT));
+
+        $this->installTools($run);
         $run->update([
             'run_dir'      => $dir,
-            'wsi_path'     => $wsi,
-            'slide_width'  => $result['slide_width'] ?? null,
-            'slide_height' => $result['slide_height'] ?? null,
-            'base_mpp'     => $result['base_mpp'] ?? null,
-            'patch_size'   => $result['patch_size'] ?? null,
-            'target_mpp'   => $result['target_mpp'] ?? null,
-            'scale_l0'     => $result['scale_l0_px_per_out_px'] ?? null,
-            'patches'      => $result['patches_extracted'],
+            'wsi_path'     => $wsi ?? $run->wsi_path,
+            'slide_width'  => $tiling['slide_width'] ?? null,
+            'slide_height' => $tiling['slide_height'] ?? null,
+            'base_mpp'     => $tiling['base_mpp'] ?? null,
+            'patch_size'   => $tiling['patch_size'] ?? null,
+            'target_mpp'   => $tiling['target_mpp'] ?? null,
+            'scale_l0'     => $tiling['scale_l0_px_per_out_px'] ?? null,
+            'patches'      => $tiling['patches_extracted'] ?? null,
         ]);
     }
 
-    public function prepare(V2Diagnosis $run): array
+    /**
+     * Claude runs the helpers from inside the run directory, so they are
+     * copied there: the prompt names one fixed relative path, and the run
+     * keeps the exact version of the tool it was analysed with. The model
+     * runs this file and finalize runs it after the model: it is made
+     * read-only and its hash kept, so a changed copy is caught before
+     * anything executes it again (see integrityViolations()).
+     */
+    public function installTools(V2Diagnosis $run): void
     {
         $dir = $this->runDir($run);
-        // Claude runs the helpers from inside the run directory, so they are
-        // copied there: the prompt names one fixed relative path, and the run
-        // keeps the exact version of the tool it was analysed with.
         File::ensureDirectoryExists("{$dir}/tools");
         $tools = "{$dir}/tools/v2_tools.py";
-        @unlink($tools);
+        if (is_file($tools)) {
+            @chmod($tools, 0644);
+            @unlink($tools);
+        }
         copy(base_path('scripts/v2_tools.py'), $tools);
-        // The model runs this file and finalize runs it after the model: it
-        // is made read-only and its hash kept, so a changed copy is caught
-        // before anything executes it again (see integrityViolations()).
         @chmod($tools, 0444);
         file_put_contents("{$dir}/tools.sha256", hash_file('sha256', $tools));
-        $this->mark($run, 'preparing', 'Building the view images the AI model will read');
+    }
 
-        return $this->python(["{$dir}/tools/v2_tools.py", 'prepare', $dir], 3600);
+    /** Where a run's slide sits during its analysis: beside the runs, never inside a run folder. */
+    public function slidePath(V2Diagnosis $run, string $ext): string
+    {
+        return rtrim((string) config('v2_diagnose.slides_dir'), '/\\') . "/{$run->id}." . strtolower($ext ?: 'svs');
+    }
+
+    /** The run's slide copy is only needed while it is analysed (and is re-linked when a parked run resumes). */
+    public function dropSlide(V2Diagnosis $run): void
+    {
+        foreach (glob(rtrim((string) config('v2_diagnose.slides_dir'), '/\\') . "/{$run->id}.*") ?: [] as $f) {
+            @unlink($f);
+        }
+    }
+
+    /**
+     * Before an analysis that resumes (after the usage limit), make sure the
+     * slide its crops are read from is back beside the run.
+     */
+    public function ensureSlide(V2Diagnosis $run): void
+    {
+        $file = $this->runDir($run) . '/tiling.json';
+        $tiling = $this->readJson($file);
+        if (empty($tiling['stored_px']) || (! empty($tiling['slide_file']) && is_file($tiling['slide_file']))) {
+            return;                                     // format 1 cuts crops from its stored tiles
+        }
+        $key = $this->preparedKey($run);
+        $lock = $this->preparedLock($key);
+        $lock->block(600);
+        try {
+            if ($cache = $this->prepared($key)) {
+                $meta = $this->readJson("{$cache}/meta.json");
+                $slide = $this->slidePath($run, pathinfo((string) $meta['slide'], PATHINFO_EXTENSION));
+                File::ensureDirectoryExists(dirname($slide));
+                $this->linkOrCopy("{$cache}/{$meta['slide']}", $slide, true);
+            } else {
+                $wsi = $this->resolveWsi($run);
+                if (! $wsi) {
+                    throw new \RuntimeException('The slide is not readable on this server any more, so its full-resolution crops cannot be cut.');
+                }
+                $slide = $this->slidePath($run, pathinfo($wsi, PATHINFO_EXTENSION));
+                File::ensureDirectoryExists(dirname($slide));
+                $this->placeSlide($wsi, $slide, $run);
+            }
+        } finally {
+            $lock->release();
+        }
+        $tiling['slide_file'] = $slide;
+        file_put_contents($file, json_encode($tiling, JSON_PRETTY_PRINT));
+    }
+
+    /**
+     * Keep the cache within its size: the slides used longest ago go first.
+     * One that a run is linking at this moment (its lock is held) is skipped.
+     */
+    public function evictPrepared(): void
+    {
+        $root = rtrim((string) config('v2_diagnose.prepared.dir'), '/\\');
+        foreach (glob("{$root}/*.build-*", GLOB_ONLYDIR) ?: [] as $stale) {
+            if (@filemtime($stale) < time() - 86400) {
+                File::deleteDirectory($stale);          // a build whose worker died
+            }
+        }
+        $entries = [];
+        foreach (glob("{$root}/*/meta.json") ?: [] as $m) {
+            $meta = $this->readJson($m);
+            $entries[] = ['dir' => dirname($m), 'key' => basename(dirname($m)),
+                          'bytes' => (int) ($meta['bytes'] ?? 0), 'used' => (int) ($meta['used_at'] ?? 0)];
+        }
+        usort($entries, fn ($a, $b) => $a['used'] <=> $b['used']);
+        $total = array_sum(array_column($entries, 'bytes'));
+        $max = (float) config('v2_diagnose.prepared.max_gb') * 1024 ** 3;
+        foreach ($entries as $e) {
+            if ($total <= $max) {
+                break;
+            }
+            $lock = $this->preparedLock($e['key']);
+            if ($lock->get()) {
+                try {
+                    File::deleteDirectory($e['dir']);
+                    $total -= $e['bytes'];
+                } finally {
+                    $lock->release();
+                }
+            }
+        }
+    }
+
+    /** A local file is linked (same disk) or copied; a file on the Drive mount is copied with progress. */
+    private function placeSlide(string $from, string $to, ?V2Diagnosis $run): void
+    {
+        @unlink($to);
+        $mount = rtrim((string) config('services.gdrive_mount', '/mnt/gdrive'), '/');
+        if (str_starts_with($from, $mount . '/')) {
+            $this->copyWithProgress($run, $from, $to);
+        } else {
+            $this->linkOrCopy($from, $to, true);
+        }
+    }
+
+    private function linkOrCopy(string $from, string $to, bool $link): void
+    {
+        @unlink($to);
+        if (($link && @link($from, $to)) || @copy($from, $to)) {
+            return;
+        }
+        throw new \RuntimeException('Could not place ' . basename($from) . ' for the run.');
     }
 
     /**
@@ -584,7 +824,7 @@ class V2DiagnoseRunner
     }
 
     /** The slide copied off the Drive mount in pieces, reporting as it goes. */
-    private function copyWithProgress(V2Diagnosis $run, string $from, string $to): void
+    private function copyWithProgress(?V2Diagnosis $run, string $from, string $to): void
     {
         $size = (int) @filesize($from);
         $mb = fn (int $b) => number_format($b / 1048576);
@@ -593,7 +833,7 @@ class V2DiagnoseRunner
         if (! $in || ! $out) {
             throw new \RuntimeException('Could not copy the slide from Drive for tiling.');
         }
-        $this->mark($run, 'fetching', 'Copying the slide from storage', 0, $size ?: null);
+        $run && $this->mark($run, 'fetching', 'Copying the slide from storage', 0, $size ?: null);
         $copied = 0;
         $last = microtime(true);
         try {
@@ -603,7 +843,7 @@ class V2DiagnoseRunner
                     throw new \RuntimeException('Could not copy the slide from Drive for tiling.');
                 }
                 $copied += strlen($chunk);
-                if (microtime(true) - $last >= 2) {
+                if ($run && microtime(true) - $last >= 2) {
                     $last = microtime(true);
                     $this->mark($run, 'fetching', "Copying the slide from storage — {$mb($copied)} of {$mb($size)} MB",
                         $copied, $size ?: null);
@@ -779,9 +1019,10 @@ class V2DiagnoseRunner
         return $this->python([base_path('scripts/v2_tools.py'), 'export', $this->runDir($run)], 600);
     }
 
-    /** Drop the full-resolution tiles; keep what Claude saw and what was drawn. */
+    /** Drop the stored tiles and the slide copy; keep what Claude saw and what was drawn. */
     public function cleanup(V2Diagnosis $run): void
     {
+        $this->dropSlide($run);
         if (config('v2_diagnose.keep_full_patches')) {
             return;
         }
@@ -803,10 +1044,10 @@ class V2DiagnoseRunner
     }
 
     /** Run a Python script and return its last JSON line. */
-    private function python(array $args, int $timeout, bool $allowFailure = false): array
+    private function python(array $args, int $timeout, bool $allowFailure = false, array $env = []): array
     {
         $process = new Process([$this->pythonBin(), ...$args], base_path(),
-            ['PYTHONUNBUFFERED' => '1', 'PYTHONIOENCODING' => 'UTF-8'], null, $timeout);
+            ['PYTHONUNBUFFERED' => '1', 'PYTHONIOENCODING' => 'UTF-8'] + $env, null, $timeout);
         $process->run();
 
         $parsed = null;
