@@ -849,7 +849,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INFILTRATING DUCTAL CARCINOMA, POORLY-DIFFERENTIATED BY COMBINED.",
+   "text": "BREAST, RIGHT, SIMPLE MASTECTOMY: - INFILTRATING DUCTAL CARCINOMA, POORLY-DIFFERENTIATED BY COMBINED.",
    "value": 3
   },
   "project": "TCGA-BRCA",
@@ -864,7 +864,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INFILTRATING DUCTAL CARCINOMA, MODERATELY DIFFERENTIATED BY COMBINED.",
+   "text": "BREAST, LEFT, LUMPECTOMY: - INFILTRATING DUCTAL CARCINOMA, MODERATELY DIFFERENTIATED BY COMBINED.",
    "value": 2
   },
   "project": "TCGA-BRCA",
@@ -881,6 +881,11 @@
    "system": "Nottingham",
    "text": "components 3+3+3=9: Bloom and Richardson scheme with. a score as follows: mitoses = 3, tubules = 3, nuclei - 3; for a total. score of 9/9, high grade. No in situ carcinoma is…",
    "value": 3
+  },
+  "in_situ": {
+   "source": "report",
+   "text": "No in situ carcinoma is identified.",
+   "value": "absent"
   },
   "project": "TCGA-BRCA",
   "report_chars": 3447,
@@ -1038,7 +1043,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INFILTRATING DUCTAL ADENOCARCINOMA, MODERATELY DIFFERENTIATED BY.",
+   "text": "BREAST, RIGHT, 6:00 POSITION, NEEDLE LOCALIZATION, LUMPECTOMY: - INFILTRATING DUCTAL ADENOCARCINOMA, MODERATELY DIFFERENTIATED BY.",
    "value": 2
   },
   "in_situ": {
@@ -1146,7 +1151,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INFLITRATIVE DUCTAL CARCINOMA WITH CRIBRIFORM PATTERN, WELL DIFFERENTIATED.",
+   "text": "BREAST, RIGHT, LUMPECTOMY: - INFLITRATIVE DUCTAL CARCINOMA WITH CRIBRIFORM PATTERN, WELL DIFFERENTIATED.",
    "value": 1
   },
   "lvi": {
@@ -1166,7 +1171,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "MULTIFOCAL INFILTRATING LOBULAR CARCINOMA, ELL-TO-MODERATELY DIFFERENTIATED.",
+   "text": "RIGHT, NEEDLE LOCALIZATION BIOPSY: - MULTIFOCAL INFILTRATING LOBULAR CARCINOMA, ELL-TO-MODERATELY DIFFERENTIATED.",
    "value": 2
   },
   "project": "TCGA-BRCA",
@@ -1215,7 +1220,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, MODERATELY DIFFERENTIATED BY COMBINED.",
+   "text": "BREAST TISSUE, RIGHT, LUMPECTOMY: - INVASIVE DUCTAL CARCINOMA, MODERATELY DIFFERENTIATED BY COMBINED.",
    "value": 2
   },
   "in_situ": {
@@ -1235,7 +1240,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "MODERATELY DIFFERENTIATED (GRADE II/III) INFILTRATING LOBULAR CARCINOMA.",
+   "text": "FINAL DIAGNOSIS: BREAST, LEFT, MASTECTOMY: - MODERATELY DIFFERENTIATED (GRADE II/III) INFILTRATING LOBULAR CARCINOMA.",
    "value": 2
   },
   "lvi": {
@@ -1328,7 +1333,7 @@
   },
   "in_situ": {
    "source": "report",
-   "text": "LOBULAR CARCINOMA IN SITU.",
+   "text": "histologic appearance along with the presence of lobular carcinoma in situ.",
    "value": "present"
   },
   "lvi": {
@@ -1373,7 +1378,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INFILTRATING DUCTAL CARCINOMA, POORLY DIFFERENTIATED (MODIFIED.",
+   "text": "EXCISION: - INFILTRATING DUCTAL CARCINOMA, POORLY DIFFERENTIATED (MODIFIED.",
    "value": 3
   },
   "project": "TCGA-BRCA",
@@ -1695,7 +1700,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "MODERATELY DIFFERENTIATED INFILTRATING LOBULAR CARCINOMA WITH.",
+   "text": "BREAST, LEFT MASTECTOMY: - MODERATELY DIFFERENTIATED INFILTRATING LOBULAR CARCINOMA WITH.",
    "value": 2
   },
   "in_situ": {
@@ -1799,7 +1804,7 @@
   },
   "in_situ": {
    "source": "report",
-   "text": "- MICROCALCIFICATIONS: PRESENT IN DUCTAL CARCINOMA IN SITU AND BENIGN.",
+   "text": "- TUMOR NECROSIS: PRESENT IN INVASIVE AND IN SITU CARCINOMA.",
    "value": "present"
   },
   "lvi": {
@@ -3676,6 +3681,11 @@
    "text": "Total score: 6/9 = grade II.",
    "value": 2
   },
+  "in_situ": {
+   "source": "report",
+   "text": "No significant component of in situ carcinoma.",
+   "value": "present"
+  },
   "project": "TCGA-BRCA",
   "report_chars": 2491,
   "type": {
@@ -3738,7 +3748,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive metaplastic carcinoma, grade 3 (3+3+3) 7 cm in.",
+   "text": "Breast, left, mastectomy : - Invasive metaplastic carcinoma, grade 3 (3+3+3) 7 cm in.",
    "value": 3
   },
   "in_situ": {
@@ -3763,7 +3773,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive lobular carcinoma, grade 2.",
+   "text": "Diagnosis: BREAST, RIGHT, MODIFIED RADICAL MASTECTOMY: - Invasive lobular carcinoma, grade 2.",
    "value": 2
   },
   "in_situ": {
@@ -3827,7 +3837,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive lobular carcinoma, grade 1.",
+   "text": "NODE BIOPSIES: - Invasive lobular carcinoma, grade 1.",
    "value": 1
   },
   "in_situ": {
@@ -3990,7 +4000,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive lobular carcinoma, grade 1.",
+   "text": "SENTINEL LYMPH NODE BIOPSY (400): - Invasive lobular carcinoma, grade 1.",
    "value": 1
   },
   "in_situ": {
@@ -4015,7 +4025,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive lobular carcinoma, Nottingham grade 1-2.",
+   "text": "LYMPH NODE BIOPSY FOLLOWED BY LYMPH NODE DISSECTION: - Invasive lobular carcinoma, Nottingham grade 1-2.",
    "value": [
     1,
     2,
@@ -4069,7 +4079,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Two foci of invasive ductal carcinoma, Nottingham grade 2 (see comment).",
+   "text": "Diagnosis: LEFT BREAST, MODIFIED RADICAL MASTECTOMY: - Two foci of invasive ductal carcinoma, Nottingham grade 2 (see comment).",
    "value": 2
   },
   "in_situ": {
@@ -4119,7 +4129,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive ductal carcinoma, Nottingham grade 3.",
+   "text": "LYMPH NODE BIOPSY: - Invasive ductal carcinoma, Nottingham grade 3.",
    "value": 3
   },
   "in_situ": {
@@ -4144,7 +4154,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive ductal carcinoma, Nottingham grade 3.",
+   "text": "RIGHT BREAST, MODIFIED RADICAL MASTECTOMY: - Invasive ductal carcinoma, Nottingham grade 3.",
    "value": 3
   },
   "in_situ": {
@@ -4169,7 +4179,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive ductal carcinoma, Nottingham grade 3.",
+   "text": "Diagnosis: LEFT BREAST, MODIFIED RADICAL MASTECTOMY: - Invasive ductal carcinoma, Nottingham grade 3.",
    "value": 3
   },
   "in_situ": {
@@ -4219,7 +4229,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive ductal carcinoma, Nottingham grade 3.",
+   "text": "ANTERIOR MARGIN) AND SENTINEL NODE BIOPSY: - Invasive ductal carcinoma, Nottingham grade 3.",
    "value": 3
   },
   "in_situ": {
@@ -4300,7 +4310,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive ductal carcinoma, Nottingham grade 2.",
+   "text": "MASTECTOMY WITH SENTINEL LYMPH NODE BIOPSIES: - Invasive ductal carcinoma, Nottingham grade 2.",
    "value": 2
   },
   "in_situ": {
@@ -4325,7 +4335,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive ductal carcinoma, Nottingham grade 3.",
+   "text": "SENTINEL LYMPH NODE BIOPSIES (X2): - Invasive ductal carcinoma, Nottingham grade 3.",
    "value": 3
   },
   "in_situ": {
@@ -4350,7 +4360,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Multifocal invasive lobular carcinoma, Nottingham grade 2.",
+   "text": "LYMPH NODE BIOPSY: - Multifocal invasive lobular carcinoma, Nottingham grade 2.",
    "value": 2
   },
   "in_situ": {
@@ -4870,7 +4880,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, NOS TYPE, HISTOLOGICAL GRADE III/III.",
+   "text": "DISSECTION: - INVASIVE DUCTAL CARCINOMA, NOS TYPE, HISTOLOGICAL GRADE III/III.",
    "value": 3
   },
   "in_situ": {
@@ -5047,7 +5057,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, NOS TYPE, HISTOLOGIC GRADE III/III (SLIGHT.",
+   "text": "EXCISION: - INVASIVE DUCTAL CARCINOMA, NOS TYPE, HISTOLOGIC GRADE III/III (SLIGHT.",
    "value": 3
   },
   "in_situ": {
@@ -5072,7 +5082,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, HISTOLOGIC GRADE III/III (SLIGHT OR NO.",
+   "text": "MASTECTOMY: - INVASIVE DUCTAL CARCINOMA, HISTOLOGIC GRADE III/III (SLIGHT OR NO.",
    "value": 3
   },
   "in_situ": {
@@ -6352,6 +6362,11 @@
    "text": "N.S.A.B.P HISTOLOGIC GRADE 3 OF 3.",
    "value": 3
   },
+  "in_situ": {
+   "source": "report",
+   "text": "IN-SITU CARCINOMA: PRESENT, OCCUPYING 50% OF TUMOR (SEE COMMENT).",
+   "value": "present"
+  },
   "lvi": {
    "source": "report",
    "text": "LYMPHATIC/VASCULAR INVASION: ABSENT.",
@@ -6427,6 +6442,11 @@
    "text": "BREAST, LEFT, INCISIONAL BIOPSY: POORLY DIFFERENTIATED CARCINOMA WITH EXTENSIVE VASCULAR INVASION.",
    "value": 3
   },
+  "in_situ": {
+   "source": "report",
+   "text": "IN SITU CARCINOMA IS NOT PRESENT.",
+   "value": "absent"
+  },
   "lvi": {
    "source": "report",
    "text": "BREAST, LEFT, INCISIONAL BIOPSY: POORLY DIFFERENTIATED CARCINOMA WITH EXTENSIVE VASCULAR INVASION.",
@@ -6481,6 +6501,11 @@
    "text": "HISTOLOGIC GRADE 1 OF 3.",
    "value": 1
   },
+  "in_situ": {
+   "source": "report",
+   "text": "IN-SITU CARCINOMA, ABSENT.",
+   "value": "absent"
+  },
   "lvi": {
    "source": "report",
    "text": "LYMPHATIC/VASCULAR INVASION ABSENT.",
@@ -6495,6 +6520,11 @@
   }
  },
  "TCGA-B6-A0IP": {
+  "in_situ": {
+   "source": "report",
+   "text": "IN SITU CARCINOMA PRESENT, OCCUPYING LESS THAN 5% OF TUMOR (SLIDE A-2,.",
+   "value": "present"
+  },
   "lvi": {
    "source": "report",
    "text": "LYMPHATIC/VASCULAR INVASION: ABSENT.",
@@ -6606,6 +6636,17 @@
   }
  },
  "TCGA-B6-A0RT": {
+  "grade": {
+   "source": "report",
+   "system": "Nottingham",
+   "text": "HISTOLOGIC GRADE, 3 OF 3.",
+   "value": 3
+  },
+  "in_situ": {
+   "source": "report",
+   "text": "IN SITU CARCINOMA OF COMEDO TYPE IS PRESENT, OCCUPYING LESS THAN 10% OF.",
+   "value": "present"
+  },
   "lvi": {
    "source": "report",
    "text": "LYMPHATIC/VASCULAR INVASION IS PRESENT (A9).",
@@ -6646,6 +6687,11 @@
    "text": "HISTOLOGIC GRADE 3 OF 3.",
    "value": 3
   },
+  "in_situ": {
+   "source": "report",
+   "text": "IN-SITU CARCINOMA: ABSENT.",
+   "value": "absent"
+  },
   "lvi": {
    "source": "report",
    "text": "LYMPHATIC/VASCULAR INVASION: ABSENT.",
@@ -6660,6 +6706,20 @@
   }
  },
  "TCGA-B6-A0WY": {
+  "grade": {
+   "source": "report",
+   "system": "Nottingham",
+   "text": "HISTOLOGIC GRADE, 2 TO 3, NUCLEAR GRADE, 2.",
+   "value": [
+    2,
+    3
+   ]
+  },
+  "in_situ": {
+   "source": "report",
+   "text": "IN SITU CARCINOMA, PRESENT.",
+   "value": "present"
+  },
   "lvi": {
    "source": "report",
    "text": "LYMPHATIC/VASCULAR INVASION, PRESENT AND EXTENSIVE.",
@@ -6707,8 +6767,8 @@
   },
   "in_situ": {
    "source": "report",
-   "text": "DCIS EXTENDING OUTSIDE INVASIVE TUMOR MASS: ABSENT.",
-   "value": "absent"
+   "text": "IN-SITU CARCINOMA: PRESENT.",
+   "value": "present"
   },
   "lvi": {
    "source": "report",
@@ -6724,6 +6784,11 @@
   }
  },
  "TCGA-B6-A2IU": {
+  "in_situ": {
+   "source": "report",
+   "text": "IN SITU CARCINOMA ABSENT.",
+   "value": "absent"
+  },
   "lvi": {
    "source": "report",
    "text": "LYMPHATIC/VASCULAR INVASION ABSENT.",
@@ -8418,7 +8483,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INFILTRATING MODERATELY DIFFERENTIATED DUCT CARCINOMA WITH TOCAL LOBUT.AR FEATURES.",
+   "text": "FINAL DIAGNOSIS: FINAL DIAGNOSIS: A) LEFT BREAST, SEGMENTAL MASTECTOMY: - INFILTRATING MODERATELY DIFFERENTIATED DUCT CARCINOMA WITH TOCAL LOBUT.AR FEATURES.",
    "value": 2
   },
   "project": "TCGA-BRCA",
@@ -8461,7 +8526,7 @@
   },
   "in_situ": {
    "source": "report",
-   "text": "ISFILTRATINGAMODERATEL DIFFERENTIATEÓ DUCTAL AND FOCAL (APFROXIMATELY 10%) INTRADUCTAL CARCINOMA,.",
+   "text": "FINAL DIAGNOSIS: TIAGNOSIS: A) LEFT-BREAST, SEGMENTAL MASTECTOMY: - ISFILTRATINGAMODERATEL DIFFERENTIATEÓ DUCTAL AND FOCAL (APFROXIMATELY 10%) INTRADUCTAL CARCINOMA,.",
    "value": "present"
   },
   "project": "TCGA-BRCA",
@@ -8496,7 +8561,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, 4.5 BY 4.0 BY 4.0 CM, GRADE 2.",
+   "text": "FINAL DIAGNOSIS: FINAL DIAGNOSIS: LEFT BREAST, MASTECTOMY: - INVASIVE DUCTAL CARCINOMA, 4.5 BY 4.0 BY 4.0 CM, GRADE 2.",
    "value": 2
   },
   "project": "TCGA-BRCA",
@@ -9468,7 +9533,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, SBR GRADE 3, MEASURING 2.2-CM.",
+   "text": "BREAST,(RIGHT) WIDE LOCAL EXCISION: - INVASIVE DUCTAL CARCINOMA, SBR GRADE 3, MEASURING 2.2-CM.",
    "value": 3
   },
   "in_situ": {
@@ -9493,7 +9558,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, MULTIFOCI, SBR GRADE II.",
+   "text": "LEFT)BREAST, MASTECTOMY: - INVASIVE DUCTAL CARCINOMA, MULTIFOCI, SBR GRADE II.",
    "value": 2
   },
   "in_situ": {
@@ -9538,7 +9603,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE, DUCTAL CARCINOMA, SBR GRADE-3, MEASURING 2.2-CM.",
+   "text": "BREAST, LEFT,WIDE LOCAL EXCISION: - INVASIVE, DUCTAL CARCINOMA, SBR GRADE-3, MEASURING 2.2-CM.",
    "value": 3
   },
   "in_situ": {
@@ -9588,7 +9653,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, SBR GRADE II WITH GEOGRAPHIC AREAS OF NECROSIS,.",
+   "text": "RIGHT BREAST, MASTECTOMY SPECIMEN: - INVASIVE DUCTAL CARCINOMA, SBR GRADE II WITH GEOGRAPHIC AREAS OF NECROSIS,.",
    "value": [
     2,
     3
@@ -9641,7 +9706,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE, DUCTAL CARCINOMA, SBR GRADE 2, MEASURING 1.5-CM WITH.",
+   "text": "BREAST, LEFT, WIDE LOCAL EXCISION: - INVASIVE, DUCTAL CARCINOMA, SBR GRADE 2, MEASURING 1.5-CM WITH.",
    "value": 2
   },
   "in_situ": {
@@ -9691,7 +9756,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, SBR GRADE 3, WITH FOCAL SQUAMOUS.",
+   "text": "BREAST, RIGHT, MASTECTOMY: - INVASIVE DUCTAL CARCINOMA, SBR GRADE 3, WITH FOCAL SQUAMOUS.",
    "value": 3
   },
   "in_situ": {
@@ -9716,7 +9781,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "MULTIPLE FOCI OF INVASIVE DUCTAL CARCINOMA, SBR GRADE 2, LARGEST FOCUS MEASURING 2.5-CM.",
+   "text": "BREAST, LEFT, MASTECTOMY WITH AXILLARY NODE DISSECTION: - MULTIPLE FOCI OF INVASIVE DUCTAL CARCINOMA, SBR GRADE 2, LARGEST FOCUS MEASURING 2.5-CM.",
    "value": 2
   },
   "in_situ": {
@@ -9741,7 +9806,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "MULTIPLE FOCI OF INVASIVE DUCTAL CARCINOMA, SBR GRADE 3 WITH MICROPAPILLARY FEATURES,.",
+   "text": "BREAST, LEFT, MASTECTOMY WITH AXILLARY NODE DISSECTION: - MULTIPLE FOCI OF INVASIVE DUCTAL CARCINOMA, SBR GRADE 3 WITH MICROPAPILLARY FEATURES,.",
    "value": 3
   },
   "in_situ": {
@@ -9851,7 +9916,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "MULTIFOCAL INVASIVE LOBULAR CARCINOMA, SBR GRADE 2.",
+   "text": "BREAST, RIGHT, MASTECTOMY: - MULTIFOCAL INVASIVE LOBULAR CARCINOMA, SBR GRADE 2.",
    "value": 2
   },
   "in_situ": {
@@ -9876,7 +9941,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE LOBULAR CARCINOMA, SBR GRADE 2.",
+   "text": "BREAST, RIGHT NEEDLE LOCALIZATION WIDE LOCAL EXCISION: - INVASIVE LOBULAR CARCINOMA, SBR GRADE 2.",
    "value": 2
   },
   "in_situ": {
@@ -9901,7 +9966,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, SBR GRADE 2, MEASURING 1.9-CM.",
+   "text": "BREAST, RIGHT, WIDE LOCAL EXCISION: - INVASIVE DUCTAL CARCINOMA, SBR GRADE 2, MEASURING 1.9-CM.",
    "value": 2
   },
   "in_situ": {
@@ -9926,7 +9991,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, SBR GRADE 2, WITH MUCINOUS.",
+   "text": "BREAST, LEFT SIMPLE MASTECTOMY: - INVASIVE DUCTAL CARCINOMA, SBR GRADE 2, WITH MUCINOUS.",
    "value": 2
   },
   "in_situ": {
@@ -9951,7 +10016,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, SBR GRADE III WITH ASSOCIATED.",
+   "text": "LEFT BREAST, MASTECTOMY: - INVASIVE DUCTAL CARCINOMA, SBR GRADE III WITH ASSOCIATED.",
    "value": 3
   },
   "in_situ": {
@@ -10001,7 +10066,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE, DUCTAL CARCINOMA, SBR GRADE 1, MEASURING 1.2-CM.",
+   "text": "BREAST, LEFT, WIDE LOCAL EXCISION: - INVASIVE, DUCTAL CARCINOMA, SBR GRADE 1, MEASURING 1.2-CM.",
    "value": 1
   },
   "in_situ": {
@@ -10051,7 +10116,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE TUBULOLOBULAR CARCINOMA, SBR GRADE 1.",
+   "text": "BREAST, RIGHT, MASTECTOMY: - INVASIVE TUBULOLOBULAR CARCINOMA, SBR GRADE 1.",
    "value": 1
   },
   "in_situ": {
@@ -10096,7 +10161,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, SBR GRADE 2.",
+   "text": "LEFT BREAST, NEEDLE LOCALIZATION WIDE LOCAL EXCISION: - INVASIVE DUCTAL CARCINOMA, SBR GRADE 2.",
    "value": 2
   },
   "in_situ": {
@@ -10146,7 +10211,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE, LOBULAR CARCINOMA, SBR GRADE 2, MEASURING 1.5 CM.",
+   "text": "BREAST, LEFT, WIDE LOCAL EXCISION: - INVASIVE, LOBULAR CARCINOMA, SBR GRADE 2, MEASURING 1.5 CM.",
    "value": 2
   },
   "in_situ": {
@@ -10196,7 +10261,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE LOBULAR CARCINOMA, SBR GRADE 2, MEASURING 1.5-CM.",
+   "text": "BREAST, RIGHT, WIDE LOCAL EXCISION: - INVASIVE LOBULAR CARCINOMA, SBR GRADE 2, MEASURING 1.5-CM.",
    "value": 2
   },
   "in_situ": {
@@ -10221,7 +10286,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, SBR GRADE 2, WITH MUCINOUS.",
+   "text": "BREAST, LEFT, MEDIAL, NEEDLE LOCALIZATION EXCISION: - INVASIVE DUCTAL CARCINOMA, SBR GRADE 2, WITH MUCINOUS.",
    "value": 2
   },
   "in_situ": {
@@ -10246,7 +10311,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE LOBULAR CARCINOMA, MEASURING 1.5-CM, SBR GRADE II,.",
+   "text": "BREAST, LEFT, EXCISION: - INVASIVE LOBULAR CARCINOMA, MEASURING 1.5-CM, SBR GRADE II,.",
    "value": 2
   },
   "in_situ": {
@@ -10291,7 +10356,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, NOTTINGHAM GRADE 1.",
+   "text": "BREAST, RIGHT, MASTECTOMY: - INVASIVE DUCTAL CARCINOMA, NOTTINGHAM GRADE 1.",
    "value": 1
   },
   "in_situ": {
@@ -10316,7 +10381,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "TWO FOCI OF INVASIVE DUCTAL CARCINOMA, SBR GRADE 3, WITH.",
+   "text": "BREAST, RIGHT, MODIFIED RADICAL MASTECTOMY: - TWO FOCI OF INVASIVE DUCTAL CARCINOMA, SBR GRADE 3, WITH.",
    "value": 3
   },
   "in_situ": {
@@ -10341,7 +10406,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE, LOBULAR CARCINOMA, SBR GRADE 2, MEASURING 2.2-CM.",
+   "text": "BREAST, LEFT, MASTECTOMY AND AXILLARY LYMPH NODE DISSECTION: - INVASIVE, LOBULAR CARCINOMA, SBR GRADE 2, MEASURING 2.2-CM.",
    "value": 2
   },
   "in_situ": {
@@ -10361,7 +10426,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, SBR GRADE 2 WITH FOCAL NECROSIS, MEASURING 1.5-CM.",
+   "text": "BREAST, RIGHT, WIDE LOCAL EXCISION: - INVASIVE DUCTAL CARCINOMA, SBR GRADE 2 WITH FOCAL NECROSIS, MEASURING 1.5-CM.",
    "value": 2
   },
   "in_situ": {
@@ -10386,7 +10451,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, SBR GRADE 2, MEASURING 1.1 CM, PRESENT IN UPPER.",
+   "text": "BREAST, RIGHT, MASTECTOMY: - INVASIVE DUCTAL CARCINOMA, SBR GRADE 2, MEASURING 1.1 CM, PRESENT IN UPPER.",
    "value": 2
   },
   "in_situ": {
@@ -10436,7 +10501,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "MULTIFOCAL, INVASIVE, DUCTAL CARCINOMA, SBR GRADE 3, LARGEST.",
+   "text": "BREAST, RIGHT, MASTECTOMY AND AXILLARY NODE DISSECTION: - MULTIFOCAL, INVASIVE, DUCTAL CARCINOMA, SBR GRADE 3, LARGEST.",
    "value": 3
   },
   "in_situ": {
@@ -10546,7 +10611,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE, DUCTAL CARCINOMA, SBR GRADE 3 WITH SQUAMOUS.",
+   "text": "BREAST, LEFT, MASTECTOMY AND AXILLARY CONTENTS LEVELS 1 AND 2 DISSECTION: - INVASIVE, DUCTAL CARCINOMA, SBR GRADE 3 WITH SQUAMOUS.",
    "value": 3
   },
   "in_situ": {
@@ -10571,7 +10636,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, SBR GRADE 3, MEASURING 1.8 CM.",
+   "text": "BREAST, RIGHT, MASTECTOMY: - INVASIVE DUCTAL CARCINOMA, SBR GRADE 3, MEASURING 1.8 CM.",
    "value": 3
   },
   "in_situ": {
@@ -10619,7 +10684,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "MULTIFOCAL INVASIVE LOBULAR CARCINOMA, NOTTINGHAM GRADE 2.",
+   "text": "BREAST, LEFT, WIDE LOCAL EXCISION: - MULTIFOCAL INVASIVE LOBULAR CARCINOMA, NOTTINGHAM GRADE 2.",
    "value": 2
   },
   "in_situ": {
@@ -10644,13 +10709,13 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "THREE FOCI OF INVASIVE LOBULAR CARCINOMA, NOTTINGHAM GRADE 2.",
+   "text": "BREAST, RIGHT, AND AXILLARY CONTENTS, MODIFIED RADICAL MASTECTOMY: - THREE FOCI OF INVASIVE LOBULAR CARCINOMA, NOTTINGHAM GRADE 2.",
    "value": 2
   },
   "in_situ": {
    "source": "report",
-   "text": "LOBULAR CARCINOMA IN SITU.",
-   "value": "present"
+   "text": "DCIS not present.",
+   "value": "absent"
   },
   "lvi": {
    "source": "report",
@@ -10669,7 +10734,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, SBR GRADE 1, MEASURING 1.5 CM.",
+   "text": "BREAST, RIGHT, MASTECTOMY: - INVASIVE DUCTAL CARCINOMA, SBR GRADE 1, MEASURING 1.5 CM.",
    "value": 1
   },
   "in_situ": {
@@ -10694,7 +10759,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, NOTTINGHAM GRADE 2, WITH.",
+   "text": "MASTECTOMY: - INVASIVE DUCTAL CARCINOMA, NOTTINGHAM GRADE 2, WITH.",
    "value": 2
   },
   "in_situ": {
@@ -11285,8 +11350,13 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Overall Grade: Grade 2.",
+   "text": "Histologic Grade: - Overall Grade: Grade 2.",
    "value": 2
+  },
+  "in_situ": {
+   "source": "report",
+   "text": "Lobular Carcinoma IN Situ (LCIS): - Present.",
+   "value": "present"
   },
   "lvi": {
    "source": "report",
@@ -11350,7 +11420,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive lobular carcinoma, well differentiated, Nottingham grade 1 (3+1+1=5), 1.1 cm in greatest linear dimension.",
+   "text": "2 sutures-medial): - Invasive lobular carcinoma, well differentiated, Nottingham grade 1 (3+1+1=5), 1.1 cm in greatest linear dimension.",
    "value": 1
   },
   "in_situ": {
@@ -11380,7 +11450,7 @@
   },
   "in_situ": {
    "source": "report",
-   "text": "Lobular carcinoma in situ: Present.",
+   "text": "IN SITU CARCINOMA, with lobular features, high nuclear grade, central comedo necrosis and calcifications is.",
    "value": "present"
   },
   "lvi": {
@@ -11400,7 +11470,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, moderately differentiated, Nottingham grade 2 (3+3+1), measuring at least 1.1 cm in.",
+   "text": "RIGHT BREAST MASTECTOMY: - INVASIVE DUCTAL CARCINOMA, moderately differentiated, Nottingham grade 2 (3+3+1), measuring at least 1.1 cm in.",
    "value": [
     2,
     3
@@ -11488,7 +11558,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive poorly differentiated ductal carcinoma, 2.2 cm in greatest linear dimension, Nottingham Grade 3 (3+3+3).",
+   "text": "LEFT BREAST LUMPECTOMY 1 STITCH SUPERIOR, 2 STITCHES LATERAL, SKIN IS ANTERIOR: - Invasive poorly differentiated ductal carcinoma, 2.2 cm in greatest linear dimension, Nottingham Grade 3 (3+3+3).",
    "value": 3
   },
   "lvi": {
@@ -11508,7 +11578,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive ductal carcinoma, Nottingham grade 2 (3+2+2), 2.5 cm in greatest linear dimension.",
+   "text": "Left breast lumpectomy with needle localization (short stith- superior, long lateral): - Invasive ductal carcinoma, Nottingham grade 2 (3+2+2), 2.5 cm in greatest linear dimension.",
    "value": 2
   },
   "in_situ": {
@@ -11533,7 +11603,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INFILTRATING DUCTAL CARCINOMA, poorly differentiated, Nottingham grade 3 (3+3+3=9), 6.0 cm in greatest.",
+   "text": "Left breast: - INFILTRATING DUCTAL CARCINOMA, poorly differentiated, Nottingham grade 3 (3+3+3=9), 6.0 cm in greatest.",
    "value": [
     2,
     3
@@ -11541,7 +11611,7 @@
   },
   "in_situ": {
    "source": "report",
-   "text": "DUCTAL CARCINOMA IN SITU, intermediate grade (DIN2) with expansive necrosis, solid and cribriform types.",
+   "text": "Number of blocks with DCIS: 3.",
    "value": "present"
   },
   "lvi": {
@@ -11561,7 +11631,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INFILTRATING DUCTAL CARCINOMA, moderately differentiated, Nottingham grade 2 (2+3+2=7), 2.0 cm in greatest.",
+   "text": "RIGHT BREAST, ONE STITCH SUPERIOR, TWO STITCHES LATERAL: - INFILTRATING DUCTAL CARCINOMA, moderately differentiated, Nottingham grade 2 (2+3+2=7), 2.0 cm in greatest.",
    "value": [
     2,
     3
@@ -11614,7 +11684,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE AND IN SITU, POORLY DIFFERENTIATED DUCTAL CARCINOMA, 1.0 CM.",
+   "text": "RIGHT BREAST MASS: - INVASIVE AND IN SITU, POORLY DIFFERENTIATED DUCTAL CARCINOMA, 1.0 CM.",
    "value": 3
   },
   "in_situ": {
@@ -12817,7 +12887,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive ductal carcinoma, SRB grade II, with focal necrosis.",
+   "text": "Mastectomy, left breast: - Invasive ductal carcinoma, SRB grade II, with focal necrosis.",
    "value": 2
   },
   "in_situ": {
@@ -12837,7 +12907,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive lobular carcinoma, SBR grade II, with focal necrosis.",
+   "text": "Right breast partial mastectomy: - Invasive lobular carcinoma, SBR grade II, with focal necrosis.",
    "value": 2
   },
   "in_situ": {
@@ -12932,7 +13002,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive lobular carcinoma, SBR grade II, multicentric, see breast pathologic.",
+   "text": "Right breast, simple mastectomy: - Invasive lobular carcinoma, SBR grade II, multicentric, see breast pathologic.",
    "value": 2
   },
   "in_situ": {
@@ -12957,7 +13027,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive lobular carcinoma, SBR grade II, see pathologic parameters and.",
+   "text": "Left breast, modified radical mastectomy: - Invasive lobular carcinoma, SBR grade II, see pathologic parameters and.",
    "value": 2
   },
   "in_situ": {
@@ -12982,7 +13052,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Two foci of invasive ductal carcinoma, SBR Grade II, see breast.",
+   "text": "Right breast, simple mastectomy: - Two foci of invasive ductal carcinoma, SBR Grade II, see breast.",
    "value": 2
   },
   "in_situ": {
@@ -13007,7 +13077,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive ductal carcinoma, SBR grade III, with necrosis, see parameters.",
+   "text": "wire-guided lumpectomy: - Invasive ductal carcinoma, SBR grade III, with necrosis, see parameters.",
    "value": 3
   },
   "in_situ": {
@@ -13032,7 +13102,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "Invasive lobular carcinoma, SBR grade II, two foci, adjacent to prior.",
+   "text": "skin-sparing mastectomy: - Invasive lobular carcinoma, SBR grade II, two foci, adjacent to prior.",
    "value": 2
   },
   "in_situ": {
@@ -13057,7 +13127,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "In situ and invasive pleomorphic lobular carcinoma, grade III (4 cm).",
+   "text": "Right breast, lumpectomy: - In situ and invasive pleomorphic lobular carcinoma, grade III (4 cm).",
    "value": 3
   },
   "lvi": {
@@ -13227,7 +13297,7 @@
   "grade": {
    "source": "report",
    "system": "Nottingham",
-   "text": "INVASIVE DUCTAL CARCINOMA, GRADE 2, 2.2 CM.",
+   "text": "RIGHT BREAST, LUMPECTOMY: - INVASIVE DUCTAL CARCINOMA, GRADE 2, 2.2 CM.",
    "value": 2
   },
   "in_situ": {
@@ -13669,7 +13739,7 @@
   },
   "in_situ": {
    "source": "report",
-   "text": "LOBULAR CARCINOMA IN SITU.",
+   "text": "IN SITU CARCINOMA WITH DUCTAL INVOLVEMENT CONSISTENT WITH ANTEGRADE.",
    "value": "present"
   },
   "lvi": {

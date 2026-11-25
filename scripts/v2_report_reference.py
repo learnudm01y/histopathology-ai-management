@@ -52,7 +52,8 @@ def num(tok):
 
 def sentences(text):
     """Report text split into short clauses: OCR lines end in '. ', synoptic items start with '- '."""
-    parts = re.split(r'(?<=[.;])\s+|\s+-\s+|\n', text)
+    # A dash after a colon is a form's answer ("LCIS: - Present"), not a new item.
+    parts = re.split(r'(?<=[.;])\s+|(?<!:)\s+-\s+|\n', text)
     return [p.strip() for p in parts if p.strip()]
 
 
@@ -70,11 +71,11 @@ DIFF = [(r'\bwell[\s-]+to[\s-]+moderately[\s-]+differentiated\b', (1, 2)),
 IN_SITU_CLAUSE = re.compile(r'in[\s-]*situ|\bDCIS\b|\bLCIS\b|intraductal|\bPIN\b|comedo|fuhrman', re.I)
 # A nuclear grade (of DCIS, or Black's nuclear grade) is not the histological
 # grade, and "(1, 2, 3)" is the scale, not a value: both are cut out first.
-NOISE = re.compile(r"(?:modified\s+)?(?:black.s\s+)?nuclear\s+(?:grade|score|pleomorphism(?:\s+score)?)\s*[:=]?\s*(?:\d|I{1,3}|NA)\b(?:\s*/\s*3)?"
+NOISE = re.compile(r"(?:modified\s+)?(?:black.s\s+)?nuclear\s+(?:grade|score|pleomorphism(?:\s+score)?)\s*[:=,]?\s*(?:\d|I{1,3}|NA)\b(?:\s*/\s*3)?"
                    r"|\(\s*1\s*,\s*2\s*,\s*3\s*\)|\(\s*1\s*-\s*3\s*\)|cassettes?[^.;]*|section code[^.;]*", re.I)
 SCORE9 = re.compile(r'(?:total|nottingham|combined|overall|sbr|histologic)[^.;]{0,40}?score[^0-9]{0,12}([3-9])\s*(?:/|of|out of)\s*9', re.I)
-GRADE = re.compile(r'\bgrade\b\s*(?:is|=|:|-)?\s*\(?\s*(I{1,3}|Il|ll|lll|[123])\b(?!\s*(?:/|of)\s*(?:4|IV)\b)(?:\s*(?:/|of)\s*(?:3|III))?', re.I)
-GRADE_PAIR = re.compile(r'\bgrade\b\s*(?:is|:)?\s*(I{1,3}|[123])\s*(?:and|-|–|to)\s*(I{1,3}|[123])\b', re.I)
+GRADE = re.compile(r'\bgrade\b\s*(?:is|=|:|-|,)?\s*\(?\s*(I{1,3}|Il|ll|lll|[123])\b(?!\s*(?:/|of)\s*(?:4|IV)\b)(?:\s*(?:/|of)\s*(?:3|III))?', re.I)
+GRADE_PAIR = re.compile(r'\bgrade\b\s*(?:is|:|,)?\s*(I{1,3}|[123])\s*(?:and|-|–|to)\s*(I{1,3}|[123])\b', re.I)
 GRADE_OF4 = re.compile(r'\bgrade\s*([1-4]|I{1,3}|IV)\s*\(?\s*of\s*(?:4|IV)\)?', re.I)
 G_CODE = re.compile(r'\bG([123])\b')
 # Nottingham components without a stated total: "Tubules 3, nuclei 2, mitoses 1".
@@ -199,7 +200,7 @@ def presence(text, subject, skip=None):
     return None
 
 
-IN_SITU = re.compile(r'ductal carcinoma[\s-]*in[\s-]*situ|\bDCIS\b|intraductal carcinoma|lobular carcinoma[\s-]*in[\s-]*situ'
+IN_SITU = re.compile(r'ductal carcinoma[\s-]*in[\s-]*situ|in[\s-]*situ carcinoma|\bDCIS\b|intraductal carcinoma|lobular carcinoma[\s-]*in[\s-]*situ'
                      r'|\bLCIS\b|in[\s-]*situ component|carcinoma in[\s-]*situ', re.I)
 IN_SITU_SKIP = re.compile(r'margin|nipple|extensive intraductal|\bEIC\b|distance', re.I)
 LVI = re.compile(r'lympho[\s-]*vascular|angio[\s-]*lymphatic|lymphatic(?:\s*/\s*vascular)?\s+invasion|vascular(?:\s*/\s*lymphatic)?\s+(?:space\s+)?invasion'
