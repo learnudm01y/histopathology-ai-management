@@ -798,7 +798,9 @@ _TILE_TOKEN = re.compile(r"(P\d+)(?:-(P\d+))?(?::(\d*\.?\d+))?")
 def expand_compact(r: dict, ids: set, errors: list, warnings: list) -> dict:
     """The compact result form, written in a fraction of the tokens of the long one.
 
-    "tiles" {class: "P001 P004-P009 P017:0.6"} becomes "patches" (a range is
+    "tiles" {class: "P001 P004-P009 P017:0.6"}, or a list of such entries, one
+    per batch of contact sheets (written as the sheets are read; a tile listed
+    again in a later entry takes the later class), becomes "patches" (a range is
     every id between its ends; ":0.6" is the tumour score, otherwise 0.9 under
     tumour and 0 under any other class), "tile_notes" {id: note} their notes,
     and a region without a polygon gets the ellipse inscribed in its box. Writing
@@ -806,10 +808,14 @@ def expand_compact(r: dict, ids: set, errors: list, warnings: list) -> dict:
     in the long form is still read as it is.
     """
     spec = r.get("tiles")
+    batches = spec if isinstance(spec, list) else [spec]
+    if isinstance(spec, list) and spec and all(isinstance(b, dict) for b in spec):
+        spec = {"__batches__": True}
     if isinstance(spec, dict) and "patches" not in r:
         notes = r.get("tile_notes") if isinstance(r.get("tile_notes"), dict) else {}
         got = {}
-        for kind, lst in spec.items():
+        later = {}
+        for kind, lst, batch in [(k, v, i) for i, b in enumerate(batches) for k, v in b.items()]:
             if kind not in TISSUE_KINDS:
                 errors.append(f"tiles.{kind}: not a tissue class; use one of {sorted(TISSUE_KINDS)}")
                 continue
@@ -834,11 +840,12 @@ def expand_compact(r: dict, ids: set, errors: list, warnings: list) -> dict:
                     pid = f"P{k:0{pad}d}"
                     if pid not in ids:
                         continue
-                    if pid in got:
+                    if pid in got and later.get(pid) == batch:
                         warnings.append(f"tiles: {pid} is listed twice; the higher tumour score is kept")
                         if score <= got[pid][1]:
                             continue
-                    got[pid] = (kind, score)
+                    got[pid] = (kind, score)            # a later batch entry wins
+                    later[pid] = batch
         missing = sorted(ids - set(got))
         if missing:
             errors.append(f"tiles: every tile needs a class; missing {', '.join(missing[:20])}"

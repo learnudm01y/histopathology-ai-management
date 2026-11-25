@@ -860,7 +860,9 @@ class V2DiagnoseTest extends TestCase
     public function test_the_prompt_asks_for_the_compact_result_and_no_haste(): void
     {
         $tpl = file_get_contents(resource_path('prompts/v2_diagnose.md'));
-        $this->assertStringContainsString('"tiles": {', $tpl);
+        $this->assertStringContainsString('"tiles": [', $tpl);
+        // Recorded batch by batch, so no sheet is read twice (1,051 tiles: 250+ sheet reads -> 66, 2026-11-25).
+        $this->assertStringContainsString('Do not read a sheet again', $tpl);
         $this->assertStringContainsString('never how much of it', $tpl);
         // Saying the run is timed made the model open fewer tiles (2026-11-25): it must not come back.
         $this->assertStringNotContainsStringIgnoringCase('timed', $tpl);

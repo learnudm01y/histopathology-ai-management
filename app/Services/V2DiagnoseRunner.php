@@ -672,7 +672,10 @@ class V2DiagnoseRunner
             $k = count($watch['views']);
             $what = $tool === 'Read' ? "Examining tile {$m[1]} at full resolution" : "Measuring nuclear density on tile {$m[1]}";
             $this->mark($run, 'detail', "{$what} — {$k} " . ($k === 1 ? 'tile' : 'tiles') . ' opened so far', $k);
-        } elseif (in_array($tool, ['Write', 'Edit'], true) && str_ends_with($path, 'result.json')) {
+        } elseif (in_array($tool, ['Write', 'Edit'], true) && str_ends_with($path, 'result.json')
+            && ($watch['phase'] >= 1 || count($watch['sheets']) >= $n)) {
+            // The tiles are recorded batch by batch while the sheets are read;
+            // only a write after the reading is the report itself.
             $watch['phase'] = 2;
             $this->mark($run, 'report', 'Writing the diagnosis report', null, null, 0.35);
         } elseif ($tool === 'Bash' && str_contains($cmd, 'v2_tools.py validate')) {
